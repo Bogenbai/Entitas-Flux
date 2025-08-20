@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(DefaultTargetFramework)</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="Entitas\version.txt" />
+    <EmbeddedResource Include="version.txt">
+      <LogicalName>version.txt</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DesperateDevs.Caching" Version="1.1.0" />
+    <PackageReference Include="DesperateDevs.Reflection" Version="1.0.0" />
+  </ItemGroup>
+
+</Project>
