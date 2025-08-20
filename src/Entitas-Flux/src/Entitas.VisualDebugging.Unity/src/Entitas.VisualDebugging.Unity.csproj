@@ -11,10 +11,10 @@
   <ItemGroup>
     <Reference Include="$(UnityEngine)" />
     <Reference Include="UnityEditor">
-      <HintPath>..\..\..\..\..\..\..\Applications\Unity\Hub\Editor\6000.0.50f1\Unity.app\Contents\Managed\UnityEditor.dll</HintPath>
+      <HintPath>..\..\..\UnityEditor.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>..\..\..\..\..\..\..\Applications\Unity\Hub\Editor\6000.0.50f1\Unity.app\Contents\Managed\UnityEngine.dll</HintPath>
+      <HintPath>..\..\..\UnityEngine.dll</HintPath>
     </Reference>
   </ItemGroup>
 
