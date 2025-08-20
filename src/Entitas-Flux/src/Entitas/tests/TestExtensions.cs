@@ -6,8 +6,13 @@ public static class TestExtensions
 {
     public static string GetProjectRoot()
     {
-        var current = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (current.Name != "Entitas" && current.Name != "Entitas-CSharp") current = current.Parent;
+        DirectoryInfo current = new DirectoryInfo(Directory.GetCurrentDirectory());
+        
+        while (current.Name != "Entitas" && current.Name != "Entitas-CSharp" && current.Name != "Entitas-Flux")
+        {
+            current = current.Parent;
+        }
+        
         return current.FullName;
     }
 
