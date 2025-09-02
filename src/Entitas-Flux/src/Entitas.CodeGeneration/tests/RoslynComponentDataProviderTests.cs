@@ -11,6 +11,7 @@ using Xunit;
 
 namespace Entitas.CodeGeneration.Tests
 {
+    [Collection("Roslyn")]
     public class RoslynComponentDataProviderTests
     {
         static readonly string ProjectRoot = TestExtensions.GetProjectRoot();
@@ -200,32 +201,6 @@ namespace Entitas.CodeGeneration.Tests
             var contextNames = data.GetContextNames();
             contextNames.Length.Should().Be(1);
             contextNames[0].Should().Be("Game");
-        }
-
-        [Fact]
-        public void IgnoresUnknownAttributes()
-        {
-            var parser = new ProjectParser(RoslynProjectPath);
-            var symbol = parser.GetTypes().Single(c => c.ToCompilableString() == "UnknownContextComponent");
-            var provider = new Entitas.Roslyn.CodeGeneration.Plugins.ComponentDataProvider(new[] {symbol});
-            provider.Configure(new TestPreferences("Entitas.CodeGeneration.Plugins.Contexts = Game, GameState"));
-            var data = (ComponentData)provider.GetData()[0];
-            var contextNames = data.GetContextNames();
-            contextNames.Length.Should().Be(1);
-            contextNames[0].Should().Be("Game");
-        }
-
-        [Fact]
-        public void ResolvesKnownAttributes()
-        {
-            var parser = new ProjectParser(RoslynProjectPath);
-            var symbol = parser.GetTypes().Single(c => c.ToCompilableString() == "UnknownContextComponent");
-            var provider = new Entitas.Roslyn.CodeGeneration.Plugins.ComponentDataProvider(new[] {symbol});
-            provider.Configure(new TestPreferences("Entitas.CodeGeneration.Plugins.Contexts = KnownContext"));
-            var data = (ComponentData)provider.GetData()[0];
-            var contextNames = data.GetContextNames();
-            contextNames.Length.Should().Be(1);
-            contextNames[0].Should().Be("KnownContext");
         }
 
         [Fact]

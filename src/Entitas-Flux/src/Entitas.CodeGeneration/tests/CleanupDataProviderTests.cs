@@ -11,19 +11,19 @@ using Xunit;
 
 namespace Entitas.CodeGeneration.Tests
 {
+    [Collection("Roslyn")]
     public class CleanupDataProviderTests
     {
-        static readonly string ProjectRoot = TestExtensions.GetProjectRoot();
-        static readonly string ProjectPath = $"{ProjectRoot}/Tests/TestFixtures/TestFixtures.csproj";
-
-        INamedTypeSymbol[] Types => _types ??= new ProjectParser(ProjectPath).GetTypes();
-        INamedTypeSymbol[] _types;
+        INamedTypeSymbol[] Types => _fixture.Types;
 
         readonly CleanupData _dataRemove;
         readonly CleanupData _dataDestroy;
 
+        readonly RoslynFixture _fixture;
+
         public CleanupDataProviderTests()
         {
+            _fixture = new RoslynFixture();
             _dataRemove = GetData<CleanupRemoveComponent>();
             _dataDestroy = GetData<CleanupDestroyComponent>();
         }
