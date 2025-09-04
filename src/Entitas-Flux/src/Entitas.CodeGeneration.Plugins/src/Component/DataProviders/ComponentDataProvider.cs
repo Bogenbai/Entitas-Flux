@@ -51,7 +51,8 @@ namespace Entitas.CodeGeneration.Plugins
                 new ShouldGenerateComponentComponentDataProvider(),
                 new ShouldGenerateMethodsComponentDataProvider(),
                 new ShouldGenerateComponentIndexComponentDataProvider(),
-                new EventComponentDataProvider()
+                new EventComponentDataProvider(),
+                new ShouldTrackChangesComponentDataProvider()
             };
         }
 
