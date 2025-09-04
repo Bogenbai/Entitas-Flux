@@ -1,0 +1,45 @@
+BUILD-README
+
+Short instructions to build the solution and collect DLLs into a single folder.
+
+REQUIREMENTS
+
+* .NET SDK installed (dotnet --version should work)
+* Scripts placed in the repo root next to Entitas.sln:
+
+  * macOS/Linux: build.sh
+  * Windows: build.ps1
+* Resulting assemblies are written to the Artifacts/ folder in the repo root.
+
+MACOS / LINUX
+
+1. Make the script executable (once):
+   chmod +x ./build.sh
+2. Build (Release by default):
+   ./build.sh
+3. Build Debug:
+   ./build.sh Debug
+   Output: ./Artifacts
+
+WINDOWS (POWERSHELL)
+
+1. Open PowerShell in the repo root.
+   If execution policy blocks the script, for the current session run:
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+2. Build (Release by default):
+   .\build.ps1
+3. Build Debug:
+   .\build.ps1 Debug
+   Output: .\Artifacts
+
+WHAT THE SCRIPTS DO
+
+* Build the entire solution into a shared temporary folder.
+* Copy only primary project DLLs (no dependencies, no PDBs) into Artifacts.
+* Exclude test projects and Unity Editor tooling by default.
+
+NOTES
+
+* To keep PDB files, remove the MSBuild properties: -p\:DebugSymbols=false and -p\:DebugType=None from the scripts.
+* To include or exclude specific projects, edit the .csproj search filters inside the scripts.
+* The scripts clean the temporary folder (.buildout) and the Artifacts folder on each run.
