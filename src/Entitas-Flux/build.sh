@@ -1,28 +1,56 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# script directory (absolute)
+# resolve absolute paths
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-# solution and output, anchored to the script directory
 SOLUTION="$SCRIPT_DIR/Entitas.sln"
 CONFIG="${1:-Release}"
+
+# temp build output and final artifacts
+TMP_OUT="$SCRIPT_DIR/.buildout"
 ARTIFACTS_DIR="$SCRIPT_DIR/Artifacts"
 
-mkdir -p "$ARTIFACTS_DIR"
+# clean outputs
+rm -rf "$TMP_OUT" "$ARTIFACTS_DIR"
+mkdir -p "$TMP_OUT" "$ARTIFACTS_DIR"
 
-dotnet clean "$SOLUTION" -c "$CONFIG" >/dev/null || true
-
+# build with a common out dir, but without PDBs
 MSBUILD_PROPS=(
-  "-p:OutDir=$ARTIFACTS_DIR/"
-  "-p:OutputPath=$ARTIFACTS_DIR/"
+  "-p:OutDir=$TMP_OUT/"
   "-p:AppendTargetFrameworkToOutputPath=false"
   "-p:AppendRuntimeIdentifierToOutputPath=false"
+  "-p:DebugSymbols=false"
+  "-p:DebugType=None"
 )
 
-if ! dotnet build "$SOLUTION" -c "$CONFIG" "${MSBUILD_PROPS[@]}"; then
-  echo "dotnet build failed, trying msbuild…"
-  dotnet msbuild "$SOLUTION" -t:Build -p:Configuration="$CONFIG" "${MSBUILD_PROPS[@]}"
-fi
+dotnet clean "$SOLUTION" -c "$CONFIG" >/dev/null || true
+dotnet build "$SOLUTION" -c "$CONFIG" "${MSBUILD_PROPS[@]}"
 
-echo "Done. You'll find your DLLs at $ARTIFACTS_DIR"
+# copy only primary project DLLs (exclude tests and editor tooling)
+# heuristic: dll name == project file name (or AssemblyName if set)
+while IFS= read -r csproj; do
+  name_from_file="$(basename "${csproj%.csproj}")"
+  dll="$name_from_file.dll"
+
+  if [[ -f "$TMP_OUT/$dll" ]]; then
+    cp "$TMP_OUT/$dll" "$ARTIFACTS_DIR/"
+  else
+    # try AssemblyName if it differs from project file name
+    asm_name="$(dotnet msbuild "$csproj" -nologo -getProperty:AssemblyName 2>/dev/null | tail -n1 || true)"
+    if [[ -n "${asm_name:-}" && -f "$TMP_OUT/$asm_name.dll" ]]; then
+      cp "$TMP_OUT/$asm_name.dll" "$ARTIFACTS_DIR/"
+    fi
+  fi
+done < <(
+  find "$SCRIPT_DIR" -type f -name '*.csproj' \
+    -not -iname '*test*' \
+    -not -iname '*tests*' \
+    -not -iname '*unity.editor*'
+)
+
+# optional: remove temp build folder
+rm -rf "$TMP_OUT"
+
+echo "Artifacts:"
+ls -1 "$ARTIFACTS_DIR" || true
+echo "Done → $ARTIFACTS_DIR"
