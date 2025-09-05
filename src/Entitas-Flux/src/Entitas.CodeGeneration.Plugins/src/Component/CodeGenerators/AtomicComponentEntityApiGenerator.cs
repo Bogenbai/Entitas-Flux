@@ -11,6 +11,10 @@ namespace Entitas.CodeGeneration.Plugins
 
 		const string VALUE_TYPE_KEY = "${ComponentValueType}";
 		const string FIRST_UPPERCASE_COMPONENT_NAME_KEY = "${FirstUppercaseComponentName}";
+		const string HANDLE_WATCHED_CHANGES_KEY = "${Handle_Watched_Changes}";
+		
+		const string MARK_CHANGED_TEMPLATE =
+			@"is${ComponentName}Changed = true;";
 
 		const string STANDARD_TEMPLATE =
 			@"public partial class ${EntityType} {
@@ -24,11 +28,15 @@ namespace Entitas.CodeGeneration.Plugins
 ${memberAssignmentList}
         AddComponent(index, component);
 
+		${Handle_Watched_Changes}
+
         return this;
     }
 
     public ${EntityType} Remove${ComponentName}() {
         RemoveComponent(${Index});
+
+		${Handle_Watched_Changes}
 
         return this;
     }
@@ -37,6 +45,7 @@ ${memberAssignmentList}
         if (has${ComponentName}) 
         {
             RemoveComponent(${Index});
+			${Handle_Watched_Changes}
         }
 
         return this;
@@ -57,15 +66,24 @@ ${memberAssignmentList}
 ${memberAssignmentList}
         AddComponent(index, component);
 
+		${Handle_Watched_Changes}
+
         return this;
     }
 
     public ${EntityType} Replace${ComponentName}(${newMethodParameters}) {
+
+		if (${validComponentName}.Value.Equals(newValue)) {
+			return this;
+		}
+
         if (!has${ComponentName}) 
         {
             Add${ComponentName}(newValue);
             return this;
         }
+
+		${Handle_Watched_Changes}
 
         ${validComponentName}.Value = newValue;
         return this;
@@ -73,6 +91,7 @@ ${memberAssignmentList}
 
     public ${EntityType} Remove${ComponentName}() {
         RemoveComponent(${Index});
+		${Handle_Watched_Changes}
         return this;
     }
 
@@ -80,6 +99,7 @@ ${memberAssignmentList}
         if (has${ComponentName}) 
         {
             RemoveComponent(${Index});
+			${Handle_Watched_Changes}
         }
 
         return this;
@@ -104,8 +124,10 @@ ${memberAssignmentList}
                             : ${componentName}Component;
 
                     AddComponent(index, component);
+					${Handle_Watched_Changes}
                 } else {
                     RemoveComponent(index);
+					${Handle_Watched_Changes}
                 }
             }
         }
@@ -135,6 +157,15 @@ ${memberAssignmentList}
 				template = FLAG_TEMPLATE;
 			else
 				template = STANDARD_TEMPLATE;
+			
+			if (data.ShouldWatchChanges())
+			{
+				template = template.Replace(HANDLE_WATCHED_CHANGES_KEY, MARK_CHANGED_TEMPLATE);
+			}
+			else
+			{
+				template = template.Replace(HANDLE_WATCHED_CHANGES_KEY, string.Empty);
+			}
 
 			var fileContent = template
 				.Replace("${memberAssignmentList}", GetMemberAssignmentList(data.GetMemberData()))
