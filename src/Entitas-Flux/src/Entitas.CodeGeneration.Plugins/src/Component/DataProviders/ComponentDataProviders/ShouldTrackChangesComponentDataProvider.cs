@@ -8,25 +8,19 @@ namespace Entitas.CodeGeneration.Plugins
 	{
 		public void Provide(Type type, ComponentData data)
 		{
-			var attrs = Attribute.GetCustomAttributes(type)
+			var shouldTrackChanges = Attribute
+				.GetCustomAttributes(type)
 				.OfType<TrackChangesAttribute>()
-				.ToArray();
+				.Any();
 
-			if (attrs.Length > 0)
-			{
-				data.ShouldTrackChanges(true);
-			}
-			else
-			{
-				data.ShouldTrackChanges(false);
-			}
+			data.ShouldTrackChanges(shouldTrackChanges);
 		}
 	}
 
 	public static class TrackChangesComponentDataExtension
 	{
 		public const string COMPONENT_TRACK_CHANGES = "Component.ShouldTrackChanges";
-		public static bool ShouldTrackingChanges(this ComponentData data) => (bool)data[COMPONENT_TRACK_CHANGES];
+		public static bool ShouldTrackChanges(this ComponentData data) => (bool)data[COMPONENT_TRACK_CHANGES];
 		public static void ShouldTrackChanges(this ComponentData data, bool isTrackingChanges) => data[COMPONENT_TRACK_CHANGES] = isTrackingChanges;
 	}
 }

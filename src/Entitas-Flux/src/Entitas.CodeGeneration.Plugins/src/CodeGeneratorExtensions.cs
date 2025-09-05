@@ -81,6 +81,12 @@ namespace Entitas.CodeGeneration.Plugins
             );
             return eventComponentName;
         }
+        
+        public static string TrackingChangesComponentName(this ComponentData data)
+        {
+            string shortComponentName = data.GetTypeName().ToComponentName(true);
+            return shortComponentName + "Changed";
+        }
 
         public static string GetEventMethodArgs(this ComponentData data, EventData eventData, string args)
         {

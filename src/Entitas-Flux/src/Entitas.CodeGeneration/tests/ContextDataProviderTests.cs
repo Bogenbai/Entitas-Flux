@@ -4,13 +4,13 @@ using Xunit;
 
 namespace Entitas.CodeGeneration.Tests
 {
-    public class ContextDataProvider
+    public class ContextDataProviderTests
     {
         [Fact]
         public void CreatesDataForEachContextName()
         {
             var names = "Entitas.CodeGeneration.Plugins.Contexts = Input, GameState";
-            var provider = new Entitas.CodeGeneration.Plugins.ContextDataProvider();
+            var provider = new ContextDataProvider();
             provider.Configure(new TestPreferences(names));
 
             var data = (ContextData[])provider.GetData();
