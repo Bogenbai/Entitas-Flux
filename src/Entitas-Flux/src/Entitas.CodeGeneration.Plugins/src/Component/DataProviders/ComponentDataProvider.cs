@@ -179,10 +179,7 @@ namespace Entitas.CodeGeneration.Plugins
                 dataForTrackingChanges.ShouldWatchChanges(false);
                 var trackingChangesComponentName = data.TrackingChangesComponentName();
                 dataForTrackingChanges.SetTypeName(trackingChangesComponentName);
-                dataForTrackingChanges.SetMemberData(new[]
-                {
-                    new MemberData($"System.Collections.Generic.List<{data.GetTypeName()}>", "value")
-                });
+                dataForTrackingChanges.SetMemberData([]);
                 dataForTrackingChanges.SetContextNames(new[] {contextName});
                 return dataForTrackingChanges;
             }).ToArray();

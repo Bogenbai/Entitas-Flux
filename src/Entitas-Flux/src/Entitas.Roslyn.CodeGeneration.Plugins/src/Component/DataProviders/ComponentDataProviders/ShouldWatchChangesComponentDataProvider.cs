@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 
 namespace Entitas.Roslyn.CodeGeneration.Plugins
 {
-	public class ShouldTrackChangesComponentDataProvider : IComponentDataProvider
+	public class ShouldWatchChangesComponentDataProvider : IComponentDataProvider
 	{
 		public void Provide(INamedTypeSymbol type, ComponentData data)
 		{

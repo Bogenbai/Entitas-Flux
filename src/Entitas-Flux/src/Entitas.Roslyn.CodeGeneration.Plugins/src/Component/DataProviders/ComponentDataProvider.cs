@@ -48,7 +48,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
                 new ContextsComponentDataProvider(),
                 new IsUniqueComponentDataProvider(),
                 new FlagPrefixComponentDataProvider(),
-                new ShouldTrackChangesComponentDataProvider(),
+                new ShouldWatchChangesComponentDataProvider(),
                 new ShouldGenerateComponentComponentDataProvider(),
                 new ShouldGenerateMethodsComponentDataProvider(),
                 new ShouldGenerateComponentIndexComponentDataProvider(),
@@ -112,7 +112,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
 
             var dataFromTrackingChanges = mergedData
                 .Where(data => data.ShouldWatchChanges())
-                .SelectMany(data => createDataForTrackingChanges(data))
+                .SelectMany(data => createDataForWatched(data))
                 .ToArray();
 
             return merge(dataFromTrackingChanges, mergedData);
@@ -172,7 +172,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
                 }).ToArray()
             ).ToArray();
         
-        ComponentData[] createDataForTrackingChanges(ComponentData data) => data.GetContextNames()
+        ComponentData[] createDataForWatched(ComponentData data) => data.GetContextNames()
             .Select(contextName =>
             {
                 var dataForTrackingChanges = new ComponentData(data);
