@@ -73,7 +73,7 @@ ${memberAssignmentList}
 
     public ${EntityType} Replace${ComponentName}(${newMethodParameters}) {
 
-		if (${validComponentName}.Value.Equals(newValue)) {
+		if (has${ComponentName} && ${validComponentName}.Value.Equals(newValue)) {
 			return this;
 		}
 
