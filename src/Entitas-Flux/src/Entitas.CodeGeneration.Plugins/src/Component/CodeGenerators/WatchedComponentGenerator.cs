@@ -4,9 +4,9 @@ using Jenny;
 
 namespace Entitas.CodeGeneration.Plugins
 {
-	public class TrackingChangesComponentGenerator : AbstractGenerator
+	public class WatchedComponentGenerator : AbstractGenerator
 	{
-		public override string Name => "Component (Tracking Changes)";
+		public override string Name => "Component (Watch Changes)";
 		
 		const string CHANGED_FLAG_TEMPLATE =
 			@"[Entitas.CodeGeneration.Attributes.DontGenerate(false)]
@@ -40,7 +40,7 @@ public partial class ${EntityType} {
 		public override CodeGenFile[] Generate(CodeGeneratorData[] data) => data
 			.OfType<ComponentData>()
 			.Where(d => d.ShouldGenerateMethods())
-			.Where(d => d.ShouldTrackChanges())
+			.Where(d => d.ShouldWatchChanges())
 			.SelectMany(Generate)
 			.ToArray();
 

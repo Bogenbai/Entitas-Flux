@@ -9,8 +9,8 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
 	{
 		public void Provide(INamedTypeSymbol type, ComponentData data)
 		{
-			var shouldTrackChanges = type.GetAttribute<TrackChangesAttribute>() != null;
-			data.ShouldTrackChanges(shouldTrackChanges);
+			var shouldTrackChanges = type.GetAttribute<WatchedAttribute>() != null;
+			data.ShouldWatchChanges(shouldTrackChanges);
 		}
 	}
 }

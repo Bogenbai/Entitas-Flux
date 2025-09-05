@@ -48,7 +48,7 @@ namespace Entitas.CodeGeneration.Plugins
                 new ContextsComponentDataProvider(),
                 new IsUniqueComponentDataProvider(),
                 new FlagPrefixComponentDataProvider(),
-                new ShouldTrackChangesComponentDataProvider(),
+                new ShouldWatchComponentDataProvider(),
                 new ShouldGenerateComponentComponentDataProvider(),
                 new ShouldGenerateMethodsComponentDataProvider(),
                 new ShouldGenerateComponentIndexComponentDataProvider(),
@@ -108,12 +108,12 @@ namespace Entitas.CodeGeneration.Plugins
             
             mergedData = merge(dataFromEvents, mergedData);
             
-            var dataFromTrackingChanges = mergedData
-                .Where(data => data.ShouldTrackChanges())
-                .SelectMany(data => createDataForTrackingChanges(data))
+            var dataFromWatched = mergedData
+                .Where(data => data.ShouldWatchChanges())
+                .SelectMany(data => createDataForWatched(data))
                 .ToArray();
 
-            return merge(dataFromTrackingChanges, mergedData);
+            return merge(dataFromWatched, mergedData);
         }
 
         ComponentData[] merge(ComponentData[] prioData, ComponentData[] redundantData)
@@ -169,14 +169,14 @@ namespace Entitas.CodeGeneration.Plugins
                 }).ToArray()
             ).ToArray();
         
-        ComponentData[] createDataForTrackingChanges(ComponentData data) => data.GetContextNames()
+        ComponentData[] createDataForWatched(ComponentData data) => data.GetContextNames()
             .Select(contextName =>
             {   
                 var dataForTrackingChanges = new ComponentData(data);
                 dataForTrackingChanges.IsEvent(false);
                 dataForTrackingChanges.IsUnique(false);
                 dataForTrackingChanges.ShouldGenerateComponent(false);
-                dataForTrackingChanges.ShouldTrackChanges(false);
+                dataForTrackingChanges.ShouldWatchChanges(false);
                 var trackingChangesComponentName = data.TrackingChangesComponentName();
                 dataForTrackingChanges.SetTypeName(trackingChangesComponentName);
                 dataForTrackingChanges.SetMemberData(new[]

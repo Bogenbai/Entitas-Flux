@@ -111,7 +111,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
             mergedData = merge(dataFromEvents, mergedData);
 
             var dataFromTrackingChanges = mergedData
-                .Where(data => data.ShouldTrackChanges())
+                .Where(data => data.ShouldWatchChanges())
                 .SelectMany(data => createDataForTrackingChanges(data))
                 .ToArray();
 
@@ -157,7 +157,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
                     dataForEvent.IsEvent(false);
                     dataForEvent.IsUnique(false);
                     dataForEvent.ShouldGenerateComponent(false);
-                    dataForEvent.ShouldTrackChanges(false);
+                    dataForEvent.ShouldWatchChanges(false);
                     var eventComponentName = data.EventComponentName(eventData);
                     var eventTypeSuffix = eventData.GetEventTypeSuffix();
                     var optionalContextName = dataForEvent.GetContextNames().Length > 1 ? contextName : string.Empty;
@@ -179,7 +179,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
                 dataForTrackingChanges.IsEvent(false);
                 dataForTrackingChanges.IsUnique(false);
                 dataForTrackingChanges.ShouldGenerateComponent(false);
-                dataForTrackingChanges.ShouldTrackChanges(false);
+                dataForTrackingChanges.ShouldWatchChanges(false);
                 var trackingChangesComponentName = data.TrackingChangesComponentName();
                 dataForTrackingChanges.SetTypeName(trackingChangesComponentName);
                 dataForTrackingChanges.SetMemberData(new[]
