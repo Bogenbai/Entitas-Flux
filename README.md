@@ -50,7 +50,7 @@ If you’re starting fresh I would suggest to do this:
 2. Make sure the game runs and code generation works.
 3. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the DLLs.
 4. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders.
-5. Hopefully it works :)
+5. Hope it works :)
 
 ## License
 
