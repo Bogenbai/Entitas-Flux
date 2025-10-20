@@ -25,3 +25,5 @@ These markers live for one frame: they can notify systems this frame, then get r
 // will cause entity.isWalletChanged to be `true`
 ```
 It will also generate a `GameWatchedCleanupSystems` feature that removes all those `Changed` component on cleanup. You should put it in your systems order, usually it fits well right before `GameCleanupSystems`.
+
+### More features coming soon (or not)
