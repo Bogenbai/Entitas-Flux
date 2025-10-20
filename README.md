@@ -19,7 +19,7 @@ entity.currentHealth.Value
 
 
 ### Watched attribute
-This attribute simplifies deffered reactivity.  
+This attribute simplifies deferred reactivity.  
 When component X is marked with `[Watched]` attribute changes it value with `ReplaceX(..)`, the entity gets a XChanged marker component.  
 These markers live for one frame: they can notify systems this frame, then get removed so the logic doesn’t repeat next frame.  
 ```cs
