@@ -18,10 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # If specific .NET SDK — uncomment and set a version
-      # - uses: actions/setup-dotnet@v4
-      #   with:
-      #     dotnet-version: '8.0.x'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
 
       # Just in case Linux/macOS builder, not sure if I will need it
       # - name: Build on Linux/macOS
@@ -36,7 +35,7 @@ jobs:
         run: ./build.ps1
 
       - name: Test
-        run: dotnet test --nologo --configuration Release
+        run: dotnet test src/Entitas-Flux/Entitas-Flux.sln --nologo --configuration Release
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
