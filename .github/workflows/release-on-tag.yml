@@ -1,0 +1,72 @@
+name: Release on tag
+
+on:
+  push:
+    tags:
+      - 'v*'   # any tag that starts with 'v' (for example v1.0.0)
+
+permissions:
+  contents: write   # for release creation and files upload
+
+jobs:
+  build-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+    #   - uses: actions/setup-dotnet@v4
+    #     with:
+    #       dotnet-version: '8.0.x'
+
+    #   - name: Build on Linux/macOS
+    #     if: runner.os != 'Windows'
+    #     run: |
+    #       chmod +x ./build.sh
+    #       ./build.sh
+
+      - name: Build on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build.ps1
+
+    #   - name: Test
+    #     run: dotnet test --nologo --configuration Release
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Artifacts-${{ runner.os }}
+          path: |
+            **/Artifacts/**
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-bundle
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}          # vX.Y.Z
+          name: "Release ${{ github.ref_name }}"
+          body: |
+            Automated release for tag ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+          draft: false
+          prerelease: false
+          files: |
+            release-bundle/**/*
