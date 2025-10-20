@@ -48,6 +48,7 @@ namespace Entitas.CodeGeneration.Plugins
                 new ContextsComponentDataProvider(),
                 new IsUniqueComponentDataProvider(),
                 new FlagPrefixComponentDataProvider(),
+                new ShouldWatchComponentDataProvider(),
                 new ShouldGenerateComponentComponentDataProvider(),
                 new ShouldGenerateMethodsComponentDataProvider(),
                 new ShouldGenerateComponentIndexComponentDataProvider(),
@@ -104,8 +105,15 @@ namespace Entitas.CodeGeneration.Plugins
                 .Where(data => data.IsEvent())
                 .SelectMany(data => createDataForEvents(data))
                 .ToArray();
+            
+            mergedData = merge(dataFromEvents, mergedData);
+            
+            var dataFromWatched = mergedData
+                .Where(data => data.ShouldWatchChanges())
+                .SelectMany(data => createDataForWatched(data))
+                .ToArray();
 
-            return merge(dataFromEvents, mergedData);
+            return merge(dataFromWatched, mergedData);
         }
 
         ComponentData[] merge(ComponentData[] prioData, ComponentData[] redundantData)
@@ -160,7 +168,22 @@ namespace Entitas.CodeGeneration.Plugins
                     return dataForEvent;
                 }).ToArray()
             ).ToArray();
-
+        
+        ComponentData[] createDataForWatched(ComponentData data) => data.GetContextNames()
+            .Select(contextName =>
+            {   
+                var dataForTrackingChanges = new ComponentData(data);
+                dataForTrackingChanges.IsEvent(false);
+                dataForTrackingChanges.IsUnique(false);
+                dataForTrackingChanges.ShouldGenerateComponent(false);
+                dataForTrackingChanges.ShouldWatchChanges(false);
+                var trackingChangesComponentName = data.TrackingChangesComponentName();
+                dataForTrackingChanges.SetTypeName(trackingChangesComponentName);
+                dataForTrackingChanges.SetMemberData([]);
+                dataForTrackingChanges.SetContextNames(new[] {contextName});
+                return dataForTrackingChanges;
+            }).ToArray();
+                
         bool hasContexts(Type type) => _contextsComponentDataProvider.GetContextNames(type).Length != 0;
 
         string[] getComponentNames(Type type)

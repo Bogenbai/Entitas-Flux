@@ -1,4 +1,5 @@
-﻿using System.CodeDom.Compiler;
+﻿using System;
+using System.CodeDom.Compiler;
 using System.Linq;
 using DesperateDevs.Extensions;
 using Entitas.CodeGeneration.Attributes;
@@ -80,6 +81,12 @@ namespace Entitas.CodeGeneration.Plugins
             );
             return eventComponentName;
         }
+        
+        public static string TrackingChangesComponentName(this ComponentData data)
+        {
+            string shortComponentName = data.GetTypeName().ToComponentName(true);
+            return shortComponentName + "Changed";
+        }
 
         public static string GetEventMethodArgs(this ComponentData data, EventData eventData, string args)
         {
@@ -110,5 +117,9 @@ namespace Entitas.CodeGeneration.Plugins
 
             return name;
         }
+        
+        public static bool IsAtomicComponent(this MemberData[] members) =>
+            members.Length == 1 &&
+            string.Compare(members[0].name, "Value", StringComparison.InvariantCulture) == 0;
     }
 }
