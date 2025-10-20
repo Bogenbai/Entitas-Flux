@@ -21,10 +21,10 @@ jobs:
           dotnet-version: '6.0.x'
 
       - name: Make build.sh executable
-        run: chmod +x ./build.sh
+        run: chmod +x ./src/Entitas-Flux/build.sh
 
       - name: Build (build.sh)
-        run: ./build.sh
+        run: ./src/Entitas-Flux/build.sh
 
       - name: Test (solution)
         run: dotnet test ./src/Entitas-Flux/Entitas.sln --nologo --configuration Release
