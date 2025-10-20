@@ -1,4 +1,4 @@
-name: Release on tag (Linux)
+name: Release on tag
 
 on:
   push:
