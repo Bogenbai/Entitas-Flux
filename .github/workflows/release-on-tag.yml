@@ -1,47 +1,40 @@
-name: Release on tag
+name: Release on tag (Linux)
 
 on:
   push:
     tags:
-      - 'v*'   # any tag that starts with 'v' (for example v1.0.0)
+      - 'v*'   # for example v1.0.0
 
 permissions:
-  contents: write   # for release creation and files upload
+  contents: write
 
 jobs:
   build-test:
-    name: Build & Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: Build & Test (Ubuntu)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-    #   - uses: actions/setup-dotnet@v4
-    #     with:
-    #       dotnet-version: '8.0.x'
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x' 
 
-    #   - name: Build on Linux/macOS
-    #     if: runner.os != 'Windows'
-    #     run: |
-    #       chmod +x ./build.sh
-    #       ./build.sh
+      - name: Make build.sh executable
+        run: chmod +x ./build.sh
 
-      - name: Build on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./build.ps1
+      - name: Build (build.sh)
+        run: ./build.sh
 
-    #   - name: Test
-    #     run: dotnet test --nologo --configuration Release
+      - name: Test (solution)
+        run: dotnet test ./src/Entitas-Flux/Entitas.sln --nologo --configuration Release
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Artifacts-${{ runner.os }}
+          name: Artifacts-Linux
           path: |
             **/Artifacts/**
           if-no-files-found: error
@@ -52,16 +45,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
+          name: Artifacts-Linux
           path: ./release-bundle
-          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}          # vX.Y.Z
+          tag_name: ${{ github.ref_name }}
           name: "Release ${{ github.ref_name }}"
           body: |
             Automated release for tag ${{ github.ref_name }}
