@@ -42,3 +42,7 @@ In the original Entitas adding components via inspector is a pain because thereâ
 
 
 ### More features coming soon (or not)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
