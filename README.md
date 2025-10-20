@@ -20,8 +20,8 @@ entity.currentHealth.Value
 
 ### Watched attribute
 This attribute simplifies deferred reactivity.  
-When component X is marked with `[Watched]` attribute changes it value with `ReplaceX(..)`, the entity gets a XChanged marker component.  
-These markers live for one frame: they can notify systems this frame, then get removed so the logic doesn’t repeat next frame.  
+When component X is marked with the `[Watched]` attribute and its value is changed via `ReplaceX(...)`, the entity receives an `XChanged` marker component.   
+These markers live for one frame: they notify systems during that frame and are then removed so the logic doesn’t repeat on the next frame.  
 ```cs
 [Game, Watched] public class Wallet : IComponent { public Dictionary<CurrencyTypeId, int> Value; }
 // entity.ReplaceWallet(newValue);
