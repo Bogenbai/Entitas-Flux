@@ -43,6 +43,15 @@ In the original Entitas adding components via inspector is a pain because there�
 
 ### More features coming soon (or not)
 
+## How to use
+Setup is a bit clunky right now (as it always was with Entitas). I’ll try to simplify it later.
+If you’re starting fresh I would suggest to do this:
+1. Clone [Match-One](https://github.com/sschmid/Match-One).
+2. Make sure the game runs and code generation works.
+3. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the DLLs.
+4. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders.
+5. Hopefully it works :)
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
