@@ -1,5 +1,5 @@
 # Entitas Flux
-Entitas Flux is a fork of the great and terrible [Entitas Framework](https://github.com/sschmid/Entitas).  
+**Entitas Flux** is a fork of the great and terrible [Entitas Framework](https://github.com/sschmid/Entitas).  
 I created it to add features missing from the original Entitas that I believe should be there, and to support newer Unity versions.  
 Don’t expect major changes or a big redesign like [Entitas Redux](https://github.com/jeffcampbellmakesgames/Entitas-Redux). Updates will (or will not) come slowly and only when I need a feature.
 
@@ -25,5 +25,17 @@ These markers live for one frame: they can notify systems this frame, then get r
 // will cause entity.isWalletChanged to be `true`
 ```
 It will also generate a `GameWatchedCleanupSystems` feature that removes all those `Changed` component on cleanup. You should put it in your systems order, usually it fits well right before `GameCleanupSystems`.
+
+### Friendly Component Dropdown
+In the original Entitas adding components via inspector is a pain because there’s no search bar. **Entitas Flux** has one.
+<details>
+  <summary>📸 Show large screenshot</summary>
+
+  <div align="center">
+    <img src="https://github.com/user-attachments/assets/bfa51c31-c62c-4291-98c3-de965bb38552" alt="My screenshot" width="900">
+  </div>
+</details>
+
+
 
 ### More features coming soon (or not)
