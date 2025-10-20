@@ -3,9 +3,22 @@ name: CI
 on:
   push:
     branches: [ master ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [ master ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  schedule:
+      - cron: '0 5 * * 1'   # Monday 05:00 UTC
+  workflow_dispatch:       # manual start from Actions tab
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+  
 jobs:
   build-test:
     name: Build & Test (Ubuntu)
