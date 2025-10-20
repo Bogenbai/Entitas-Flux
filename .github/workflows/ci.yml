@@ -12,7 +12,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [windows-latest]
 
     steps:
       - name: Checkout
@@ -21,13 +21,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '6.0.x'
-
-      # Just in case Linux/macOS builder, not sure if I will need it
-      # - name: Build on Linux/macOS
-      #   if: runner.os != 'Windows'
-      #   run: |
-      #     chmod +x ./build.sh
-      #     ./build.sh
 
       - name: Build on Windows
         if: runner.os == 'Windows'
