@@ -3,6 +3,9 @@
 I created it to add features missing from the original Entitas that I believe should be there, and to support newer Unity versions.  
 Don’t expect major changes or a big redesign like [Entitas Redux](https://github.com/jeffcampbellmakesgames/Entitas-Redux). Updates will (or will not) come slowly and only when I need a feature.
 
+![CI](https://github.com/Bogenbai/Entitas-Flux/actions/workflows/ci.yml/badge.svg)
+![Release](https://github.com/Bogenbai/Entitas-Flux/actions/workflows/release-on-tag.yml/badge.svg)
+
 ## Features
 ### Atomic components
 Components that have a single field are generated with a single property, which simplifies access to the value:
