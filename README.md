@@ -20,7 +20,7 @@ entity.currentHealth.Value
 
 ### Watched attribute
 This attribute simplifies deferred reactivity.  
-When component X is marked with the `[Watched]` attribute and its value is changed via `ReplaceX(...)`, the entity receives an `XChanged` marker component.   
+When component `X` is marked with the `[Watched]` attribute and its value is changed (via `ReplaceX(...)`/`AddX(...)`/`RemoveX()`, the entity receives an `XChanged` marker component.   
 These markers live for one frame: they notify systems during that frame and are then removed so the logic doesnâ€™t repeat on the next frame.  
 ```cs
 [Game, Watched] public class Wallet : IComponent { public Dictionary<CurrencyTypeId, int> Value; }
@@ -39,7 +39,18 @@ In the original Entitas adding components via inspector is a pain because thereâ
   </div>
 </details>
 
-
+### Safe component removal
+Sometimes you just remove component `X` if it exists on the entity.
+Without extra `if`s or matcher checks, call `SafeRemoveX()`:
+```cs
+entity.SafeRemoveBoxCollider2D();
+entity.SafeRemoveCollider2D();
+```
+Under the hood it does this:
+```cs
+if (hasBoxCollider2D) 
+    RemoveComponent(GameComponentsLookup.BoxCollider2D);
+```
 
 ### More features coming soon (or not)
 
