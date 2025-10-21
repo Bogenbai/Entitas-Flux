@@ -50,6 +50,7 @@ If you’re starting fresh I would suggest to do this:
 2. Make sure the game runs and code generation works.
 3. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the DLLs.
 4. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders.
+5. Update your JennyRoslyn.properties with DataProviders and Generators **Entitas Flux** provides ([JennyRoslyn.properties](https://github.com/Bogenbai/Entitas-Flux/blob/master/Examples/JennyRoslyn.properties) example)
 5. Hope it works :)
 
 ## License
