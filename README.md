@@ -55,15 +55,13 @@ if (hasBoxCollider2D)
 ### More features coming soon (or not)
 
 ## How to use
-Setup is a bit clunky right now (as it always was with Entitas). I’ll try to simplify it later.
-If you’re starting fresh I would suggest to do this:
-1. Clone [Match-One](https://github.com/sschmid/Match-One).
-2. Make sure the game runs and **!Roslyn!** code generation works.
-3. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the DLLs.
-4. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders.
-5. Update your JennyRoslyn.properties with DataProviders and Generators **Entitas Flux** provides ([JennyRoslyn.properties](https://github.com/Bogenbai/Entitas-Flux/blob/master/Examples/JennyRoslyn.properties) example)
-5. Hope it works :)
+If you start fresh just create new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
+
+If you already have Entitas project and you want to switch to this one, then:
+1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the DLLs.
+2. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders.
+3. Update your JennyRoslyn.properties with DataProviders and Generators **Entitas Flux** provides ([JennyRoslyn.properties](https://github.com/Bogenbai/Entitas-Flux/blob/master/Examples/JennyRoslyn.properties) example)
+4. Hope it works :)
 
 ## License
-
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
