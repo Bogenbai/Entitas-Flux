@@ -48,6 +48,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
 
 			UpdateSize();
 			ShowPopup();
+			Focus();
 		}
 
 		private void OnGUI()
