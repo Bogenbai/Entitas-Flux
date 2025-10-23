@@ -26,30 +26,43 @@ MSBUILD_PROPS=(
 dotnet clean "$SOLUTION" -c "$CONFIG" >/dev/null || true
 dotnet build "$SOLUTION" -c "$CONFIG" "${MSBUILD_PROPS[@]}"
 
-# copy only primary project DLLs (exclude tests and editor tooling)
-# heuristic: dll name == project file name (or AssemblyName if set)
-while IFS= read -r csproj; do
-  name_from_file="$(basename "${csproj%.csproj}")"
-  dll="$name_from_file.dll"
+# Copy only the requested DLLs into requested subfolders (no flat copies)
+copy_map_line() {
+  local dll="$1"
+  local dest_rel="$2"
+  [[ -z "${dll// }" || -z "${dest_rel// }" ]] && return 0
 
-  if [[ -f "$TMP_OUT/$dll" ]]; then
-    cp "$TMP_OUT/$dll" "$ARTIFACTS_DIR/"
+  local src="$TMP_OUT/$dll"
+  if [[ -f "$src" ]]; then
+    local dest_dir="$ARTIFACTS_DIR/$dest_rel"
+    mkdir -p "$dest_dir"
+    cp -f "$src" "$dest_dir/"
   else
-    # try AssemblyName if it differs from project file name
-    asm_name="$(dotnet msbuild "$csproj" -nologo -getProperty:AssemblyName 2>/dev/null | tail -n1 || true)"
-    if [[ -n "${asm_name:-}" && -f "$TMP_OUT/$asm_name.dll" ]]; then
-      cp "$TMP_OUT/$asm_name.dll" "$ARTIFACTS_DIR/"
-    fi
+    echo "WARN: expected DLL not found: $dll" >&2
   fi
-done < <(
-  find "$SCRIPT_DIR" -type f -name '*.csproj' \
-    -not -iname '*test*' \
-    -not -iname '*tests*'
-)
+}
+
+# mapping of dll -> subfolder (relative to Artifacts/)
+while IFS='|' read -r dll dest
+do
+  copy_map_line "$dll" "$dest"
+done <<'EOF'
+Entitas.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
+Entitas.Roslyn.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
+Entitas.VisualDebugging.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
+Entitas.CodeGeneration.Attributes.dll|Assets/Entitas/Entitas
+Entitas.dll|Assets/Entitas/Entitas
+Entitas.Unity.dll|Assets/Entitas/Entitas
+Entitas.VisualDebugging.Unity.dll|Assets/Entitas/Entitas
+Entitas.Migration.dll|Assets/Entitas/Entitas/Editor
+Entitas.Migration.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
+Entitas.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
+Entitas.VisualDebugging.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
+EOF
 
 # optional: remove temp build folder
 rm -rf "$TMP_OUT"
 
-echo "Artifacts:"
-ls -1 "$ARTIFACTS_DIR" || true
+echo "Resulting layout (no DLLs in Artifacts/ root):"
+find "$ARTIFACTS_DIR" -type d -print -o -type f -name '*.dll' -print | sed "s|$ARTIFACTS_DIR/||"
 echo "Done → $ARTIFACTS_DIR"
