@@ -44,8 +44,7 @@ while IFS= read -r csproj; do
 done < <(
   find "$SCRIPT_DIR" -type f -name '*.csproj' \
     -not -iname '*test*' \
-    -not -iname '*tests*' \
-    -not -iname '*unity.editor*'
+    -not -iname '*tests*'
 )
 
 # optional: remove temp build folder

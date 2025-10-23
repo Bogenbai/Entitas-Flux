@@ -32,7 +32,7 @@ $MSBuildProps = @(
 
 # copy only primary project DLLs (exclude tests and unity editor tooling)
 $csprojs = Get-ChildItem -Path $ScriptDir -Recurse -Filter *.csproj |
-  Where-Object { $_.Name -notmatch '(?i)test|tests|unity\.editor' }
+  Where-Object { $_.Name -notmatch '(?i)test|tests' }
 
 foreach ($proj in $csprojs) {
   $nameFromFile = [IO.Path]::GetFileNameWithoutExtension($proj.Name)
