@@ -51,6 +51,13 @@ jobs:
           name: Artifacts-Linux
           path: ./release-bundle
 
+      - name: Create archive with folder structure
+        run: |
+          cd release-bundle
+          # zip recursively, keep dirs; -9 max compression (optional)
+          zip -r -9 Entitas-Flux-${{ github.ref_name }}.zip .
+          cd ..
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -62,4 +69,5 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            release-bundle/**/*
+            release-bundle/Entitas-Flux-${{ github.ref_name }}.zip
+
