@@ -53,8 +53,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
             EditorGUILayout.Space();
             EditorGUILayout.BeginHorizontal();
             {
-                var entity = entities[0];
-                drawAddComponentMenu(entity);
+                drawAddComponentMenu(entities);
             }
             EditorGUILayout.EndHorizontal();
 
@@ -356,6 +355,42 @@ namespace Entitas.VisualDebugging.Unity.Editor
                 EntityComponentSearchWindow.Open(componentNames, componentIndex =>
                 {
                     AddComponent(entity, componentInfos[componentIndex].index);
+                });
+            }
+        }
+
+        static void drawAddComponentMenu(IEntity[] entities)
+        {
+            // Get components that can be added to at least one entity
+            var firstEntity = entities[0];
+            var componentInfos = getComponentInfos(firstEntity)
+                .Where(info => entities.Any(e => !e.HasComponent(info.index)))
+                .ToArray();
+            var componentNames = componentInfos
+                .Select(info => info.name)
+                .ToArray();
+
+            Rect controlRect = EditorGUILayout.GetControlRect();
+
+            Rect labelRect = controlRect;
+            labelRect.width = EditorGUIUtility.labelWidth;
+            EditorGUI.LabelField(labelRect, "Add Component");
+
+            controlRect.x += EditorGUIUtility.labelWidth;
+            controlRect.width -= EditorGUIUtility.labelWidth;
+
+            if (GUI.Button(controlRect, "", EditorStyles.popup))
+            {
+                EntityComponentSearchWindow.Open(componentNames, componentIndex =>
+                {
+                    var selectedComponentIndex = componentInfos[componentIndex].index;
+                    foreach (var entity in entities)
+                    {
+                        if (!entity.HasComponent(selectedComponentIndex))
+                        {
+                            AddComponent(entity, selectedComponentIndex);
+                        }
+                    }
                 });
             }
         }
