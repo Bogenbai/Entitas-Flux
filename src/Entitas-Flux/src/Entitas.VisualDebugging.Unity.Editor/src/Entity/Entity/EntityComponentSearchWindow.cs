@@ -16,7 +16,6 @@ namespace Entitas.VisualDebugging.Unity.Editor
 		private readonly List<string> _componentsByQuery = new();
 		private Action<int> _onComponentSelected;
 
-		private Rect _targetRect;
 		private Vector2 _scrollPosition = Vector2.zero;
 
 		private const int SearchbarHeight = 25;
