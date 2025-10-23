@@ -55,11 +55,29 @@ if (hasBoxCollider2D)
 ### More features coming soon (or not)
 
 ## How to use
-If you start fresh just create new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
-
-If you already have Entitas project and you want to switch to this one, then:
+### If you start fresh
+Just create new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
+### If you already have Entitas in the project
+If you already have Entitas project and you want to switch to this fork, then:
 1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the Entitas-Flux-vX.X.X archive. This archive contains framework DLLs.
-2. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders. The DLLs in the **archive** are organized by folder, so it’s easier to see which DLL goes where.
+2. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders. The DLLs in the **archive** are organized by folder, so it’s easier to see which DLL goes where.   
+But just in case, here’s where everything should go:   
+```cs
+// Jenny/Jenny/Plugins/Entitas:   
+Entitas.CodeGeneration.Plugins.dll   
+Entitas.Roslyn.CodeGeneration.Plugins.dll   
+Entitas.VisualDebugging.CodeGeneration.Plugins.dll   
+// Assets/Entitas/Entitas:   
+Entitas.CodeGeneration.Attributes.dll   
+Entitas.dll   
+Entitas.Unity.dll   
+Entitas.VisualDebugging.Unity.dll   
+// Assets/Entitas/Entitas/Editor:   
+Entitas.Migration.dll   
+Entitas.Migration.Unity.Editor.dll   
+Entitas.Unity.Editor.dll   
+Entitas.VisualDebugging.Unity.Editor.dll   
+```
 3. Update your JennyRoslyn.properties with DataProviders and Generators **Entitas Flux** provides ([JennyRoslyn.properties](https://github.com/Bogenbai/Entitas-Flux/blob/master/Examples/JennyRoslyn.properties) example)
 4. Hope it works :)
 
