@@ -58,8 +58,8 @@ if (hasBoxCollider2D)
 If you start fresh just create new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
 
 If you already have Entitas project and you want to switch to this one, then:
-1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the DLLs.
-2. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders.
+1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the Entitas-Flux-vX.X.X archive. This archive contains framework DLLs.
+2. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders. The DLLs in the **archive** are organized by folder, so it’s easier to see which DLL goes where.
 3. Update your JennyRoslyn.properties with DataProviders and Generators **Entitas Flux** provides ([JennyRoslyn.properties](https://github.com/Bogenbai/Entitas-Flux/blob/master/Examples/JennyRoslyn.properties) example)
 4. Hope it works :)
 
