@@ -41,7 +41,8 @@ namespace Entitas.VisualDebugging.Unity.Editor
 			SetSize(new Vector2(250, 275));
 
 			Rect dynamicPosition = position;
-			dynamicPosition.x = GUIUtility.GUIToScreenPoint(Event.current.mousePosition).x; // - (position.width / 2) - 100;
+			// Position the popup at the mouse cursor. Adjust centering if needed.
+			dynamicPosition.x = GUIUtility.GUIToScreenPoint(Event.current.mousePosition).x;
 			dynamicPosition.y = GUIUtility.GUIToScreenPoint(Event.current.mousePosition).y;
 			position = dynamicPosition;
 
