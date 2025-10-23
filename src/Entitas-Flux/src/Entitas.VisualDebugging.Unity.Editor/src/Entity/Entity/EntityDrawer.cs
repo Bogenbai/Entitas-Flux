@@ -53,17 +53,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
             EditorGUILayout.Space();
             EditorGUILayout.BeginHorizontal();
             {
-                var entity = entities[0];
-                var index = drawAddComponentMenu(entity);
-                if (index >= 0)
-                {
-                    var componentType = entity.contextInfo.componentTypes[index];
-                    foreach (var e in entities)
-                    {
-                        var component = e.CreateComponent(index, componentType);
-                        e.AddComponent(index, component);
-                    }
-                }
+                drawAddComponentMenu(entities);
             }
             EditorGUILayout.EndHorizontal();
 
@@ -120,13 +110,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
 
                 EditorGUILayout.Space();
 
-                var index = drawAddComponentMenu(entity);
-                if (index >= 0)
-                {
-                    var componentType = entity.contextInfo.componentTypes[index];
-                    var component = entity.CreateComponent(index, componentType);
-                    entity.AddComponent(index, component);
-                }
+                drawAddComponentMenu(entity);
 
                 EditorGUILayout.Space();
 
@@ -140,6 +124,13 @@ namespace Entitas.VisualDebugging.Unity.Editor
                     DrawComponent(unfoldedComponents, componentMemberSearch, entity, indices[i], components[i]);
             }
             EditorLayout.EndVerticalBox();
+        }
+
+        private static void AddComponent(IEntity entity, int index)
+        {
+            var componentType = entity.contextInfo.componentTypes[index];
+            var component = entity.CreateComponent(index, componentType);
+            entity.AddComponent(index, component);
         }
 
         public static void DrawComponent(bool[] unfoldedComponents, string[] componentMemberSearch, IEntity entity, int index, IComponent component)
@@ -341,7 +332,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
             return false;
         }
 
-        static int drawAddComponentMenu(IEntity entity)
+        static void drawAddComponentMenu(IEntity entity)
         {
             var componentInfos = getComponentInfos(entity)
                 .Where(info => !entity.HasComponent(info.index))
@@ -349,10 +340,59 @@ namespace Entitas.VisualDebugging.Unity.Editor
             var componentNames = componentInfos
                 .Select(info => info.name)
                 .ToArray();
-            var index = EditorGUILayout.Popup("Add Component", -1, componentNames);
-            return index >= 0
-                ? componentInfos[index].index
-                : -1;
+
+            Rect controlRect = EditorGUILayout.GetControlRect();
+
+            Rect labelRect = controlRect;
+            labelRect.width = EditorGUIUtility.labelWidth;
+            EditorGUI.LabelField(labelRect, "Add Component");
+
+            controlRect.x += EditorGUIUtility.labelWidth;
+            controlRect.width -= EditorGUIUtility.labelWidth;
+
+            if (GUI.Button(controlRect, "", EditorStyles.popup))
+            {
+                EntityComponentSearchWindow.Open(componentNames, componentIndex =>
+                {
+                    AddComponent(entity, componentInfos[componentIndex].index);
+                });
+            }
+        }
+
+        static void drawAddComponentMenu(IEntity[] entities)
+        {
+            // Get components that can be added to at least one entity
+            var firstEntity = entities[0];
+            var componentInfos = getComponentInfos(firstEntity)
+                .Where(info => entities.Any(e => !e.HasComponent(info.index)))
+                .ToArray();
+            var componentNames = componentInfos
+                .Select(info => info.name)
+                .ToArray();
+
+            Rect controlRect = EditorGUILayout.GetControlRect();
+
+            Rect labelRect = controlRect;
+            labelRect.width = EditorGUIUtility.labelWidth;
+            EditorGUI.LabelField(labelRect, "Add Component");
+
+            controlRect.x += EditorGUIUtility.labelWidth;
+            controlRect.width -= EditorGUIUtility.labelWidth;
+
+            if (GUI.Button(controlRect, "", EditorStyles.popup))
+            {
+                EntityComponentSearchWindow.Open(componentNames, componentIndex =>
+                {
+                    var selectedComponentIndex = componentInfos[componentIndex].index;
+                    foreach (var entity in entities)
+                    {
+                        if (!entity.HasComponent(selectedComponentIndex))
+                        {
+                            AddComponent(entity, selectedComponentIndex);
+                        }
+                    }
+                });
+            }
         }
 
         static void drawUnsupportedType(Type memberType, string memberName, object value)
@@ -405,7 +445,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
 
         static void generateTemplate(string folder, string filePath, string template)
         {
-            if (!Directory.Exists(folder)) 
+            if (!Directory.Exists(folder))
                 Directory.CreateDirectory(folder);
 
             File.WriteAllText(filePath, template);
