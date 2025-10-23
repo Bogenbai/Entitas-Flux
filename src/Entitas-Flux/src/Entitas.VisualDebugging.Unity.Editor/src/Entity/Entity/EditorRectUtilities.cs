@@ -183,12 +183,20 @@ namespace Entitas.VisualDebugging.Unity.Editor
         }
         #endif
 
+        // Cache 1x1 textures per color to avoid redundant allocations
+        private static readonly System.Collections.Generic.Dictionary<Color, Texture2D> _colorTextures = new System.Collections.Generic.Dictionary<Color, Texture2D>();
+
         public static Texture2D DrawTexture(Color color)
         {
-            var texture = new Texture2D(Screen.width, Screen.height);
-            Color[] pixels = Enumerable.Repeat(color, Screen.width * Screen.height).ToArray();
-            texture.SetPixels(pixels);
+            if (_colorTextures.TryGetValue(color, out var cachedTexture))
+            {
+                return cachedTexture;
+            }
+
+            var texture = new Texture2D(1, 1);
+            texture.SetPixel(0, 0, color);
             texture.Apply();
+            _colorTextures[color] = texture;
             return texture;
         }
 
