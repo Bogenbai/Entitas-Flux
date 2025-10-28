@@ -33,6 +33,17 @@ ${memberAssignmentList}
         return this;
     }
 
+    public ${EntityType} Replace${ComponentName}(${newMethodParameters}) {
+        var index = ${Index};
+        var component = (${ComponentType})CreateComponent(index, typeof(${ComponentType}));
+${memberAssignmentList}
+        ReplaceComponent(index, component);
+
+		${Handle_Watched_Changes}
+
+        return this;
+    }
+
     public ${EntityType} Remove${ComponentName}() {
         RemoveComponent(${Index});
 
@@ -56,7 +67,11 @@ ${memberAssignmentList}
 		const string ATOMIC_TEMPLATE =
 			@"public partial class ${EntityType} {
 
+#if ENTITAS_HIDE_STANDARD_MEMBERS
     private ${ComponentType} ${validComponentName} { get { return (${ComponentType})GetComponent(${Index}); } }
+#else
+    public ${ComponentType} ${validComponentName} { get { return (${ComponentType})GetComponent(${Index}); } }
+#endif
     public ${ComponentValueType} ${FirstUppercaseComponentName} { get { return ${validComponentName}.Value; } }
     public bool has${ComponentName} { get { return HasComponent(${Index}); } }
 
@@ -82,10 +97,16 @@ ${memberAssignmentList}
             Add${ComponentName}(newValue);
             return this;
         }
-
+#if ENTITAS_DISABLE_REACTIVITY
+        ${validComponentName}.Value = newValue;
+#else
+		var index = ${Index};
+        var component = (${ComponentType})CreateComponent(index, typeof(${ComponentType}));
+${memberAssignmentList}
+        ReplaceComponent(index, component);
+#endif
 		${Handle_Watched_Changes}
 
-        ${validComponentName}.Value = newValue;
         return this;
     }
 
