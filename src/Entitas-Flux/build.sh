@@ -47,6 +47,7 @@ while IFS='|' read -r dll dest
 do
   copy_map_line "$dll" "$dest"
 done <<'EOF'
+DesperateDevs.Extensions.dll|Jenny/Jenny
 Entitas.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
 Entitas.Roslyn.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
 Entitas.VisualDebugging.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
