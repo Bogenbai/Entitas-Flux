@@ -51,6 +51,9 @@ Under the hood it does this:
 if (hasBoxCollider2D) 
     RemoveComponent(GameComponentsLookup.BoxCollider2D);
 ```
+### Defines
+`ENTITAS_DISABLE_REACTIVITY` - partially disables Entitas' default reactivity. Gives small performance boost.
+`ENTITAS_HIDE_STANDARD_MEMBERS` - hides standard generated component members that start with a lowercase letter in atomic components.
 
 ### More features coming soon (or not)
 
