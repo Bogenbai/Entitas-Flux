@@ -21,17 +21,8 @@ public class ${ComponentName}Changed : Entitas.IComponent { }
 
 		CodeGenFile GenerateSingle(ComponentData data)
 		{
-			string contexts = "";
-
 			string[] names = data.GetContextNames();
-			for (int i = 0; i < names.Length; i++)
-			{
-				contexts += names[i];
-				if (i < names.Length - 1)
-				{
-					contexts += ", ";
-				}
-			}
+			string contexts = string.Join(", ", names);
 
 			string fileContent = TEMPLATE
 				.Replace("${ComponentName}", data.ComponentName())
