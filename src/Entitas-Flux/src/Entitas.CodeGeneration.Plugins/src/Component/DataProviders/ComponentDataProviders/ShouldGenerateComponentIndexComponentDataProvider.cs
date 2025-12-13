@@ -18,7 +18,7 @@ namespace Entitas.CodeGeneration.Plugins
                 .OfType<DontGenerateAttribute>()
                 .SingleOrDefault();
 
-            return attr == null || attr.generateIndex;
+            return attr == null;
         }
     }
 

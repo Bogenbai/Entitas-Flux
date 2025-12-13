@@ -16,7 +16,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
         bool getGenerateIndex(INamedTypeSymbol type)
         {
             var attr = type.GetAttribute<DontGenerateAttribute>();
-            return attr == null || (bool)(attr.ConstructorArguments.First().Value);
+            return attr == null;
         }
     }
 }
