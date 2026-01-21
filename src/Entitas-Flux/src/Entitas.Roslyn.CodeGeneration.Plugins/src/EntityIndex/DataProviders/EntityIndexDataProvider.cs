@@ -58,6 +58,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
             var entityIndexData = types
                 .Where(type => type.AllInterfaces.Any(i => i.ToCompilableString() == componentInterface))
                 .Where(type => !type.IsAbstract)
+                .Where(type => type.GetAttribute<DontGenerateAttribute>() == null)
                 .ToDictionary(
                     type => type,
                     type => type.GetPublicMembers(true))

@@ -147,6 +147,12 @@ namespace Entitas.CodeGeneration.Tests
             d.GetContextNames()[0].Should().Be("ConfiguredContext");
         }
 
+        [Fact]
+        public void IgnoresComponentsMarkedDontGenerate()
+        {
+            GetData<DontGenerateEntityIndexComponent, StandardComponent>().Should().HaveCount(0);
+        }
+
         EntityIndexData[] GetData<T1, T2>(Preferences preferences = null)
         {
             var provider = new EntityIndexDataProvider(new[] {typeof(T1), typeof(T2)});
