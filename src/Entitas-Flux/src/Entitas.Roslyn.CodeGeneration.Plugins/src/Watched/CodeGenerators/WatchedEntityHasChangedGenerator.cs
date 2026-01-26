@@ -43,6 +43,22 @@ ${originalIdFromFlagCases}
 ${isWatchedComponentCases}
         _ => false
     };
+
+    /// <summary>
+    /// Given a component ID, returns the corresponding ""changed"" flag component ID.
+    /// </summary>
+    public int GetChangedFlagIdOf(int lookupComponentId) => lookupComponentId switch {
+${changedFlagIdOfCases}
+        _ => throw new System.ArgumentException($""Component ID {lookupComponentId} does not have a corresponding 'changed' flag component."")
+    };
+
+    /// <summary>
+    /// Given a component ID, returns the corresponding ""changed"" flag component Type.
+    /// </summary>
+    public System.Type GetChangeFlagTypeOf(int changeComponentTypeId) => changeComponentTypeId switch {
+${changeFlagTypeOfCases}
+        _ => throw new System.ArgumentException($""Component ID {changeComponentTypeId} does not have a corresponding 'changed' flag component type."")
+    };
 }
 ";
 
@@ -87,12 +103,22 @@ ${isWatchedComponentCases}
                 .Select(d =>
                     $"        {lookupType}.{d.ComponentName()} => true,"));
 
+            var changedFlagIdOfCases = string.Join("\n", watched
+                .Select(d =>
+                    $"        {lookupType}.{d.ComponentName()} => {lookupType}.{d.ComponentName()}Changed,"));
+
+            var changeFlagTypeOfCases = string.Join("\n", watched
+                .Select(d =>
+                    $"        {lookupType}.{d.ComponentName()} => typeof(global::{d.ComponentName()}Changed),"));
+
             var fileContent = Template
                 .Replace("${EntityType}", contextName.AddEntitySuffix())
                 .Replace("${hasChangedCases}", hasChangedCases)
                 .Replace("${isChangedFlagCases}", isChangedFlagCases)
                 .Replace("${originalIdFromFlagCases}", originalIdFromFlagCases)
-                .Replace("${isWatchedComponentCases}", isWatchedComponentCases);
+                .Replace("${isWatchedComponentCases}", isWatchedComponentCases)
+                .Replace("${changedFlagIdOfCases}", changedFlagIdOfCases)
+                .Replace("${changeFlagTypeOfCases}", changeFlagTypeOfCases);
 
             var fileName = $"{contextName.AddEntitySuffix()}.HasChanged.cs";
 
