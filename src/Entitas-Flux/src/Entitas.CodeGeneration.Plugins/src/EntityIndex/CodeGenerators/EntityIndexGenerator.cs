@@ -83,7 +83,8 @@ ${getIndices}
                 .Select(d => INDEX_CONSTANTS_TEMPLATE
                     .Replace("${IndexName}", d.GetHasMultiple()
                         ? d.GetEntityIndexName() + d.GetMemberName().ToUpperFirst()
-                        : d.GetEntityIndexName())));
+                        : d.GetEntityIndexName()))
+                .Distinct());
 
             var addIndices = string.Join("\n\n", data
                 .Select(generateAddMethods));
