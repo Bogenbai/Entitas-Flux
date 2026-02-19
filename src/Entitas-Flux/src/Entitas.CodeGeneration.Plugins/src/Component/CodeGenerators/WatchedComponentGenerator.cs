@@ -16,19 +16,24 @@ public class ${ComponentName}Changed : Entitas.IComponent { }
 		public override CodeGenFile[] Generate(CodeGeneratorData[] data) => data
 			.OfType<ComponentData>()
 			.Where(d => d.ShouldWatchChanges())
-			.Select(GenerateSingle)
+			.GroupBy(d => d.ComponentName())
+			.Select(GenerateForGroup)
 			.ToArray();
 
-		CodeGenFile GenerateSingle(ComponentData data)
+		CodeGenFile GenerateForGroup(IGrouping<string, ComponentData> group)
 		{
-			string[] names = data.GetContextNames();
-			string contexts = string.Join(", ", names);
+			string componentName = group.Key;
+			string[] allContexts = group
+				.SelectMany(d => d.GetContextNames())
+				.Distinct()
+				.ToArray();
+			string contexts = string.Join(", ", allContexts);
 
 			string fileContent = TEMPLATE
-				.Replace("${ComponentName}", data.ComponentName())
+				.Replace("${ComponentName}", componentName)
 				.Replace("${Contexts}", contexts);
 
-			string fileName = (data.ComponentName() + "Changed").AddComponentSuffix();
+			string fileName = (componentName + "Changed").AddComponentSuffix();
 			string path = "Components" + Path.DirectorySeparatorChar + fileName + ".cs";
 
 			return new CodeGenFile(path, fileContent, GetType().FullName);
