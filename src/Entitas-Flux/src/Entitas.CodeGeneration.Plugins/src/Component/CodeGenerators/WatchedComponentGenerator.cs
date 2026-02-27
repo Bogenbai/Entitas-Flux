@@ -26,6 +26,7 @@ public class ${ComponentName}Changed : Entitas.IComponent { }
 			string[] allContexts = group
 				.SelectMany(d => d.GetContextNames())
 				.Distinct()
+				.OrderBy(ctx => ctx)
 				.ToArray();
 			string contexts = string.Join(", ", allContexts);
 

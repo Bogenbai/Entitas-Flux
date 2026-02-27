@@ -117,7 +117,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
                 .Select(g =>
                 {
                     var first = g.First();
-                    first.SetContextNames(g.SelectMany(d => d.GetContextNames()).Distinct().ToArray());
+                    first.SetContextNames(g.SelectMany(d => d.GetContextNames()).Distinct().OrderBy(ctx => ctx).ToArray());
                     return first;
                 })
                 .ToArray();
