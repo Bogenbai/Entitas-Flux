@@ -5,6 +5,7 @@ using DesperateDevs.Extensions;
 using DesperateDevs.Reflection;
 using DesperateDevs.Serialization;
 using DesperateDevs.Unity.Editor;
+using Entitas.CodeGeneration.Attributes;
 using UnityEditor;
 using UnityEngine;
 
@@ -131,6 +132,30 @@ namespace Entitas.VisualDebugging.Unity.Editor
             var componentType = entity.contextInfo.componentTypes[index];
             var component = entity.CreateComponent(index, componentType);
             entity.AddComponent(index, component);
+            MarkWatchedComponentChanged(entity, index);
+        }
+
+        private static void MarkWatchedComponentChanged(IEntity entity, int index)
+        {
+            var componentType = entity.contextInfo.componentTypes[index];
+            if (!Attribute.IsDefined(componentType, typeof(WatchedAttribute)))
+                return;
+
+            var componentName = entity.contextInfo.componentNames[index];
+            var changedName = componentName + "Changed";
+            var componentNames = entity.contextInfo.componentNames;
+            for (int i = 0; i < componentNames.Length; i++)
+            {
+                if (componentNames[i] == changedName)
+                {
+                    if (!entity.HasComponent(i))
+                    {
+                        var changedComponent = entity.CreateComponent(i, entity.contextInfo.componentTypes[i]);
+                        entity.AddComponent(i, changedComponent);
+                    }
+                    return;
+                }
+            }
         }
 
         public static void DrawComponent(bool[] unfoldedComponents, string[] componentMemberSearch, IEntity entity, int index, IComponent component)
@@ -163,7 +188,10 @@ namespace Entitas.VisualDebugging.Unity.Editor
                             }
 
                             if (EditorLayout.MiniButton("-"))
+                            {
                                 entity.RemoveComponent(index);
+                                MarkWatchedComponentChanged(entity, index);
+                            }
                         }
                         EditorGUILayout.EndHorizontal();
 
@@ -197,7 +225,10 @@ namespace Entitas.VisualDebugging.Unity.Editor
                             }
 
                             if (changed)
+                            {
                                 entity.ReplaceComponent(index, newComponent);
+                                MarkWatchedComponentChanged(entity, index);
+                            }
                             else
                                 entity.GetComponentPool(index).Push(newComponent);
                         }
