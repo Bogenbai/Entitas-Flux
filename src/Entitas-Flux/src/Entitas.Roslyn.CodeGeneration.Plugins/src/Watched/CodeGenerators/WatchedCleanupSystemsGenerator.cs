@@ -38,12 +38,13 @@ ${systemsList}
 					return dict;
 				});
 
-			return byContext.Select(kv => Generate(kv.Key, kv.Value.ToArray())).ToArray();
+			return byContext.OrderBy(kv => kv.Key).Select(kv => Generate(kv.Key, kv.Value.ToArray())).ToArray();
 		}
 
 		CodeGenFile Generate(string contextName, WatchedCleanupData[] data)
 		{
 			var systemsList = string.Join("\n", data
+				.OrderBy(d => d.componentData.ComponentName())
 				.Select(d => $"        Add(new Remove{d.componentData.ComponentName()}Changed{contextName.AddSystemSuffix()}(contexts));"));
 
 			var fileContent = TEMPLATE
