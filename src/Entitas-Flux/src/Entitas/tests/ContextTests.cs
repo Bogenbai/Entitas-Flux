@@ -701,6 +701,78 @@ namespace Entitas.Tests
         }
 
         [Fact]
+        public void DoesNotHaveEntityIndexWhenNoneAdded()
+        {
+            _context.HasEntityIndex("unknown").Should().BeFalse();
+        }
+
+        [Fact]
+        public void HasEntityIndexAfterAdding()
+        {
+            var entityIndex = new PrimaryEntityIndex<TestEntity, string>(
+                "TestIndex",
+                _context.GetGroup(Matcher<TestEntity>.AllOf(1)),
+                (_, _) => string.Empty
+            );
+            _context.AddEntityIndex(entityIndex);
+            _context.HasEntityIndex(entityIndex.name).Should().BeTrue();
+        }
+
+        [Fact]
+        public void RemovesEntityIndex()
+        {
+            var entityIndex = new PrimaryEntityIndex<TestEntity, string>(
+                "TestIndex",
+                _context.GetGroup(Matcher<TestEntity>.AllOf(1)),
+                (_, _) => string.Empty
+            );
+            _context.AddEntityIndex(entityIndex);
+            _context.RemoveEntityIndex(entityIndex.name);
+            _context.HasEntityIndex(entityIndex.name).Should().BeFalse();
+        }
+
+        [Fact]
+        public void ThrowsWhenRemovingEntityIndexThatDoesNotExist()
+        {
+            FluentActions.Invoking(() => _context.RemoveEntityIndex("unknown"))
+                .Should().Throw<ContextEntityIndexDoesNotExistException>();
+        }
+
+        [Fact]
+        public void ThrowsWhenGettingRemovedEntityIndex()
+        {
+            var entityIndex = new PrimaryEntityIndex<TestEntity, string>(
+                "TestIndex",
+                _context.GetGroup(Matcher<TestEntity>.AllOf(1)),
+                (_, _) => string.Empty
+            );
+            _context.AddEntityIndex(entityIndex);
+            _context.RemoveEntityIndex(entityIndex.name);
+            FluentActions.Invoking(() => _context.GetEntityIndex(entityIndex.name))
+                .Should().Throw<ContextEntityIndexDoesNotExistException>();
+        }
+
+        [Fact]
+        public void CanAddEntityIndexAfterRemoving()
+        {
+            var entityIndex = new PrimaryEntityIndex<TestEntity, string>(
+                "TestIndex",
+                _context.GetGroup(Matcher<TestEntity>.AllOf(1)),
+                (_, _) => string.Empty
+            );
+            _context.AddEntityIndex(entityIndex);
+            _context.RemoveEntityIndex(entityIndex.name);
+
+            var newEntityIndex = new PrimaryEntityIndex<TestEntity, string>(
+                "TestIndex",
+                _context.GetGroup(Matcher<TestEntity>.AllOf(1)),
+                (_, _) => string.Empty
+            );
+            _context.AddEntityIndex(newEntityIndex);
+            _context.GetEntityIndex(newEntityIndex.name).Should().BeSameAs(newEntityIndex);
+        }
+
+        [Fact]
         public void ResetsCreationIndex()
         {
             _context.CreateEntity();

@@ -235,6 +235,20 @@ namespace Entitas
             return entityIndex;
         }
 
+        /// Determines whether the context has an IEntityIndex with the specified name.
+        public bool HasEntityIndex(string name) => _entityIndices.ContainsKey(name);
+
+        /// Removes the IEntityIndex for the specified name.
+        /// The entity index will be deactivated before removal.
+        public void RemoveEntityIndex(string name)
+        {
+            if (!_entityIndices.TryGetValue(name, out var entityIndex))
+                throw new ContextEntityIndexDoesNotExistException(this, name);
+
+            entityIndex.Deactivate();
+            _entityIndices.Remove(name);
+        }
+
         /// Resets the creationIndex back to 0.
         public void ResetCreationIndex() => _creationIndex = 0;
 

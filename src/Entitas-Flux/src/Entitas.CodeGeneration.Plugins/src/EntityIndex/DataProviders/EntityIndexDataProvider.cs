@@ -57,6 +57,7 @@ namespace Entitas.CodeGeneration.Plugins
             var entityIndexData = types
                 .Where(type => !type.IsAbstract)
                 .Where(type => type.ImplementsInterface<IComponent>())
+                .Where(type => !Attribute.IsDefined(type, typeof(DontGenerateAttribute)))
                 .ToDictionary(
                     type => type,
                     type => type.GetPublicMemberInfos())

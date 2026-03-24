@@ -129,6 +129,12 @@ namespace Entitas.CodeGeneration.Tests
             d.GetContextNames()[0].Should().Be("ConfiguredContext");
         }
 
+        [Fact]
+        public void IgnoresComponentsMarkedDontGenerate()
+        {
+            GetData<DontGenerateEntityIndexComponent, StandardComponent>().Length.Should().Be(0);
+        }
+
         INamedTypeSymbol GetSymbol<T>() => Types.Single(c => c.ToCompilableString() == typeof(T).FullName);
 
         EntityIndexData[] GetData<T1, T2>(Preferences preferences = null)

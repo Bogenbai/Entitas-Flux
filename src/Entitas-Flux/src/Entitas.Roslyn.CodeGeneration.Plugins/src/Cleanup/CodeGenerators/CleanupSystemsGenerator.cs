@@ -45,12 +45,14 @@ ${systemsList}
         }
 
         CodeGenFile[] generate(Dictionary<string, List<CleanupData>> contextNameToCleanupData) => contextNameToCleanupData
+            .OrderBy(kv => kv.Key)
             .Select(kv => generate(kv.Key, kv.Value.ToArray()))
             .ToArray();
 
         CodeGenFile generate(string contextName, CleanupData[] data)
         {
             var systemsList = string.Join("\n", data
+                .OrderBy(d => d.componentData.ComponentName())
                 .Select(d => "        Add(new " +
                              (d.cleanupMode == CleanupMode.DestroyEntity ? "Destroy" : "Remove") +
                              d.componentData.ComponentName() + contextName.AddSystemSuffix() + "(contexts));"));

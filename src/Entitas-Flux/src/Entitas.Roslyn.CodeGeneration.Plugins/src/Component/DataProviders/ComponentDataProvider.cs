@@ -113,6 +113,13 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
             var dataFromTrackingChanges = mergedData
                 .Where(data => data.ShouldWatchChanges())
                 .SelectMany(data => createDataForWatched(data))
+                .GroupBy(d => d.GetTypeName())
+                .Select(g =>
+                {
+                    var first = g.First();
+                    first.SetContextNames(g.SelectMany(d => d.GetContextNames()).Distinct().OrderBy(ctx => ctx).ToArray());
+                    return first;
+                })
                 .ToArray();
 
             return merge(dataFromTrackingChanges, mergedData);

@@ -1,5 +1,4 @@
-﻿using System.Linq;
-using DesperateDevs.Roslyn;
+﻿using DesperateDevs.Roslyn;
 using Entitas.CodeGeneration.Attributes;
 using Entitas.CodeGeneration.Plugins;
 using Microsoft.CodeAnalysis;
@@ -16,7 +15,7 @@ namespace Entitas.Roslyn.CodeGeneration.Plugins
         bool getGenerateIndex(INamedTypeSymbol type)
         {
             var attr = type.GetAttribute<DontGenerateAttribute>();
-            return attr == null || (bool)(attr.ConstructorArguments.First().Value);
+            return attr == null;
         }
     }
 }
