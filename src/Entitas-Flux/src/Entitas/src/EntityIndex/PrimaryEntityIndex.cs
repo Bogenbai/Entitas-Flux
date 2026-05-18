@@ -6,6 +6,7 @@ namespace Entitas
     public class PrimaryEntityIndex<TEntity, TKey> : AbstractEntityIndex<TEntity, TKey> where TEntity : class, IEntity
     {
         readonly Dictionary<TKey, TEntity> _index;
+        readonly Dictionary<TEntity, int> _entityRefCount = new Dictionary<TEntity, int>(EntityEqualityComparer<TEntity>.comparer);
 
         public PrimaryEntityIndex(string name, IGroup<TEntity> group, Func<TEntity, IComponent, TKey> getKey) : base(name, group, getKey)
         {
@@ -47,19 +48,10 @@ namespace Entitas
 
         protected override void clear()
         {
-            foreach (var entity in _index.Values)
-            {
-                if (entity.aerc is SafeAERC safeAerc)
-                {
-                    if (safeAerc.owners.Contains(this))
-                        entity.Release(this);
-                }
-                else
-                {
-                    entity.Release(this);
-                }
-            }
+            foreach (var entity in _entityRefCount.Keys)
+                entity.Release(this);
 
+            _entityRefCount.Clear();
             _index.Clear();
         }
 
@@ -72,13 +64,13 @@ namespace Entitas
 
             _index.Add(key, entity);
 
-            if (entity.aerc is SafeAERC safeAerc)
+            if (_entityRefCount.TryGetValue(entity, out var count))
             {
-                if (!safeAerc.owners.Contains(this))
-                    entity.Retain(this);
+                _entityRefCount[entity] = count + 1;
             }
             else
             {
+                _entityRefCount[entity] = 1;
                 entity.Retain(this);
             }
         }
@@ -87,14 +79,15 @@ namespace Entitas
         {
             _index.Remove(key);
 
-            if (entity.aerc is SafeAERC safeAerc)
+            var count = _entityRefCount[entity];
+            if (count == 1)
             {
-                if (safeAerc.owners.Contains(this))
-                    entity.Release(this);
+                _entityRefCount.Remove(entity);
+                entity.Release(this);
             }
             else
             {
-                entity.Release(this);
+                _entityRefCount[entity] = count - 1;
             }
         }
     }
