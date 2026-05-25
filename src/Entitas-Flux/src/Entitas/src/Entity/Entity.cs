@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Entitas
@@ -65,8 +66,8 @@ namespace Entitas
         /// release it manually at some point.
         public IAERC aerc => _aerc;
 
-        readonly List<IComponent> _componentBuffer;
-        readonly List<int> _indexBuffer;
+        List<IComponent> _componentBuffer;
+        List<int> _indexBuffer;
 
         int _creationIndex;
         bool _isEnabled;
@@ -81,12 +82,6 @@ namespace Entitas
         int[] _componentIndicesCache;
         string _toStringCache;
         StringBuilder _toStringBuilder;
-
-        public Entity()
-        {
-            _componentBuffer = new List<IComponent>();
-            _indexBuffer = new List<int>();
-        }
 
         public void Initialize(int creationIndex, int totalComponents, Stack<IComponent>[] componentPools, ContextInfo contextInfo = null, IAERC aerc = null)
         {
@@ -206,21 +201,28 @@ namespace Entitas
         /// You can only get a component at an index if it exists.
         /// The preferred way is to use the
         /// generated methods from the code generator.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public IComponent GetComponent(int index)
         {
-            if (!HasComponent(index))
-                throw new EntityDoesNotHaveComponentException(index,
-                    $"Cannot get component '{_contextInfo.componentNames[index]}' from {this}!",
-                    "You should check if an entity has the component before getting it.");
+            var component = _components[index];
+            if (component == null)
+                throw getDoesNotHaveComponentException(index);
 
-            return _components[index];
+            return component;
         }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        EntityDoesNotHaveComponentException getDoesNotHaveComponentException(int index) =>
+            new EntityDoesNotHaveComponentException(index,
+                $"Cannot get component '{_contextInfo.componentNames[index]}' from {this}!",
+                "You should check if an entity has the component before getting it.");
 
         /// Returns all added components.
         public IComponent[] GetComponents()
         {
             if (_componentsCache == null)
             {
+                _componentBuffer ??= new List<IComponent>();
                 for (var i = 0; i < _components.Length; i++)
                 {
                     var component = _components[i];
@@ -240,6 +242,7 @@ namespace Entitas
         {
             if (_componentIndicesCache == null)
             {
+                _indexBuffer ??= new List<int>();
                 for (var i = 0; i < _components.Length; i++)
                     if (_components[i] != null)
                         _indexBuffer.Add(i);
@@ -253,10 +256,12 @@ namespace Entitas
 
         /// Determines whether this entity has a component
         /// at the specified index.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasComponent(int index) => _components[index] != null;
 
         /// Determines whether this entity has components
         /// at all the specified indices.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasComponents(int[] indices)
         {
             for (var i = 0; i < indices.Length; i++)
@@ -268,6 +273,7 @@ namespace Entitas
 
         /// Determines whether this entity has a component
         /// at any of the specified indices.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasAnyComponent(int[] indices)
         {
             for (var i = 0; i < indices.Length; i++)
@@ -292,6 +298,7 @@ namespace Entitas
         /// Removed components will be pushed to the componentPool.
         /// Use entity.CreateComponent(index, type) to get a new or
         /// reusable component from the componentPool.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Stack<IComponent> GetComponentPool(int index)
         {
             var componentPool = _componentPools[index];
@@ -405,9 +412,6 @@ namespace Entitas
                 {
                     var component = components[i];
                     // var type = component.GetType();
-
-                    // TODO VD PERFORMANCE
-                    _toStringCache = null;
 
 //                    var implementsToString = type.GetMethod("ToString")
 //                        .DeclaringType.ImplementsInterface<IComponent>();

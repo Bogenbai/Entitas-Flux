@@ -17,7 +17,10 @@ namespace Entitas.CodeGeneration.Plugins
 
     public ${EntityType} Add${ComponentName}(${newMethodParameters}) {
         var index = ${Index};
-        var component = (${ComponentType})CreateComponent(index, typeof(${ComponentType}));
+        var componentPool = GetComponentPool(index);
+        var component = componentPool.Count > 0
+            ? (${ComponentType})componentPool.Pop()
+            : new ${ComponentType}();
 ${memberAssignmentList}
         AddComponent(index, component);
 
@@ -26,7 +29,10 @@ ${memberAssignmentList}
 
     public ${EntityType} Replace${ComponentName}(${newMethodParameters}) {
         var index = ${Index};
-        var component = (${ComponentType})CreateComponent(index, typeof(${ComponentType}));
+        var componentPool = GetComponentPool(index);
+        var component = componentPool.Count > 0
+            ? (${ComponentType})componentPool.Pop()
+            : new ${ComponentType}();
 ${memberAssignmentList}
         ReplaceComponent(index, component);
 
