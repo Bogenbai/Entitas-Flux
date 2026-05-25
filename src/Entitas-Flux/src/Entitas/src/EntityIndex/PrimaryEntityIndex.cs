@@ -57,12 +57,10 @@ namespace Entitas
 
         protected override void addEntity(TKey key, TEntity entity)
         {
-            if (_index.ContainsKey(key))
+            if (!_index.TryAdd(key, entity))
                 throw new EntityIndexException(
                     $"Entity for key '{key}' already exists!",
                     "Only one entity for a primary key is allowed.");
-
-            _index.Add(key, entity);
 
             if (_entityRefCount.TryGetValue(entity, out var count))
             {

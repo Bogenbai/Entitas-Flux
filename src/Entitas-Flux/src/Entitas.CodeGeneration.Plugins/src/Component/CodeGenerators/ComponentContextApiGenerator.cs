@@ -11,7 +11,9 @@ namespace Entitas.CodeGeneration.Plugins
         const string STANDARD_TEMPLATE =
             @"public partial class ${ContextType} {
 
-    public ${EntityType} ${componentName}Entity { get { return GetGroup(${MatcherType}.${ComponentName}).GetSingleEntity(); } }
+    Entitas.IGroup<${EntityType}> _${componentName}Group;
+
+    public ${EntityType} ${componentName}Entity { get { return (_${componentName}Group ?? (_${componentName}Group = GetGroup(${MatcherType}.${ComponentName}))).GetSingleEntity(); } }
     public ${ComponentType} ${validComponentName} { get { return ${componentName}Entity.${componentName}; } }
     public bool has${ComponentName} { get { return ${componentName}Entity != null; } }
 
@@ -43,7 +45,9 @@ namespace Entitas.CodeGeneration.Plugins
         const string FLAG_TEMPLATE =
             @"public partial class ${ContextType} {
 
-    public ${EntityType} ${componentName}Entity { get { return GetGroup(${MatcherType}.${ComponentName}).GetSingleEntity(); } }
+    Entitas.IGroup<${EntityType}> _${componentName}Group;
+
+    public ${EntityType} ${componentName}Entity { get { return (_${componentName}Group ?? (_${componentName}Group = GetGroup(${MatcherType}.${ComponentName}))).GetSingleEntity(); } }
 
     public bool ${prefixedComponentName} {
         get { return ${componentName}Entity != null; }

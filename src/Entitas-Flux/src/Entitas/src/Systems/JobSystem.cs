@@ -47,7 +47,9 @@ namespace Entitas
                     Interlocked.Decrement(ref _threadsRunning);
             }
 
-            while (_threadsRunning != 0) { }
+            var spinWait = new SpinWait();
+            while (Volatile.Read(ref _threadsRunning) != 0)
+                spinWait.SpinOnce();
 
             foreach (var job in _jobs)
                 if (job.exception != null)
