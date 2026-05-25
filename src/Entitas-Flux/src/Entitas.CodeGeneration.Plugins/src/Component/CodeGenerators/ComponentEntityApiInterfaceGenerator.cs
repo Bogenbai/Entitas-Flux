@@ -26,7 +26,21 @@ namespace Entitas.CodeGeneration.Plugins
 }
 ";
 
+        // Flag components are satisfied implicitly by the generated property.
         const string ENTITY_INTERFACE_TEMPLATE = "public partial class ${EntityType} : I${ComponentName}Entity { }\n";
+
+        // Standard/atomic components expose fluent Add/Replace/Remove that return
+        // ${EntityType}. The shared interface (used across multiple contexts) must
+        // declare them as void, so we forward via explicit interface implementations.
+        // The public fluent methods stay intact; only calls made through the
+        // interface return void.
+        const string ENTITY_INTERFACE_STANDARD_TEMPLATE =
+            @"public partial class ${EntityType} : I${ComponentName}Entity {
+    void I${ComponentName}Entity.Add${ComponentName}(${newMethodParameters}) { Add${ComponentName}(${newMethodArgs}); }
+    void I${ComponentName}Entity.Replace${ComponentName}(${newMethodParameters}) { Replace${ComponentName}(${newMethodArgs}); }
+    void I${ComponentName}Entity.Remove${ComponentName}() { Remove${ComponentName}(); }
+}
+";
 
         public override CodeGenFile[] Generate(CodeGeneratorData[] data) => data
             .OfType<ComponentData>()
@@ -54,12 +68,19 @@ namespace Entitas.CodeGeneration.Plugins
             );
         }
 
-        CodeGenFile generateEntityInterface(string contextName, ComponentData data) => new CodeGenFile(
-            contextName + Path.DirectorySeparatorChar +
-            "Components" + Path.DirectorySeparatorChar +
-            data.ComponentNameWithContext(contextName).AddComponentSuffix() + ".cs",
-            ENTITY_INTERFACE_TEMPLATE.Replace(data, contextName),
-            GetType().FullName
-        );
+        CodeGenFile generateEntityInterface(string contextName, ComponentData data)
+        {
+            var template = data.GetMemberData().Length == 0
+                ? ENTITY_INTERFACE_TEMPLATE
+                : ENTITY_INTERFACE_STANDARD_TEMPLATE;
+
+            return new CodeGenFile(
+                contextName + Path.DirectorySeparatorChar +
+                "Components" + Path.DirectorySeparatorChar +
+                data.ComponentNameWithContext(contextName).AddComponentSuffix() + ".cs",
+                template.Replace(data, contextName),
+                GetType().FullName
+            );
+        }
     }
 }
