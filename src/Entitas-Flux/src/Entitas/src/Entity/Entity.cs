@@ -74,6 +74,14 @@ namespace Entitas
 
         int _totalComponents;
         IComponent[] _components;
+
+        // Compact list of indices that currently hold a component. Lets
+        // RemoveAllComponents / destroy run in O(component count) instead of
+        // O(totalComponents), which matters a lot for contexts with many
+        // component types and sparse, churn-heavy entities (e.g. collisions).
+        int[] _activeComponentIndices;
+        int _activeComponentCount;
+
         Stack<IComponent>[] _componentPools;
         ContextInfo _contextInfo;
         IAERC _aerc;
@@ -89,6 +97,8 @@ namespace Entitas
 
             _totalComponents = totalComponents;
             _components = new IComponent[totalComponents];
+            _activeComponentIndices = new int[8];
+            _activeComponentCount = 0;
             _componentPools = componentPools;
 
             _contextInfo = contextInfo ?? createDefaultContextInfo();
@@ -127,6 +137,9 @@ namespace Entitas
                 );
 
             _components[index] = component;
+            if (_activeComponentCount == _activeComponentIndices.Length)
+                Array.Resize(ref _activeComponentIndices, _activeComponentCount << 1);
+            _activeComponentIndices[_activeComponentCount++] = index;
             _componentsCache = null;
             _componentIndicesCache = null;
             _toStringCache = null;
@@ -181,9 +194,19 @@ namespace Entitas
                 }
                 else
                 {
-                    _componentIndicesCache = null;
+                    // Swap-remove the index from the active list. Searching from
+                    // the end makes RemoveAllComponents (which removes the last
+                    // active index repeatedly) O(1) per removal.
+                    for (var i = _activeComponentCount - 1; i >= 0; i--)
+                    {
+                        if (_activeComponentIndices[i] == index)
+                        {
+                            _activeComponentIndices[i] = _activeComponentIndices[--_activeComponentCount];
+                            break;
+                        }
+                    }
 
-                    // TODO VD PERFORMANCE
+                    _componentIndicesCache = null;
                     _toStringCache = null;
 
                     OnComponentRemoved?.Invoke(this, index, previousComponent);
@@ -287,9 +310,8 @@ namespace Entitas
         public void RemoveAllComponents()
         {
             _toStringCache = null;
-            for (var i = 0; i < _components.Length; i++)
-                if (_components[i] != null)
-                    replaceComponent(i, null);
+            while (_activeComponentCount > 0)
+                replaceComponent(_activeComponentIndices[_activeComponentCount - 1], null);
         }
 
         /// Returns the componentPool for the specified component index.
