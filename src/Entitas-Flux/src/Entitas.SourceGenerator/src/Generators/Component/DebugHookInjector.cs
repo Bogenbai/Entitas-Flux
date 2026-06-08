@@ -4,10 +4,11 @@ namespace Entitas.SourceGenerator.CodeGeneration
 {
     /// <summary>
     /// When [assembly: EntitasGeneration(DebugHooks = true)] is set, rewrites a generated
-    /// entity-API file to call empty <c>partial void OnAdd{X}/OnReplace{X}</c> hooks at the top
-    /// of each Add/Replace and to declare them. Implement a hook in your own partial of the
-    /// entity to breakpoint a specific mutation (an unimplemented partial method is elided by
-    /// the compiler, so it costs nothing when unused).
+    /// entity-API file to call the runtime <see cref="Entitas.EntitasDebugHooks"/> delegates at
+    /// the top of each Add/Replace. Assign a handler and breakpoint inside it to catch a specific
+    /// mutation — no partial methods (so the IDE never reports an orphaned implementation), and
+    /// the hook type lives in the runtime so it always resolves. A null handler costs one
+    /// null-check.
     ///
     /// Runs ONLY when DebugHooks is on, so the default output — and the frozen golden baseline —
     /// stay byte-for-byte unchanged.
@@ -23,21 +24,16 @@ namespace Entitas.SourceGenerator.CodeGeneration
             var entityType = contextName.AddEntitySuffix();
             var name = data.ComponentName();
             var methodParams = members.GetMethodParameters(true);
-            var args = CodeGeneratorExtensions.GetMethodArgs(members, true);
+            var index = contextName + CodeGeneratorExtensions.LOOKUP + "." + name;
+            // The incoming value for single-field (atomic) components; otherwise null.
+            var value = members.IsAtomicComponent() ? "newValue" : "null";
 
             content = InsertAfterHeader(content, $"public {entityType} Add{name}({methodParams}) {{",
-                $"        OnAdd{name}({args});");
+                $"        Entitas.EntitasDebugHooks.OnAdd?.Invoke(this, {index}, {value});");
             content = InsertAfterHeader(content, $"public {entityType} Replace{name}({methodParams}) {{",
-                $"        OnReplace{name}({args});");
+                $"        Entitas.EntitasDebugHooks.OnReplace?.Invoke(this, {index}, {value});");
 
-            var declarations =
-                $"\n    partial void OnAdd{name}({methodParams});" +
-                $"\n    partial void OnReplace{name}({methodParams});\n";
-
-            var lastBrace = content.LastIndexOf('}');
-            return lastBrace < 0
-                ? content
-                : content.Substring(0, lastBrace) + declarations + content.Substring(lastBrace);
+            return content;
         }
 
         static string InsertAfterHeader(string content, string header, string insertion)
