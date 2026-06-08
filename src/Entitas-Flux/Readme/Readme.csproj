@@ -11,6 +11,14 @@
     <ProjectReference Include="..\src\Entitas\src\Entitas.csproj" />
   </ItemGroup>
 
+  <!-- Generate the ECS API at compile time via the Roslyn source generator
+       (replaces the committed Generated/ folder + the Jenny CLI step). -->
+  <ItemGroup>
+    <ProjectReference Include="..\src\Entitas.SourceGenerator\src\Entitas.SourceGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="$(UnityEngine)" />
     <Reference Include="UnityEditor">

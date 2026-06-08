@@ -34,12 +34,9 @@ $MSBuildProps = @(
 
 # mapping: dll -> relative destination under Artifacts/
 $Map = @{
-  "Entitas.CodeGeneration.Plugins.dll"          = "Jenny/Jenny/Plugins/Entitas"
-  "Entitas.Roslyn.CodeGeneration.Plugins.dll"   = "Jenny/Jenny/Plugins/Entitas"
-  "Entitas.VisualDebugging.CodeGeneration.Plugins.dll" = "Jenny/Jenny/Plugins/Entitas"
-
   "Entitas.CodeGeneration.Attributes.dll"       = "Assets/Entitas/Entitas"
   "Entitas.dll"                                 = "Assets/Entitas/Entitas"
+  "Entitas.SourceGenerator.dll"                 = "Assets/Entitas/Entitas/Analyzers"
   "Entitas.Unity.dll"                           = "Assets/Entitas/Entitas"
   "Entitas.VisualDebugging.Unity.dll"           = "Assets/Entitas/Entitas"
 

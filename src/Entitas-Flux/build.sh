@@ -47,12 +47,9 @@ while IFS='|' read -r dll dest
 do
   copy_map_line "$dll" "$dest"
 done <<'EOF'
-DesperateDevs.Extensions.dll|Jenny/Jenny
-Entitas.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
-Entitas.Roslyn.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
-Entitas.VisualDebugging.CodeGeneration.Plugins.dll|Jenny/Jenny/Plugins/Entitas
 Entitas.CodeGeneration.Attributes.dll|Assets/Entitas/Entitas
 Entitas.dll|Assets/Entitas/Entitas
+Entitas.SourceGenerator.dll|Assets/Entitas/Entitas/Analyzers
 Entitas.Unity.dll|Assets/Entitas/Entitas
 Entitas.VisualDebugging.Unity.dll|Assets/Entitas/Entitas
 Entitas.Migration.dll|Assets/Entitas/Entitas/Editor
@@ -67,3 +64,8 @@ rm -rf "$TMP_OUT"
 echo "Resulting layout (no DLLs in Artifacts/ root):"
 find "$ARTIFACTS_DIR" -type d -print -o -type f -name '*.dll' -print | sed "s|$ARTIFACTS_DIR/||"
 echo "Done → $ARTIFACTS_DIR"
+echo
+echo "NOTE: Assets/Entitas/Entitas/Analyzers/Entitas.SourceGenerator.dll is a Roslyn"
+echo "incremental source generator. In the consuming Unity 2022.3+ project, its .meta"
+echo "must carry the 'RoslynAnalyzer' asset label and have all platforms unchecked so"
+echo "Unity feeds it to the compiler instead of loading it as a managed plugin."
