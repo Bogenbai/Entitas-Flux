@@ -68,6 +68,7 @@ namespace Entitas.SourceGenerator
 
             var options = ReadOptions(compilation);
             CodeGeneratorExtensions.ignoreNamespaces = options.IgnoreNamespaces;
+            CodeGeneratorExtensions.debugHooks = options.DebugHooks;
             var generators = Default(compilation);
 
             var types = EntitasDiscovery.GetCandidateTypes(compilation).ToArray();
@@ -232,6 +233,7 @@ namespace Entitas.SourceGenerator
         {
             var entityApi = EntityApiStyle.Plain;
             var ignoreNamespaces = false;
+            var debugHooks = false;
             var disabled = new List<string>();
 
             foreach (var attr in compilation.Assembly.GetAttributes())
@@ -245,6 +247,8 @@ namespace Entitas.SourceGenerator
                             entityApi = (EntityApiStyle)apiInt;
                         else if (named.Key == "IgnoreNamespaces" && named.Value.Value is bool ignore)
                             ignoreNamespaces = ignore;
+                        else if (named.Key == "DebugHooks" && named.Value.Value is bool hooks)
+                            debugHooks = hooks;
                     }
                 }
                 else if (name == AttributeNames.DisableEntitasGenerator)
@@ -255,7 +259,7 @@ namespace Entitas.SourceGenerator
                 }
             }
 
-            return new EntitasGenerationOptions(entityApi, ignoreNamespaces, disabled);
+            return new EntitasGenerationOptions(entityApi, ignoreNamespaces, debugHooks, disabled);
         }
     }
 
@@ -270,15 +274,18 @@ namespace Entitas.SourceGenerator
     {
         public EntityApiStyle EntityApi { get; }
         public bool IgnoreNamespaces { get; }
+        public bool DebugHooks { get; }
         public IReadOnlyList<string> DisabledGenerators { get; }
 
         public EntitasGenerationOptions(
             EntityApiStyle entityApi,
             bool ignoreNamespaces,
+            bool debugHooks,
             IReadOnlyList<string> disabledGenerators)
         {
             EntityApi = entityApi;
             IgnoreNamespaces = ignoreNamespaces;
+            DebugHooks = debugHooks;
             DisabledGenerators = disabledGenerators;
         }
     }

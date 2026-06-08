@@ -102,6 +102,9 @@ ${memberAssignmentList}
                 .Replace("${memberAssignmentList}", getMemberAssignmentList(data.GetMemberData()))
                 .Replace(data, contextName);
 
+            if (CodeGeneratorExtensions.debugHooks)
+                fileContent = DebugHookInjector.Inject(fileContent, data, contextName);
+
             return new CodeGenFile(
                 contextName + Path.DirectorySeparatorChar +
                 "Components" + Path.DirectorySeparatorChar +

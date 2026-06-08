@@ -211,6 +211,9 @@ ${memberAssignmentList}
 					.Replace(FIRST_UPPERCASE_COMPONENT_NAME_KEY, data.ComponentName().ToUpperFirst());
 			}
 
+			if (CodeGeneratorExtensions.debugHooks)
+				fileContent = DebugHookInjector.Inject(fileContent, data, contextName);
+
 			return new CodeGenFile(
 				contextName + Path.DirectorySeparatorChar +
 				"Components" + Path.DirectorySeparatorChar +

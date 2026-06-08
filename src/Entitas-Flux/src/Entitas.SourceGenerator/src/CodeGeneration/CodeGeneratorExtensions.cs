@@ -24,6 +24,10 @@ namespace Entitas.SourceGenerator.CodeGeneration
 
         [System.ThreadStatic] public static bool ignoreNamespaces;
 
+        // [ThreadStatic] like ignoreNamespaces; set per run before generators emit. When true,
+        // the entity-API generators inject partial OnAdd{X}/OnReplace{X} debug hooks.
+        [System.ThreadStatic] public static bool debugHooks;
+
         public static string ComponentName(this ComponentData data) =>
             data.GetTypeName().ToComponentName(ignoreNamespaces);
 

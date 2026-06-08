@@ -20,6 +20,14 @@ namespace Entitas.CodeGeneration.Attributes
     {
         public EntityApiStyle EntityApi { get; set; } = EntityApiStyle.Plain;
         public bool IgnoreNamespaces { get; set; } = false;
+
+        /// <summary>
+        /// When true, the entity-API generators emit empty <c>partial void OnAdd{X}/OnReplace{X}</c>
+        /// hook methods and call them at the top of each Add/Replace. Implement a hook in your own
+        /// partial of the entity to set a breakpoint on a specific mutation (an unimplemented hook is
+        /// removed by the compiler, so this is zero-cost when you don't use it). For debugging only.
+        /// </summary>
+        public bool DebugHooks { get; set; } = false;
     }
 
     /// <summary>
