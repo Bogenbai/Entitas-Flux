@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Entitas
@@ -65,14 +66,22 @@ namespace Entitas
         /// release it manually at some point.
         public IAERC aerc => _aerc;
 
-        readonly List<IComponent> _componentBuffer;
-        readonly List<int> _indexBuffer;
+        List<IComponent> _componentBuffer;
+        List<int> _indexBuffer;
 
         int _creationIndex;
         bool _isEnabled;
 
         int _totalComponents;
         IComponent[] _components;
+
+        // Compact list of indices that currently hold a component. Lets
+        // RemoveAllComponents / destroy run in O(component count) instead of
+        // O(totalComponents), which matters a lot for contexts with many
+        // component types and sparse, churn-heavy entities (e.g. collisions).
+        int[] _activeComponentIndices;
+        int _activeComponentCount;
+
         Stack<IComponent>[] _componentPools;
         ContextInfo _contextInfo;
         IAERC _aerc;
@@ -82,18 +91,14 @@ namespace Entitas
         string _toStringCache;
         StringBuilder _toStringBuilder;
 
-        public Entity()
-        {
-            _componentBuffer = new List<IComponent>();
-            _indexBuffer = new List<int>();
-        }
-
         public void Initialize(int creationIndex, int totalComponents, Stack<IComponent>[] componentPools, ContextInfo contextInfo = null, IAERC aerc = null)
         {
             Reactivate(creationIndex);
 
             _totalComponents = totalComponents;
             _components = new IComponent[totalComponents];
+            _activeComponentIndices = new int[8];
+            _activeComponentCount = 0;
             _componentPools = componentPools;
 
             _contextInfo = contextInfo ?? createDefaultContextInfo();
@@ -132,6 +137,9 @@ namespace Entitas
                 );
 
             _components[index] = component;
+            if (_activeComponentCount == _activeComponentIndices.Length)
+                Array.Resize(ref _activeComponentIndices, _activeComponentCount << 1);
+            _activeComponentIndices[_activeComponentCount++] = index;
             _componentsCache = null;
             _componentIndicesCache = null;
             _toStringCache = null;
@@ -186,9 +194,19 @@ namespace Entitas
                 }
                 else
                 {
-                    _componentIndicesCache = null;
+                    // Swap-remove the index from the active list. Searching from
+                    // the end makes RemoveAllComponents (which removes the last
+                    // active index repeatedly) O(1) per removal.
+                    for (var i = _activeComponentCount - 1; i >= 0; i--)
+                    {
+                        if (_activeComponentIndices[i] == index)
+                        {
+                            _activeComponentIndices[i] = _activeComponentIndices[--_activeComponentCount];
+                            break;
+                        }
+                    }
 
-                    // TODO VD PERFORMANCE
+                    _componentIndicesCache = null;
                     _toStringCache = null;
 
                     OnComponentRemoved?.Invoke(this, index, previousComponent);
@@ -206,21 +224,28 @@ namespace Entitas
         /// You can only get a component at an index if it exists.
         /// The preferred way is to use the
         /// generated methods from the code generator.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public IComponent GetComponent(int index)
         {
-            if (!HasComponent(index))
-                throw new EntityDoesNotHaveComponentException(index,
-                    $"Cannot get component '{_contextInfo.componentNames[index]}' from {this}!",
-                    "You should check if an entity has the component before getting it.");
+            var component = _components[index];
+            if (component == null)
+                throw getDoesNotHaveComponentException(index);
 
-            return _components[index];
+            return component;
         }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        EntityDoesNotHaveComponentException getDoesNotHaveComponentException(int index) =>
+            new EntityDoesNotHaveComponentException(index,
+                $"Cannot get component '{_contextInfo.componentNames[index]}' from {this}!",
+                "You should check if an entity has the component before getting it.");
 
         /// Returns all added components.
         public IComponent[] GetComponents()
         {
             if (_componentsCache == null)
             {
+                _componentBuffer ??= new List<IComponent>();
                 for (var i = 0; i < _components.Length; i++)
                 {
                     var component = _components[i];
@@ -240,6 +265,7 @@ namespace Entitas
         {
             if (_componentIndicesCache == null)
             {
+                _indexBuffer ??= new List<int>();
                 for (var i = 0; i < _components.Length; i++)
                     if (_components[i] != null)
                         _indexBuffer.Add(i);
@@ -253,10 +279,12 @@ namespace Entitas
 
         /// Determines whether this entity has a component
         /// at the specified index.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasComponent(int index) => _components[index] != null;
 
         /// Determines whether this entity has components
         /// at all the specified indices.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasComponents(int[] indices)
         {
             for (var i = 0; i < indices.Length; i++)
@@ -268,6 +296,7 @@ namespace Entitas
 
         /// Determines whether this entity has a component
         /// at any of the specified indices.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasAnyComponent(int[] indices)
         {
             for (var i = 0; i < indices.Length; i++)
@@ -281,9 +310,8 @@ namespace Entitas
         public void RemoveAllComponents()
         {
             _toStringCache = null;
-            for (var i = 0; i < _components.Length; i++)
-                if (_components[i] != null)
-                    replaceComponent(i, null);
+            while (_activeComponentCount > 0)
+                replaceComponent(_activeComponentIndices[_activeComponentCount - 1], null);
         }
 
         /// Returns the componentPool for the specified component index.
@@ -292,6 +320,7 @@ namespace Entitas
         /// Removed components will be pushed to the componentPool.
         /// Use entity.CreateComponent(index, type) to get a new or
         /// reusable component from the componentPool.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Stack<IComponent> GetComponentPool(int index)
         {
             var componentPool = _componentPools[index];
@@ -405,9 +434,6 @@ namespace Entitas
                 {
                     var component = components[i];
                     // var type = component.GetType();
-
-                    // TODO VD PERFORMANCE
-                    _toStringCache = null;
 
 //                    var implementsToString = type.GetMethod("ToString")
 //                        .DeclaringType.ImplementsInterface<IComponent>();

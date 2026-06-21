@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(DefaultTestTargetFramework)</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <!--
+    JennyBaseline/ holds the frozen Jenny golden output (the Phase 4 equivalence
+    reference). These are generated .cs files read from disk by the test, NOT part
+    of the test assembly — exclude them from compilation.
+  -->
+  <ItemGroup>
+    <Compile Remove="JennyBaseline/**/*.cs" />
+    <None Include="JennyBaseline/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" Version="6.7.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.3.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
+    <PackageReference Include="xunit" Version="2.4.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\src\Entitas.SourceGenerator.csproj" />
+    <!--
+      The test compilation must be able to compile generated code against the real
+      Entitas runtime + code-gen attributes. We reference these projects so their
+      assemblies are built, then feed their metadata into the in-test compilation
+      via MetadataReference.CreateFromFile(typeof(...).Assembly.Location).
+    -->
+    <ProjectReference Include="..\..\Entitas\src\Entitas.csproj" />
+    <ProjectReference Include="..\..\Entitas.CodeGeneration.Attributes\src\Entitas.CodeGeneration.Attributes.csproj" />
+  </ItemGroup>
+
+</Project>

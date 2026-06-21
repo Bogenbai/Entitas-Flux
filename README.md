@@ -16,6 +16,7 @@ entity.CurrentHealth
 // instead of:
 entity.currentHealth.Value
 ```
+> Atomic access is opt-in per assembly — enable it with `[assembly: EntitasGeneration(EntityApi = EntityApiStyle.Atomic)]`. See [Code generation](#code-generation).
 
 
 ### Watched attribute
@@ -58,31 +59,92 @@ if (hasBoxCollider2D)
 ### More features coming soon (or not)
 
 ## How to use
+> **Requires Unity 2022.3+** (Roslyn 4.x, needed for the incremental source generator).
+
 ### If you start fresh
-Just create new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
+Just create a new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
+
 ### If you already have Entitas in the project
-If you already have Entitas project and you want to switch to this fork, then:
-1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the Entitas-Flux-vX.X.X archive. This archive contains framework DLLs.
-2. Replace the corresponding DLLs in the `Entitas` and `Jenny` folders. The DLLs in the **archive** are organized by folder, so it’s easier to see which DLL goes where.   
-But just in case, here’s where everything should go:   
-```cs
-// Jenny/Jenny/Plugins/Entitas:   
-Entitas.CodeGeneration.Plugins.dll   
-Entitas.Roslyn.CodeGeneration.Plugins.dll   
-Entitas.VisualDebugging.CodeGeneration.Plugins.dll   
-// Assets/Entitas/Entitas:   
-Entitas.CodeGeneration.Attributes.dll   
-Entitas.dll   
-Entitas.Unity.dll   
-Entitas.VisualDebugging.Unity.dll   
-// Assets/Entitas/Entitas/Editor:   
-Entitas.Migration.dll   
-Entitas.Migration.Unity.Editor.dll   
-Entitas.Unity.Editor.dll   
-Entitas.VisualDebugging.Unity.Editor.dll   
+1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the Entitas-Flux-vX.X.X archive (framework DLLs + the source-generator analyzer). The DLLs are organized by folder so it's easy to see where each goes:
 ```
-3. Update your JennyRoslyn.properties with DataProviders and Generators **Entitas Flux** provides ([JennyRoslyn.properties](https://github.com/Bogenbai/Entitas-Flux/blob/master/Examples/JennyRoslyn.properties) example)
-4. Hope it works :)
+// Assets/Entitas/Entitas:
+Entitas.dll
+Entitas.CodeGeneration.Attributes.dll
+Entitas.Unity.dll
+Entitas.VisualDebugging.Unity.dll
+// Assets/Entitas/Entitas/Editor:
+Entitas.Migration.dll
+Entitas.Migration.Unity.Editor.dll
+Entitas.Unity.Editor.dll
+Entitas.VisualDebugging.Unity.Editor.dll
+// Assets/Entitas/Entitas/Analyzers:
+Entitas.SourceGenerator.dll      ← the Roslyn source generator (see below)
+```
+2. **The analyzer DLL is special.** Select `Entitas.SourceGenerator.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed it to the compiler as a source generator instead of trying to load it as a managed plugin.
+3. **Delete Jenny.** Remove the old `Jenny/` folder, the `*.CodeGeneration.Plugins.dll`s, any `JennyRoslyn.properties`, and any committed `Generated/` folders — none of them are used anymore. Generation now happens entirely inside the compiler.
+4. Add an `EntitasGeneration.cs` declaring your contexts and options — see [Configuring generation](#configuring-generation--entitasgenerationcs).
+
+## Code generation
+Entitas-Flux generates the whole ECS API — contexts, entities, matchers, component accessors, events, and the cleanup/watched systems — at **compile time** with a Roslyn [incremental source generator](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview). It replaced the old Jenny pipeline, so:
+
+- **No separate generation step.** The generator runs inside the C# compiler on every build.
+- **No committed `Generated/` folders.** The generated code lives in the compiler's output, not on disk.
+- **Components are discovered from the compilation** — any class implementing `IComponent`, plus its context/`[Watched]`/`[Unique]`/etc. attributes. No external config files.
+- **IDE-native.** Rider/Visual Studio see the generated API immediately; Cmd/Ctrl-click navigates straight into it.
+
+> Want the generated files on disk anyway (e.g. to read them, diff them, or step through with a breakpoint)? The repo ships an `entitas-gen` CLI that writes the same output to real `.cs` files from your `Assembly-CSharp.csproj`. It's optional — the analyzer is the default path.
+
+## Configuring generation — EntitasGeneration.cs
+Create one file (any name) with assembly-level attributes. This replaces the old `JennyRoslyn.properties`. Example:
+```cs
+using Entitas.CodeGeneration.Attributes;
+
+[assembly: ContextDefinition("Game")]    // the first one is the DEFAULT context
+[assembly: ContextDefinition("Input")]
+[assembly: ContextDefinition("Meta")]
+
+[assembly: EntitasGeneration(EntityApi = EntityApiStyle.Atomic, IgnoreNamespaces = true)]
+```
+With **no** attributes present at all, you get the canonical default (Plain entity API, namespaces kept, every built-in generator on).
+
+### Contexts — `[ContextDefinition("Name")]`
+Declares a context; repeat it for each one. The **first** declared context is the default for components that don't specify a context attribute (e.g. a plain `[Game]`-less component). Replaces Jenny's `Contexts = Game, Input, …`.
+
+### Options — `[EntitasGeneration(...)]`
+| Option | Default | Effect |
+| --- | --- | --- |
+| `EntityApi` | `EntityApiStyle.Plain` | `Atomic` gives single-field components the simplified `entity.CurrentHealth` accessor (see [Atomic components](#atomic-components)). `Plain` keeps `entity.currentHealth.Value`. One or the other — never both. |
+| `IgnoreNamespaces` | `false` | Drops the namespace from generated component names: `My.Game.Health` → `Health` instead of `MyGameHealth`. |
+| `DebugHooks` | `false` | Emits runtime debug hooks on every `Add`/`Replace` so you can breakpoint a specific mutation — see [Debugging a mutation](#debugging-a-mutation--debughooks). |
+
+### Disabling built-in generators — `[DisableEntitasGenerator("X")]`
+Repeatable. Removes any built-in generator whose class short-name matches `"X"` case-insensitively **or starts with** it (prefix match):
+```cs
+[assembly: DisableEntitasGenerator("Event")]            // all Event* generators
+[assembly: DisableEntitasGenerator("ContextObserver")]  // just ContextObserverGenerator
+```
+> `[Event]` listener components are synthesized during discovery, so only disable `Event` generators in assemblies that don't use `[Event]`.
+
+## Debugging a mutation — DebugHooks
+Previously you'd open the generated `ReplaceX()` method, add `if (id == 123)`, and drop a breakpoint. With compile-time generation there's no file to edit, so enable hooks instead:
+```cs
+[assembly: EntitasGeneration(/* ..., */ DebugHooks = true)]
+```
+Now every generated `Add`/`Replace` calls a runtime delegate. Subscribe once (e.g. from a bootstrap) and put your breakpoint inside the handler:
+```cs
+using Entitas;
+
+EntitasDebugHooks.OnReplace = (entity, index, value) =>
+{
+    if (index == GameComponentsLookup.CurrentHealth && entity is GameEntity ge && ge.isPlayer)
+    {
+        // ← breakpoint here. `value` is the new value; the call stack shows WHICH system did it.
+    }
+};
+```
+- Works even with `ENTITAS_DISABLE_REACTIVITY` + atomic — the hook fires from inside `ReplaceX` *before* the in-place value mutation, where component-change events don't.
+- `EntitasDebugHooks` lives in the runtime (not generated code), so the IDE always resolves it — no fiddling with partial methods.
+- A `null` handler costs a single null-check. **Turn `DebugHooks` off for release builds.**
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -17,12 +17,10 @@ usage:
   publish                         publish solution
   rebuild                         clean and build solution
   test [args]                     run unit tests
-  jenny [args]                    build and run jenny
-  generate                        generate code for all projects
   nuget                           publish nupkg to nuget.org
   nuget_local                     publish nupkg locally to disk
-  pack                            pack Entitas and Jenny
-  zip                             create Entitas.zip and Jenny.zip
+  pack                            pack Entitas for Unity
+  zip                             create Entitas.zip
   restore_unity_visualdebugging   copy source code and samples to all unity projects
 
 EOF
@@ -125,26 +123,6 @@ entitas::test() {
   dotnet test -c Release "$@"
 }
 
-entitas::jenny() {
-  dotnet run -c Release --project src/Entitas.CodeGeneration/jenny/Entitas.CodeGeneration.Program.csproj "$@"
-}
-
-entitas::generate() {
-  local properties=(
-    'Readme/Jenny.properties'
-    'Tests/TestFixtures/Jenny.properties'
-  )
-  local dir jenny
-  jenny="$(pwd)/src/Entitas.CodeGeneration/jenny/Entitas.CodeGeneration.Program.csproj"
-  for p in "${properties[@]}"; do
-    dir="$(dirname "${p}")"
-    pushd "${dir}" > /dev/null || exit
-      bee::log_info "Generating ${p}"
-      dotnet run -c Release --project "${jenny}" gen "$(basename "${p}")"
-    popd > /dev/null || exit
-  done
-}
-
 entitas::nuget() {
   entitas::clean
   dotnet pack -c Release
@@ -164,53 +142,39 @@ entitas::nuget_local() {
 entitas::pack() {
   entitas::build
   local project_dir="${BUILD_SRC}/Unity/Assets"
-  local jenny_dir="${BUILD_SRC}/Unity/Jenny"
   local entitas_dir="${project_dir}/Entitas"
   local entitas_editor_dir="${entitas_dir}/Editor"
-  local entitas_jenny_dir="${jenny_dir}/Jenny/Plugins/Entitas"
+  local entitas_analyzers_dir="${entitas_dir}/Analyzers"
   local entitas_images_dir="${entitas_editor_dir}/Images"
-  _clean_dir "${project_dir}" "${jenny_dir}" "${entitas_dir}" "${entitas_editor_dir}" "${entitas_jenny_dir}" "${entitas_images_dir}" 
+  _clean_dir "${project_dir}" "${entitas_dir}" "${entitas_editor_dir}" "${entitas_analyzers_dir}" "${entitas_images_dir}"
 
   _sync "${DESPERATEDEVS_DIR}/Unity/Assets/" "${project_dir}"
-  _sync "${DESPERATEDEVS_DIR}/Jenny/" "${jenny_dir}"
 
   local -a projects=(
     Entitas
-#    Entitas.Blueprints
-#    Entitas.Blueprints.Unity
     Entitas.CodeGeneration.Attributes
+    Entitas.SourceGenerator
     Entitas.Unity
     Entitas.VisualDebugging.Unity
-    
+
     # editor
-#    Entitas.Blueprints.Unity.Editor
     Entitas.Migration
     Entitas.Migration.Unity.Editor
     Entitas.Unity.Editor
     Entitas.VisualDebugging.Unity.Editor
-    
-    # plugins
-#    Entitas.Blueprints.CodeGeneration.Plugins
-#    Entitas.Blueprints.CodeGeneration.Unity.Plugins
-    Entitas.CodeGeneration.Plugins
-    Entitas.Roslyn.CodeGeneration.Plugins
-    Entitas.VisualDebugging.CodeGeneration.Plugins
   )
 
   local -a to_editor=(
-#    Entitas.Blueprints.Unity.Editor
     Entitas.Migration
     Entitas.Migration.Unity.Editor
     Entitas.Unity.Editor
     Entitas.VisualDebugging.Unity.Editor
   )
 
-  local -a to_plugins=(
-#    Entitas.Blueprints.CodeGeneration.Plugins
-#    Entitas.Blueprints.CodeGeneration.Unity.Plugins
-    Entitas.CodeGeneration.Plugins
-    Entitas.Roslyn.CodeGeneration.Plugins
-    Entitas.VisualDebugging.CodeGeneration.Plugins
+  # The Roslyn source generator ships as an analyzer (see build.sh) — its .meta in
+  # the consuming Unity project must carry the 'RoslynAnalyzer' label.
+  local -a to_analyzers=(
+    Entitas.SourceGenerator
   )
 
   local -a images=(
@@ -224,10 +188,10 @@ entitas::pack() {
     README.md
     CHANGELOG.md
   )
-    
+
   for p in "${projects[@]}"; do _sync "src/${p}/src/bin/Release/" "${entitas_dir}"; done
   for f in "${to_editor[@]}"; do mv "${entitas_dir}/${f}.dll" "${entitas_editor_dir}"; done
-  for f in "${to_plugins[@]}"; do mv "${entitas_dir}/${f}.dll" "${entitas_jenny_dir}"; done
+  for f in "${to_analyzers[@]}"; do mv "${entitas_dir}/${f}.dll" "${entitas_analyzers_dir}"; done
   for f in "${images[@]}"; do _sync "${f}" "${entitas_images_dir}"; done
   for f in "${files[@]}"; do _sync "${f}" "${entitas_dir}"; done
 }
@@ -236,26 +200,20 @@ entitas::restore_unity_visualdebugging() {
   entitas::pack
   local project_dir="Tests/Unity/VisualDebugging"
   local asset_dir="${project_dir}/Assets/Entitas"
-  local jenny_dir="${project_dir}/Jenny"
-  _clean_dir "${asset_dir}" "${jenny_dir}"
+  _clean_dir "${asset_dir}"
   _sync "${BUILD_SRC}/Unity/Assets/" "${asset_dir}"
-  _sync "${BUILD_SRC}/Unity/Jenny/" "${jenny_dir}"
 }
 
 entitas::zip() {
   entitas::pack
   local abs_build_dist
   local project_dir="${BUILD_SRC}/Unity/Assets"
-  local jenny_dir="${BUILD_SRC}/Unity/Jenny"
   mkdir -p "${BUILD_DIST}"
   pushd "${BUILD_DIST}" > /dev/null || exit
     abs_build_dist="$(pwd)"
   popd > /dev/null || exit
   pushd "${project_dir}" > /dev/null || exit
     zip -rq "${abs_build_dist}/Entitas.zip" ./
-  popd > /dev/null || exit
-  pushd "${jenny_dir}" > /dev/null || exit
-    zip -rq "${abs_build_dist}/Jenny.zip" ./
   popd > /dev/null || exit
 }
 

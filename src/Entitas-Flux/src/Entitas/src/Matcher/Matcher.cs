@@ -1,4 +1,6 @@
-﻿namespace Entitas
+﻿using System.Runtime.CompilerServices;
+
+namespace Entitas
 {
     public partial class Matcher<TEntity> : IAllOfMatcher<TEntity> where TEntity : class, IEntity
     {
@@ -38,6 +40,7 @@
         public INoneOfMatcher<TEntity> NoneOf(params IMatcher<TEntity>[] matchers) =>
             NoneOf(mergeIndices(matchers));
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Matches(TEntity entity) =>
             (_allOfIndices == null || entity.HasComponents(_allOfIndices))
             && (_anyOfIndices == null || entity.HasAnyComponent(_anyOfIndices))

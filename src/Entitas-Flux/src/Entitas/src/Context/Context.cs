@@ -98,7 +98,7 @@ namespace Entitas
                 _contextInfo = createDefaultContextInfo();
             }
 
-            _aercFactory = aercFactory ?? (entity => new SafeAERC(entity));
+            _aercFactory = aercFactory ?? (entity => new UnsafeAERC());
             _entityFactory = entityFactory;
 
             _groupsForIndex = new List<IGroup<TEntity>>[totalComponents];
@@ -291,8 +291,17 @@ namespace Entitas
             var groups = _groupsForIndex[index];
             if (groups != null)
             {
-                var events = _groupChangedListPool.Get();
                 var tEntity = (TEntity)entity;
+
+                if (groups.Count == 1)
+                {
+                    var group = groups[0];
+                    var groupChanged = group.HandleEntity(tEntity);
+                    groupChanged?.Invoke(group, tEntity, index, component);
+                    return;
+                }
+
+                var events = _groupChangedListPool.Get();
 
                 for (var i = 0; i < groups.Count; i++)
                     events.Add(groups[i].HandleEntity(tEntity));
@@ -308,8 +317,11 @@ namespace Entitas
         {
             var groups = _groupsForIndex[index];
             if (groups != null)
+            {
+                var tEntity = (TEntity)entity;
                 for (var i = 0; i < groups.Count; i++)
-                    groups[i].UpdateEntity((TEntity)entity, index, previousComponent, newComponent);
+                    groups[i].UpdateEntity(tEntity, index, previousComponent, newComponent);
+            }
         }
 
         void onEntityReleased(IEntity entity)

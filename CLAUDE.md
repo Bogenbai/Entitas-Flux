@@ -1,0 +1,102 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Entitas-Flux is a C# fork of the Entitas ECS (Entity Component System) framework for Unity. It adds features on top of the original Entitas: atomic components, watched components (`[Watched]` attribute), safe component removal, and a searchable component dropdown in the Unity inspector.
+
+## Build & Test Commands
+
+All commands run from the repo root.
+
+```bash
+# Build (Release, outputs to src/Entitas-Flux/Artifacts/)
+./src/Entitas-Flux/build.sh
+
+# Build Debug
+./src/Entitas-Flux/build.sh Debug
+
+# Run all tests
+dotnet test ./src/Entitas-Flux/Entitas.sln --configuration Release
+
+# Run a specific test project
+dotnet test ./src/Entitas-Flux/src/Entitas/tests/Entitas.Tests.csproj --configuration Release
+
+# Run a single test by name
+dotnet test ./src/Entitas-Flux/Entitas.sln --filter "FullyQualifiedName~ContextTests"
+```
+
+There is no separate lint command; code style is enforced via ReSharper `.dotsettings` files.
+
+## Architecture
+
+The key layers of the solution (`src/Entitas-Flux/Entitas.sln`):
+
+**Core Runtime** (`src/Entitas-Flux/src/Entitas/`) — The ECS framework itself: Entity, Context, Group, Matcher, Collector, EntityIndex, Systems. This is what ships in Unity at runtime.
+
+**Code Generation Attributes** (`src/Entitas-Flux/src/Entitas.CodeGeneration.Attributes/`) — Attributes like `[Game]`, `[Watched]`, `[Unique]`, `[DontGenerate]`, `[Cleanup]`, and `[ContextDefinition]` that users put on component classes / the assembly. These are the lightest dependency — only attribute definitions, no logic.
+
+**Source Generator** (`src/Entitas-Flux/src/Entitas.SourceGenerator/`) — A Roslyn `IIncrementalGenerator` that generates the ECS API (contexts, entities, matchers, component accessors, events, cleanup/watched systems) at **compile time**. It replaced the previous Jenny CLI pipeline: there is no separate generation step and no committed `Generated/` folders — consuming projects reference it as an analyzer (`OutputItemType="Analyzer"`). It is a netstandard2.0 analyzer depending only on `Microsoft.CodeAnalysis.CSharp`. Internals: `src/Discovery/` (semantic-model data providers that build the data model from the current compilation) → `src/Generators/` (the ported string-template generators) → `EntitasIncrementalGenerator` (wires them and emits each fragment via `AddSource`).
+
+**Unity Integration** — `Entitas.Unity`, `Entitas.Unity.Editor`, `Entitas.VisualDebugging.*` projects provide Unity inspector/editor tooling.
+
+**Migration** — `Entitas.Migration` and related projects handle upgrading between Entitas versions.
+
+### Source Generator Pipeline
+
+Code generation follows a discovery → generator pipeline, all inside the C# compiler:
+- **Discovery** (`src/Discovery/`) reads the current `Compilation` via `SemanticModel`/`ISymbol` (NOT external `.csproj` parsing) to build the data model (`ComponentData`, `ContextData`, `EntityIndexData`, `CleanupData`, `WatchedCleanupData`). Contexts come from `[assembly: ContextDefinition("…")]` (first = default), replacing the old Jenny `Contexts = …` config.
+- **Generators** (`src/Generators/`) are verbatim ports of the legacy templates; each emits `CodeGenFile` fragments.
+- `EntitasIncrementalGenerator` resolves the active generator set via `EntitasGenerators.Default(compilation)` (canonical set adjusted for the assembly's config attributes), runs each generator, and emits each fragment as its own `AddSource` partial-class unit (the compiler merges the partials — there is no file-merge step).
+- Equivalence to the original Jenny output is locked by `GoldenEquivalenceTests` against the frozen `tests/JennyBaseline/` snapshot. With no config attributes present, output is byte-identical to the canonical default.
+
+### Customizing generation without rebuilding the framework
+
+Consumers customize generation via assembly-level attributes (in `Entitas.CodeGeneration.Attributes`); the generator reads them from the compilation by full metadata name (no extra reference needed). With none present, behavior is the canonical default.
+
+- `[assembly: EntitasGeneration(EntityApi = EntityApiStyle.Atomic)]` — swaps the plain `ComponentEntityApiGenerator` for `AtomicComponentEntityApiGenerator` (one or the other, never both — they emit conflicting entity members). `EntityApiStyle.Plain` (default) keeps the canonical plain API.
+- `[assembly: EntitasGeneration(IgnoreNamespaces = true)]` — drops the namespace from generated component names (e.g. `My.Game.HealthComponent` → `Health` instead of `MyGameHealth`).
+- `[assembly: EntitasGeneration(DebugHooks = true)]` — injects `Entitas.EntitasDebugHooks.OnAdd/OnReplace?.Invoke(this, index, value)` at the top of every generated `Add`/`Replace` (via `DebugHookInjector`; runs only when on, so default/golden output stays byte-identical). `EntitasDebugHooks` is a runtime class (`src/Entitas/src/EntitasDebugHooks.cs`) holding two `Action<IEntity,int,object>` delegates; assign one and breakpoint inside to catch a specific mutation — the call stack shows which system did it. Replaces the old "edit the generated ReplaceX + breakpoint" workflow; works with atomic + `ENTITAS_DISABLE_REACTIVITY` (the hook fires before the in-place mutation). Debug only — turn off for release; a null handler costs one null-check.
+- `[assembly: DisableEntitasGenerator("X")]` (repeatable) — removes any built-in generator whose CLASS short name matches `"X"` case-insensitively **or starts with** `"X"` (prefix match). So `"Event"` disables all `Event*` generators, `"Watched"` disables all `Watched*`, and `"ContextObserver"` disables just `ContextObserverGenerator`. Note: `[Event]` listener components are synthesized at discovery time, so disabling `Event` generators is intended for assemblies that don't use `[Event]`.
+
+Example:
+
+```csharp
+[assembly: Entitas.CodeGeneration.Attributes.ContextDefinition("Game")]
+[assembly: Entitas.CodeGeneration.Attributes.EntitasGeneration(EntityApi = EntityApiStyle.Atomic)]
+[assembly: Entitas.CodeGeneration.Attributes.DisableEntitasGenerator("ContextObserver")]
+```
+
+### Power-user recipe: running your own generators
+
+The engine is **public and reusable** inside the single analyzer DLL — there is no separate Core assembly. A power-user references `Entitas.SourceGenerator.dll` from their own analyzer/`IIncrementalGenerator` and reuses the public surface: `EntitasDiscovery.Discover(compilation)` + `DiscoveryResult`, the data POCOs (`ComponentData`, etc.), `AbstractGenerator` / `CodeGenFile` / `CodeGeneratorData`, the concrete `src/Generators/`, `CodeGeneratorExtensions`, and `EntitasGenerators.All()` (raw canonical set, ignores config) / `EntitasGenerators.Default(compilation)` (config-adjusted set). Emit via `spc.AddSource(...)`; `EntitasIncrementalGenerator.BuildHintName(file, takenSet)` derives a unique hint name the same way the framework does.
+
+```csharp
+var result = EntitasDiscovery.Discover(compilation);             // public discovery
+var data = result.Components.Cast<CodeGeneratorData>().ToArray();
+foreach (var gen in EntitasGenerators.Default(compilation))      // built-ins
+    Emit(spc, taken, gen.Generate(data));
+Emit(spc, taken, new MyGenerator().Generate(data));             // your AbstractGenerator
+```
+
+### Flux-Specific Features
+
+Generators live in `src/Entitas-Flux/src/Entitas.SourceGenerator/src/Generators/`.
+
+- **Atomic components**: Single-field (`Value`) components can get simplified property access (`entity.CurrentHealth` instead of `entity.currentHealth.Value`) via `AtomicComponentEntityApiGenerator`. It is NOT wired by default — the canonical config uses the plain `ComponentEntityApiGenerator`. Opt in per-assembly with `[assembly: EntitasGeneration(EntityApi = EntityApiStyle.Atomic)]` (it supersedes, not coexists with, the plain generator). See "Customizing generation" above.
+- **Watched components**: `[Watched]` causes `{Component}Changed` marker components plus `HasChanged(...)` query methods and a cleanup system. Handled by `WatchedComponentGenerator`, `WatchedEntityHasChangedGenerator`, and `WatchedCleanupSystem(s)Generator` (all wired).
+- **Safe removal**: `SafeRemove{Component}()` methods generated by the component entity-API generator.
+
+### Compiler Defines
+
+- `ENTITAS_DISABLE_REACTIVITY` — Disables default reactivity for performance
+- `ENTITAS_HIDE_STANDARD_MEMBERS` — Hides lowercase standard members in atomic components
+
+## Conventions
+
+- Target frameworks: `netstandard2.1` for libraries, `net6.0` for executables and tests
+- Testing: xUnit with FluentAssertions; test files live in `tests/` subdirectories alongside `src/` within each project
+- Private fields use `_camelCase`; classes and interfaces use standard C# naming (`PascalCase`, `IPrefix`)
+- Shared build configuration is centralized in `src/Entitas-Flux/Directory.Build.props`
+- Unity version: 2022.3.62f2 (2022.3 LTS; required for Roslyn 4.x / `IIncrementalGenerator` support)

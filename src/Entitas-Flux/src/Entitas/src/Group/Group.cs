@@ -54,6 +54,12 @@ namespace Entitas
         /// This is used by the context to manage the group.
         public void HandleEntity(TEntity entity, int index, IComponent component)
         {
+            if (!entity.isEnabled)
+            {
+                removeEntity(entity, index, component);
+                return;
+            }
+
             if (_matcher.Matches(entity))
                 addEntity(entity, index, component);
             else
@@ -81,10 +87,15 @@ namespace Entitas
             OnEntityUpdated = null;
         }
 
-        public GroupChanged<TEntity> HandleEntity(TEntity entity) =>
-            _matcher.Matches(entity)
+        public GroupChanged<TEntity> HandleEntity(TEntity entity)
+        {
+            if (!entity.isEnabled)
+                return removeEntitySilently(entity) ? OnEntityRemoved : null;
+
+            return _matcher.Matches(entity)
                 ? (addEntitySilently(entity) ? OnEntityAdded : null)
                 : (removeEntitySilently(entity) ? OnEntityRemoved : null);
+        }
 
         bool addEntitySilently(TEntity entity)
         {
