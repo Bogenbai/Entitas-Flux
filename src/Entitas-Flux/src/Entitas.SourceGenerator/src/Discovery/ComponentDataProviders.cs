@@ -1,36 +1,29 @@
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
-using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Discovery
 {
     public interface IComponentDataProvider
     {
-        void Provide(INamedTypeSymbol type, ComponentData data);
+        void Provide(TypeSnapshot type, ComponentData data);
     }
 
     public sealed class ComponentTypeComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
-            data.SetTypeName(type.ToCompilableString());
+            data.SetTypeName(type.FullName);
         }
     }
 
     public sealed class MemberDataComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
-            var isComponent = type.AllInterfaces.Any(i => i.ToCompilableString() == WellKnownTypes.ComponentInterface);
-            var memberData = type.GetPublicMembers(isComponent)
-                .Select(CreateMemberData)
-                .ToArray();
-
-            data.SetMemberData(memberData);
+            data.SetMemberData(type.Members
+                .Select(member => new MemberData(member.TypeName, member.Name))
+                .ToArray());
         }
-
-        static MemberData CreateMemberData(ISymbol member) =>
-            new MemberData(member.PublicMemberType().ToCompilableString(), member.Name);
     }
 
     public sealed class ContextsComponentDataProvider : IComponentDataProvider
@@ -39,7 +32,7 @@ namespace Entitas.SourceGenerator.Discovery
 
         public ContextsComponentDataProvider(ContextResolver resolver) => _resolver = resolver;
 
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             data.SetContextNames(_resolver.GetContextNamesOrDefault(type));
         }
@@ -47,7 +40,7 @@ namespace Entitas.SourceGenerator.Discovery
 
     public sealed class IsUniqueComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             var isUnique = type.GetAttribute(AttributeNames.Unique) != null;
             data.IsUnique(isUnique);
@@ -56,21 +49,21 @@ namespace Entitas.SourceGenerator.Discovery
 
     public sealed class FlagPrefixComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             data.SetFlagPrefix(GetCustomComponentPrefix(type));
         }
 
-        static string GetCustomComponentPrefix(INamedTypeSymbol type)
+        static string GetCustomComponentPrefix(TypeSnapshot type)
         {
             var attr = type.GetAttribute(AttributeNames.FlagPrefix);
-            return attr == null ? "is" : (string)attr.ConstructorArguments.First().Value!;
+            return attr == null ? "is" : attr.Arguments.FirstOrDefault() ?? "is";
         }
     }
 
     public sealed class ShouldWatchChangesComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             var shouldTrackChanges = type.GetAttribute(AttributeNames.Watched) != null;
             data.ShouldWatchChanges(shouldTrackChanges);
@@ -79,18 +72,18 @@ namespace Entitas.SourceGenerator.Discovery
 
     public sealed class ShouldGenerateComponentComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
-            var shouldGenerateComponent = !type.AllInterfaces.Any(i => i.ToCompilableString() == WellKnownTypes.ComponentInterface);
+            var shouldGenerateComponent = !type.IsComponent;
             data.ShouldGenerateComponent(shouldGenerateComponent);
             if (shouldGenerateComponent)
-                data.SetObjectTypeName(type.ToCompilableString());
+                data.SetObjectTypeName(type.FullName);
         }
     }
 
     public sealed class ShouldGenerateMethodsComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             var generate = type.GetAttribute(AttributeNames.DontGenerate) == null;
             data.ShouldGenerateMethods(generate);
@@ -99,7 +92,7 @@ namespace Entitas.SourceGenerator.Discovery
 
     public sealed class ShouldGenerateComponentIndexComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             data.ShouldGenerateIndex(type.GetAttribute(AttributeNames.DontGenerate) == null);
         }
@@ -107,7 +100,7 @@ namespace Entitas.SourceGenerator.Discovery
 
     public sealed class EventComponentDataProvider : IComponentDataProvider
     {
-        public void Provide(INamedTypeSymbol type, ComponentData data)
+        public void Provide(TypeSnapshot type, ComponentData data)
         {
             var attrs = type.GetAttributes(AttributeNames.Event);
             if (attrs.Length > 0)
@@ -116,10 +109,10 @@ namespace Entitas.SourceGenerator.Discovery
                 var eventData = attrs
                     .Select(attr =>
                     {
-                        var args = attr.ConstructorArguments;
-                        var eventTarget = (EventTarget)(int)args[0].Value!;
-                        var eventType = (EventType)(int)args[1].Value!;
-                        var priority = (int)args[2].Value!;
+                        var args = attr.Arguments;
+                        var eventTarget = (EventTarget)int.Parse(args[0]!);
+                        var eventType = (EventType)int.Parse(args[1]!);
+                        var priority = int.Parse(args[2]!);
                         return new EventData(eventTarget, eventType, priority);
                     }).ToArray();
 

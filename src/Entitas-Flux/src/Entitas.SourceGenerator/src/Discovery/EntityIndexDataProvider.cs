@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
-using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Discovery
 {
@@ -12,11 +11,11 @@ namespace Entitas.SourceGenerator.Discovery
     /// </summary>
     public sealed class EntityIndexDataProvider
     {
-        readonly INamedTypeSymbol[] _types;
+        readonly TypeSnapshot[] _types;
         readonly ContextResolver _contextResolver;
         readonly bool _ignoreNamespaces;
 
-        public EntityIndexDataProvider(INamedTypeSymbol[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
+        public EntityIndexDataProvider(TypeSnapshot[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
         {
             _types = types;
             _contextResolver = contextResolver;
@@ -25,13 +24,11 @@ namespace Entitas.SourceGenerator.Discovery
 
         public EntityIndexData[] GetData()
         {
-            var componentInterface = WellKnownTypes.ComponentInterface;
-
             var entityIndexData = _types
-                .Where(type => type.AllInterfaces.Any(i => i.ToCompilableString() == componentInterface))
+                .Where(type => type.IsComponent)
                 .Where(type => !type.IsAbstract)
                 .Where(type => type.GetAttribute(AttributeNames.DontGenerate) == null)
-                .Select(type => (type, members: type.GetPublicMembers(true)))
+                .Select(type => (type, members: type.Members))
                 .Where(kv => kv.members.Any(symbol => symbol.GetAttribute(AttributeNames.AbstractEntityIndex, true) != null))
                 .SelectMany(kv => CreateEntityIndexData(kv.type, kv.members));
 
@@ -45,7 +42,7 @@ namespace Entitas.SourceGenerator.Discovery
                 .ToArray();
         }
 
-        EntityIndexData[] CreateEntityIndexData(INamedTypeSymbol type, ISymbol[] members)
+        EntityIndexData[] CreateEntityIndexData(TypeSnapshot type, MemberSnapshot[] members)
         {
             var hasMultiple = members.Count(member => member.GetAttribute(AttributeNames.AbstractEntityIndex, true) != null) > 1;
             return members
@@ -57,10 +54,10 @@ namespace Entitas.SourceGenerator.Discovery
 
                     data.SetEntityIndexType(GetEntityIndexType(attribute));
                     data.IsCustom(false);
-                    data.SetEntityIndexName(type.ToCompilableString().ToComponentName(_ignoreNamespaces));
+                    data.SetEntityIndexName(type.FullName.ToComponentName(_ignoreNamespaces));
                     data.SetHasMultiple(hasMultiple);
-                    data.SetKeyType(member.PublicMemberType().ToCompilableString());
-                    data.SetComponentType(type.ToCompilableString());
+                    data.SetKeyType(member.TypeName);
+                    data.SetComponentType(type.FullName);
                     data.SetMemberName(member.Name);
                     data.SetContextNames(_contextResolver.GetContextNamesOrDefault(type));
 
@@ -68,33 +65,28 @@ namespace Entitas.SourceGenerator.Discovery
                 }).ToArray();
         }
 
-        EntityIndexData CreateCustomEntityIndexData(INamedTypeSymbol type)
+        EntityIndexData CreateCustomEntityIndexData(TypeSnapshot type)
         {
             var data = new EntityIndexData();
             var attribute = type.GetAttribute(AttributeNames.CustomEntityIndex)!;
-            data.SetEntityIndexType(type.ToCompilableString());
+            data.SetEntityIndexType(type.FullName);
             data.IsCustom(true);
-            data.SetEntityIndexName(type.ToCompilableString().RemoveDots());
+            data.SetEntityIndexName(type.FullName.RemoveDots());
             data.SetHasMultiple(false);
             data.SetContextNames(new[]
             {
-                ((INamedTypeSymbol)attribute.ConstructorArguments.First().Value!)
-                .ToCompilableString()
+                attribute.Arguments.First()!
                 .TypeName()
                 .RemoveContextSuffix()
             });
 
-            var getMethods = type
-                .GetMembers()
-                .OfType<IMethodSymbol>()
-                .Where(method => method.DeclaredAccessibility == Accessibility.Public)
-                .Where(method => !method.IsStatic)
+            var getMethods = type.Methods
                 .Where(method => method.GetAttribute(AttributeNames.EntityIndexGetMethod) != null)
                 .Select(method => new MethodData(
-                    method.ReturnType.ToCompilableString(),
+                    method.ReturnTypeName,
                     method.Name,
                     method.Parameters
-                        .Select(p => new MemberData(p.Type.ToCompilableString(), p.Name))
+                        .Select(p => new MemberData(p.TypeName, p.Name))
                         .ToArray()
                 ))
                 .ToArray();
@@ -104,9 +96,9 @@ namespace Entitas.SourceGenerator.Discovery
             return data;
         }
 
-        static string GetEntityIndexType(AttributeData attribute)
+        static string GetEntityIndexType(AttributeSnapshot attribute)
         {
-            var entityIndexType = attribute.AttributeClass?.ToCompilableString();
+            var entityIndexType = attribute.FullName;
             switch (entityIndexType)
             {
                 case AttributeNames.EntityIndex:

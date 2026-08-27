@@ -23,7 +23,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
                 EditorGUILayout.LabelField(link.entity.ToString());
 
                 if (GUILayout.Button("Show entity"))
-                    Selection.activeGameObject = FindObjectsOfType<EntityBehaviour>()
+                    Selection.activeGameObject = FindObjectsByType<EntityBehaviour>(FindObjectsSortMode.None)
                         .Single(e => e.entity == link.entity).gameObject;
 
                 EditorGUILayout.Space();

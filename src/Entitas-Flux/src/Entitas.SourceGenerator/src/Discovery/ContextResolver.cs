@@ -2,8 +2,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Entitas.SourceGenerator.Discovery
 {
@@ -31,48 +29,47 @@ namespace Entitas.SourceGenerator.Discovery
             return new ContextResolver(contextNames);
         }
 
-        public string[] GetContextNames(INamedTypeSymbol type)
+        public string[] GetContextNames(TypeSnapshot type)
         {
             var contextNames = new List<string>();
-            foreach (var attribute in type.GetAttributes())
+            foreach (var attribute in type.Attributes)
             {
-                var attributeClass = attribute.AttributeClass;
-                if (attributeClass == null)
+                if (attribute.TypeNames.Length == 0)
                     continue;
 
-                // Use the SIMPLE name, not ToString(): during generation the context
+                // Use the SIMPLE name, not the full one: during generation the context
                 // attribute ([Game], [Inventory], …) isn't generated yet, so it's an
                 // unresolved symbol. If a namespace in scope shares the context's name
                 // (e.g. a `Code.Gameplay.Inventory` namespace), the unresolved [Inventory]
-                // binds to that namespace and ToString() yields "Code.Gameplay.Inventory",
-                // which would miss the ContextNames match and silently fall back to the
-                // default context. attributeClass.Name is just "Inventory".
-                var contextNameCandidate = attributeClass.Name.Replace("Attribute", string.Empty);
-                if (attributeClass.BaseType == null && ContextNames.Contains(contextNameCandidate))
+                // binds to that namespace and the full name yields
+                // "Code.Gameplay.Inventory", which would miss the ContextNames match and
+                // silently fall back to the default context.
+                var contextNameCandidate = attribute.SimpleName.Replace("Attribute", string.Empty);
+                if (!attribute.HasBaseType && ContextNames.Contains(contextNameCandidate))
                 {
                     // Possible compiler error. Just take the attribute name.
                     contextNames.Add(contextNameCandidate);
                 }
-                else if (attributeClass.BaseType != null && attributeClass.BaseType.ToCompilableString() == AttributeNames.Context)
+                else if (attribute.HasBaseType && attribute.BaseTypeName == AttributeNames.Context)
                 {
                     // Generated context attribute (derives from ContextAttribute):
-                    // read the literal passed to its base constructor.
-                    var name = TryGetGeneratedContextName(attribute);
-                    if (name != null)
-                        contextNames.Add(name);
+                    // the literal passed to its base constructor.
+                    if (attribute.ContextLiteral != null)
+                        contextNames.Add(attribute.ContextLiteral);
                 }
-                else if (attributeClass.ToCompilableString().Contains(AttributeNames.Context))
+                else if (attribute.FullName.Contains(AttributeNames.Context))
                 {
                     // Entitas.CodeGeneration.Attributes.ContextAttribute used directly.
-                    var name = (string)attribute.ConstructorArguments.First().Value!;
-                    contextNames.Add(name);
+                    var name = attribute.Arguments.FirstOrDefault();
+                    if (name != null)
+                        contextNames.Add(name);
                 }
             }
 
             return contextNames.ToArray();
         }
 
-        public string[] GetContextNamesOrDefault(INamedTypeSymbol type)
+        public string[] GetContextNamesOrDefault(TypeSnapshot type)
         {
             var contextNames = GetContextNames(type);
             if (contextNames.Length == 0)
@@ -81,25 +78,5 @@ namespace Entitas.SourceGenerator.Discovery
             return contextNames;
         }
 
-        static string? TryGetGeneratedContextName(AttributeData attribute)
-        {
-            var ctor = attribute.AttributeConstructor;
-            var syntaxRef = ctor?.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxRef == null)
-                return null;
-
-            var declaration = syntaxRef.GetSyntax();
-            var baseInit = declaration.DescendantNodes()
-                .FirstOrDefault(node => node.IsKind(SyntaxKind.BaseConstructorInitializer))
-                as ConstructorInitializerSyntax;
-            if (baseInit == null)
-                return null;
-
-            var argument = baseInit.ArgumentList.Arguments.FirstOrDefault()?.Expression as LiteralExpressionSyntax;
-            if (argument == null)
-                return null;
-
-            return argument.ToString().Replace("\"", string.Empty);
-        }
     }
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Entitas.SourceGenerator;
+using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Cli
 {
@@ -59,7 +60,11 @@ namespace Entitas.SourceGenerator.Cli
 
                 var compilation = ProjectLoader.BuildCompilation(csprojPath, project);
 
-                var sources = EntitasGenerators.Generate(compilation);
+                var result = EntitasGenerators.Generate(GenerationInput.From(compilation));
+                foreach (var diagnostic in result.Diagnostics)
+                    Console.Error.WriteLine(diagnostic.ToString());
+
+                var sources = result.Sources;
                 if (sources.Count == 0)
                 {
                     Console.Error.WriteLine(
@@ -73,7 +78,10 @@ namespace Entitas.SourceGenerator.Cli
                 WriteOutput(outputDir, sources);
 
                 Console.WriteLine($"Generated {sources.Count} files in {outputDir}");
-                return 0;
+
+                // A generator that failed leaves a hole in the generated API; the caller
+                // (a build, usually) must not treat that as success.
+                return result.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? 1 : 0;
             }
             catch (Exception ex)
             {

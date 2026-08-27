@@ -31,6 +31,11 @@ jobs:
       - name: Test (solution)
         run: dotnet test ./src/Entitas-Flux/Entitas.sln --nologo --configuration Release
 
+      - name: Assemble UPM package
+        run: |
+          chmod +x ./src/Entitas-Flux/package.sh
+          ./src/Entitas-Flux/package.sh ${{ github.ref_name }}
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -71,3 +76,41 @@ jobs:
           files: |
             release-bundle/Entitas-Flux-${{ github.ref_name }}.zip
 
+  upm:
+    name: Publish UPM branch
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Artifacts-Linux
+          path: ./artifacts
+
+      # The package is published as the ROOT of a generated `upm` branch, so consumers
+      # install it with a plain git URL:
+      #   https://github.com/Bogenbai/Entitas-Flux.git#upm          (latest)
+      #   https://github.com/Bogenbai/Entitas-Flux.git#upm/v0.1.0   (pinned)
+      # The branch is generated output, so force-pushing it is intended; the per-version
+      # tags are what make older versions pinnable.
+      - name: Push package to the upm branch
+        run: |
+          # upload-artifact roots the archive at the common ancestor of the matched
+          # files, so locate the package rather than assuming a fixed depth.
+          PACKAGE="$(find ./artifacts -type d -name package -exec test -f '{}/package.json' \; -print | head -1)"
+          if [ -z "$PACKAGE" ]; then
+            echo "error: no UPM package found in the artifacts" >&2
+            exit 1
+          fi
+          cd "$PACKAGE"
+          git init -q .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Entitas Flux ${{ github.ref_name }}"
+          git branch -M upm
+          git remote add origin https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+          git push -f origin upm
+          git tag "upm/${{ github.ref_name }}"
+          git push -f origin "upm/${{ github.ref_name }}"
