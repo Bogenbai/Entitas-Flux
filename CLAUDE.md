@@ -29,6 +29,45 @@ dotnet test ./src/Entitas-Flux/Entitas.sln --filter "FullyQualifiedName~ContextT
 
 There is no separate lint command; code style is enforced via ReSharper `.dotsettings` files.
 
+Other scripts:
+
+```bash
+# Assemble the UPM package from Artifacts/ (build.sh must have run first)
+./src/Entitas-Flux/package.sh 0.1.2
+
+# Accept an intended change to generated output, then read the diff
+ENTITAS_UPDATE_SNAPSHOT=1 dotnet test ./src/Entitas-Flux/src/Entitas.SourceGenerator/tests
+
+# Benchmarks (never in CI — see benchmarks/README.md)
+dotnet run -c Release --project benchmarks/Entitas.Benchmarks -- --filter '*CoreBenchmarks*'
+```
+
+## Releasing
+
+Everything after the tag push is automated by `.github/workflows/release-on-tag.yml`:
+build + test, the GitHub release with the zipped artifacts, and the `upm` branch that
+consumers install from. The steps before it are not, so:
+
+1. Work on a branch named `release/X.Y.Z` (or a topic branch). **Never name a branch
+   `vX.Y.Z`** — it collides with the tag of the same name and every `git push origin
+   vX.Y.Z` then fails with `matches more than one`.
+2. **Add the version's section to `CHANGELOG.md`** before tagging. The changelog is the
+   fork's own history (`src/Entitas-Flux/CHANGELOG.Entitas.md` is upstream Entitas's) and
+   it ships inside the package, where Unity's Package Manager renders it as a tab. Update
+   the compare links at the bottom too.
+3. Open a PR to `master` and let CI pass.
+4. Merge with a merge commit, then pull `master`.
+5. Tag and push: `git tag -a vX.Y.Z -m "…" && git push origin refs/tags/vX.Y.Z`. The tag
+   is what stamps the version — `FluxVersion` flows from it into the assemblies and
+   `package.json`, so nothing needs bumping by hand.
+6. Write the release description with `gh release edit vX.Y.Z --notes-file …`, mirroring
+   the changelog section. The workflow's own body is just "Automated release for tag …".
+7. Verify what shipped, not just that the workflow was green: the release asset exists,
+   the `upm` branch carries the new `package.json` version, and anything the release
+   claims to fix is actually in the package.
+
+Do not release from a dirty tree: `build.sh` packs whatever is in `Artifacts/`.
+
 ## Architecture
 
 The key layers of the solution (`src/Entitas-Flux/Entitas.sln`):
@@ -128,7 +167,7 @@ Generators live in `src/Entitas-Flux/src/Entitas.SourceGenerator/src/Generators/
 ## Conventions
 
 - Target frameworks: `netstandard2.1` for libraries, `net6.0` for executables and tests
-- Testing: xUnit with FluentAssertions; test files live in `tests/` subdirectories alongside `src/` within each project
+- Testing: xUnit with FluentAssertions; test files live in `tests/` subdirectories alongside `src/` within each project. Generator changes need more than a text comparison: `FluxBehaviorTests` compiles generated output into a real assembly, loads it and runs it — that is what caught `[Watched]` generating perfectly and doing nothing. `tests/Snapshot` is the approved output (`ENTITAS_UPDATE_SNAPSHOT=1` to accept a change, then read the diff)
 - Private fields use `_camelCase`; classes and interfaces use standard C# naming (`PascalCase`, `IPrefix`)
 - Shared build configuration is centralized in `src/Entitas-Flux/Directory.Build.props`
 - Unity version: 2022.3.62f2 (2022.3 LTS; required for Roslyn 4.x / `IIncrementalGenerator` support)
