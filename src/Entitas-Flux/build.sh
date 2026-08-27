@@ -49,12 +49,21 @@ copy_map_line() {
   fi
 }
 
-# mapping of dll -> subfolder (relative to Artifacts/)
+# Mapping of dll -> subfolder (relative to Artifacts/). DesperateDevs and Sherlog are
+# third-party assemblies Entitas itself is built against; shipping without them left a
+# fresh project unable to compile (the generated Feature class references
+# DesperateDevs.Extensions) — existing projects only worked because they still had the
+# copies from the original Entitas distribution.
 while IFS='|' read -r dll dest
 do
   copy_map_line "$dll" "$dest"
 done <<'EOF'
 Entitas.CodeGeneration.Attributes.dll|Assets/Entitas/Entitas
+DesperateDevs.Caching.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Extensions.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Reflection.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Serialization.dll|Assets/Entitas/DesperateDevs
+Sherlog.dll|Assets/Entitas/DesperateDevs
 Entitas.dll|Assets/Entitas/Entitas
 Entitas.SourceGenerator.dll|Assets/Entitas/Entitas/Analyzers
 Entitas.CodeFixes.dll|Assets/Entitas/Entitas/Analyzers

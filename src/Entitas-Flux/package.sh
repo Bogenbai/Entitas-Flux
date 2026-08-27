@@ -23,6 +23,14 @@ rm -rf "$PACKAGE"
 mkdir -p "$PACKAGE/Runtime" "$PACKAGE/Editor" "$PACKAGE/Analyzers"
 
 cp "$ARTIFACTS"/*.dll "$PACKAGE/Runtime/"
+
+# Third-party assemblies Entitas is built against; they live in their own folder so a
+# project that already has them from the original Entitas distribution overwrites its
+# copies instead of ending up with duplicate assemblies.
+if [[ -d "$ARTIFACTS/../DesperateDevs" ]]; then
+  mkdir -p "$PACKAGE/Runtime/DesperateDevs"
+  cp "$ARTIFACTS"/../DesperateDevs/*.dll "$PACKAGE/Runtime/DesperateDevs/"
+fi
 cp "$ARTIFACTS"/Editor/*.dll "$PACKAGE/Editor/"
 cp "$ARTIFACTS"/Analyzers/*.dll "$PACKAGE/Analyzers/"
 cp "$SCRIPT_DIR/../../README.md" "$PACKAGE/README.md"
