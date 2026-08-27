@@ -11,6 +11,18 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Added
+- **`ENT0003`** — a component in a different assembly than the contexts now says so.
+  Generation runs per assembly, into the one declaring the contexts, so such a component
+  was silently ignored: no generated API, no explanation. There is no quick fix on
+  purpose — declaring a context in that assembly would generate a second, parallel set of
+  contexts rather than help.
+
+### Changed
+- README documents two constraints that were previously folklore: components must live in
+  the assembly that declares the contexts, and `ComponentsLookup` indices are not stable
+  across builds and must never be persisted.
+
 ## [0.1.2] - 2026-08-27
 
 ### Fixed

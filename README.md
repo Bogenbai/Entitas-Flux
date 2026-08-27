@@ -19,6 +19,8 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
   - [Renaming components](#renaming-components)
   - [Defines](#defines)
 - [Code generation](#code-generation)
+  - [Where components live](#where-components-live)
+  - [Component indices are not stable](#component-indices-are-not-stable)
   - [Diagnostics](#diagnostics)
 - [Configuring generation](#configuring-generation--entitasgenerationcs)
 - [Debugging a mutation](#debugging-a-mutation--debughooks)
@@ -149,11 +151,39 @@ Entitas-Flux generates the whole ECS API — contexts, entities, matchers, compo
 
 > Want the generated files on disk anyway (e.g. to read them, diff them, or step through with a breakpoint)? The repo ships an `entitas-gen` CLI that writes the same output to real `.cs` files from your `Assembly-CSharp.csproj`. It's optional — the analyzer is the default path.
 
+### Where components live
+
+**All components must live in the assembly that declares the contexts.** Generation runs
+per assembly, into the one with the `[assembly: ContextDefinition("…")]`, and components
+anywhere else are not discovered — you get `ENT0003` instead of silence.
+
+Systems, on the other hand, can live wherever you like: they only *use* the generated API,
+so any assembly referencing the one that generated it works.
+
+The reason is a C# rule rather than a decision: the generated `GameEntity` is a partial
+class, and a partial class cannot be extended from another assembly. Lifting this needs a
+different shape of generated API (extension methods) and component indices assigned at
+runtime instead of compile time — a rewrite of the runtime, not a setting. If you split a
+Unity project into asmdefs, keep the components together with the contexts and put the
+feature code around them.
+
+### Component indices are not stable
+
+`GameComponentsLookup.Health` is a compile-time constant, and the numbers are handed out
+alphabetically within a context. Adding a component shifts the index of every component
+after it in the alphabet.
+
+That is fine for everything the framework does with them, but it means **the numbers must
+never be persisted** — not in save files, not on the wire, not in assets. Store the
+component's type or name and resolve it at load time. A save written before adding
+`ArmorComponent` and read after it would silently deserialize into the wrong components.
+
 ### Diagnostics
 
 | ID | Severity | Meaning |
 | --- | --- | --- |
 | `ENT0002` | Warning | This assembly declares components but no context, so **nothing is generated for them**. Quick fix: *Declare the "Game" context for this assembly*. |
+| `ENT0003` | Warning | This component is in a different assembly than the contexts, so **nothing is generated for it** — see [Where components live](#where-components-live). No quick fix: declaring a context here would generate a second, parallel set of contexts instead of helping. |
 | `ENT0001` | Warning | A component is marked `[RenameTo("…")]` and the rename has not been applied yet — see [Renaming a component](#renaming-a-component--renameto). |
 | `ENT0100` | Error | A generator threw; it names itself and the reason. The API it owns will be missing. |
 | `ENT0101` | Error | Entitas could not build its data model from the assembly. Nothing was generated. |

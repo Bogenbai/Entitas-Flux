@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace Entitas.SourceGenerator.Analyzers
 {
     /// <summary>
-    /// Reports components in an assembly that declares no context.
+    /// Reports components that no code will be generated for.
     ///
     /// Generation is opt-in: without an [assembly: ContextDefinition("…")] the generator
     /// emits nothing at all. That silence is the single most confusing way to meet this
@@ -21,6 +21,9 @@ namespace Entitas.SourceGenerator.Analyzers
     {
         public const string DiagnosticId = "ENT0002";
 
+        /// <summary>The same silence, but with a different cause and a different fix.</summary>
+        public const string ForeignAssemblyDiagnosticId = "ENT0003";
+
         static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
             DiagnosticId,
             "No context declared for this assembly",
@@ -33,8 +36,27 @@ namespace Entitas.SourceGenerator.Analyzers
                          "context with [assembly: ContextDefinition(\"…\")]. The first one declared is the " +
                          "default context for components without an explicit context attribute.");
 
+        /// <summary>
+        /// Generation happens per assembly, in the one that declares the contexts, so a
+        /// component in a different assembly is simply ignored — silently, which is how
+        /// an afternoon disappears. Splitting components across assemblies needs the
+        /// generated entity API to cross an assembly boundary, which C# partial classes
+        /// cannot do; until that is solved, components belong with their contexts.
+        /// </summary>
+        static readonly DiagnosticDescriptor ForeignAssemblyRule = new DiagnosticDescriptor(
+            ForeignAssemblyDiagnosticId,
+            "Component is in a different assembly than its contexts",
+            "'{0}' is a component, but Entitas generates code only in the assembly that declares the contexts — " +
+            "'{1}' declares them, this one does not. No code is generated for '{0}': move it to '{1}'.",
+            "Entitas",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true,
+            description: "Entitas-Flux generates the ECS API per assembly, into the assembly that declares its " +
+                         "contexts. Components in another assembly are not discovered. Declaring contexts here as " +
+                         "well would not help: it would generate a second, parallel set of contexts and entities.");
+
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
-            ImmutableArray.Create(Rule);
+            ImmutableArray.Create(Rule, ForeignAssemblyRule);
 
         public override void Initialize(AnalysisContext context)
         {
@@ -47,16 +69,28 @@ namespace Entitas.SourceGenerator.Analyzers
                 if (componentInterface is null)
                     return; // The assembly does not use Entitas at all.
 
-                var hasContexts = start.Compilation.Assembly.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.ToDisplayString() == AttributeNames.ContextDefinition);
-                if (hasContexts)
+                if (DeclaresContexts(start.Compilation.Assembly))
                     return; // Configured; nothing to say.
 
-                start.RegisterSymbolAction(symbolContext => Analyze(symbolContext, componentInterface), SymbolKind.NamedType);
+                // Contexts declared somewhere we reference means the components here are
+                // in the wrong assembly, not that a context is missing — a different
+                // problem with a different fix.
+                var contextAssembly = start.Compilation.SourceModule.ReferencedAssemblySymbols
+                    .FirstOrDefault(DeclaresContexts);
+
+                start.RegisterSymbolAction(
+                    symbolContext => Analyze(symbolContext, componentInterface, contextAssembly),
+                    SymbolKind.NamedType);
             });
         }
 
-        static void Analyze(SymbolAnalysisContext context, INamedTypeSymbol componentInterface)
+        static bool DeclaresContexts(IAssemblySymbol assembly) => assembly.GetAttributes().Any(attribute =>
+            attribute.AttributeClass?.ToDisplayString() == AttributeNames.ContextDefinition);
+
+        static void Analyze(
+            SymbolAnalysisContext context,
+            INamedTypeSymbol componentInterface,
+            IAssemblySymbol? contextAssembly)
         {
             var type = (INamedTypeSymbol)context.Symbol;
             if (type.IsAbstract)
@@ -69,7 +103,9 @@ namespace Entitas.SourceGenerator.Analyzers
             if (location == null)
                 return;
 
-            context.ReportDiagnostic(Diagnostic.Create(Rule, location, type.Name));
+            context.ReportDiagnostic(contextAssembly == null
+                ? Diagnostic.Create(Rule, location, type.Name)
+                : Diagnostic.Create(ForeignAssemblyRule, location, type.Name, contextAssembly.Name));
         }
     }
 }

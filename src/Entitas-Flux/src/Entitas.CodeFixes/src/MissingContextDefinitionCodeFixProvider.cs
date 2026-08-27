@@ -17,6 +17,11 @@ namespace Entitas.CodeFixes
     /// Fixes ENT0002 by declaring a context for the assembly. One attribute unblocks
     /// every component in it, which is why there is no Fix All: applying the fix once
     /// makes all the other diagnostics disappear.
+    ///
+    /// Deliberately does NOT fix ENT0003 (components in a different assembly than their
+    /// contexts): declaring a context there would generate a second, parallel set of
+    /// contexts and entities rather than fix anything. That one needs a human to move
+    /// the file.
     /// </summary>
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(MissingContextDefinitionCodeFixProvider)), Shared]
     public sealed class MissingContextDefinitionCodeFixProvider : CodeFixProvider

@@ -71,6 +71,33 @@ public sealed class NotAComponent {
         }
 
         [Fact]
+        public async Task Points_at_the_right_assembly_when_the_contexts_live_elsewhere()
+        {
+            // Generation happens in the assembly that declares the contexts, so a
+            // component anywhere else is silently ignored. Telling this user to declare a
+            // context here would be wrong — it would generate a second, parallel set of
+            // contexts — so it is a different diagnostic with no quick fix.
+            var game = CSharpCompilation.Create(
+                "Game.Core",
+                new[] { CSharpSyntaxTree.ParseText("[assembly: Entitas.CodeGeneration.Attributes.ContextDefinition(\"Game\")]") },
+                References(true),
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            var diagnostics = await AnalyzeAsync(CreateDocument(
+                ComponentsWithoutContext,
+                extraReferences: new[] { game.ToMetadataReference() }));
+
+            diagnostics.Should().HaveCount(2);
+            diagnostics.Should().OnlyContain(d =>
+                d.Id == MissingContextDefinitionAnalyzer.ForeignAssemblyDiagnosticId);
+            diagnostics[0].GetMessage().Should().Contain("Game.Core").And.Contain("move it");
+
+            // The "declare a context here" fix must not be offered for this one.
+            new MissingContextDefinitionCodeFixProvider().FixableDiagnosticIds
+                .Should().NotContain(MissingContextDefinitionAnalyzer.ForeignAssemblyDiagnosticId);
+        }
+
+        [Fact]
         public async Task Fix_declares_a_context_and_clears_every_warning()
         {
             var document = CreateDocument(ComponentsWithoutContext);
@@ -108,14 +135,17 @@ public sealed class NotAComponent {
                 .ToArray();
         }
 
-        static Document CreateDocument(string source, bool withEntitas = true)
+        static Document CreateDocument(
+            string source,
+            bool withEntitas = true,
+            IEnumerable<MetadataReference>? extraReferences = null)
         {
             var projectId = ProjectId.CreateNewId();
             var documentId = DocumentId.CreateNewId(projectId);
 
             var solution = new AdhocWorkspace().CurrentSolution
                 .AddProject(projectId, "TestAsm", "TestAsm", LanguageNames.CSharp)
-                .WithProjectMetadataReferences(projectId, References(withEntitas))
+                .WithProjectMetadataReferences(projectId, References(withEntitas).Concat(extraReferences ?? Enumerable.Empty<MetadataReference>()))
                 .WithProjectCompilationOptions(projectId,
                     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
                 .AddDocument(documentId, "Components.cs", SourceText.From(source), filePath: "Components.cs");
