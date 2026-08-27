@@ -17,6 +17,7 @@ Don’t expect major changes or a big redesign like [Entitas Redux](https://gith
   - [Renaming components](#renaming-components)
   - [Defines](#defines)
 - [Code generation](#code-generation)
+  - [Diagnostics](#diagnostics)
 - [Configuring generation](#configuring-generation--entitasgenerationcs)
 - [Debugging a mutation](#debugging-a-mutation--debughooks)
 - [Renaming a component](#renaming-a-component--renameto)
@@ -139,9 +140,20 @@ Entitas-Flux generates the whole ECS API — contexts, entities, matchers, compo
 - **Components are discovered from the compilation** — any class implementing `IComponent`, plus its context/`[Watched]`/`[Unique]`/etc. attributes. No external config files.
 - **IDE-native.** Rider/Visual Studio see the generated API immediately; Cmd/Ctrl-click navigates straight into it.
 - **Incremental.** Generation is keyed on the components, their attributes and your generation config — nothing else. Editing a method body or a comment re-runs nothing.
-- **Loud when it breaks.** A generator that fails reports `ENT0100` naming itself and the reason, instead of silently leaving a hole in the API for you to find via a hundred errors in your own code.
+- **Loud when it breaks.** Failures are reported where you can see them instead of leaving a hole in the API for you to find via a hundred errors in your own code — see [Diagnostics](#diagnostics).
 
 > Want the generated files on disk anyway (e.g. to read them, diff them, or step through with a breakpoint)? The repo ships an `entitas-gen` CLI that writes the same output to real `.cs` files from your `Assembly-CSharp.csproj`. It's optional — the analyzer is the default path.
+
+### Diagnostics
+
+| ID | Severity | Meaning |
+| --- | --- | --- |
+| `ENT0002` | Warning | This assembly declares components but no context, so **nothing is generated for them**. Quick fix: *Declare the "Game" context for this assembly*. |
+| `ENT0001` | Warning | A component is marked `[RenameTo("…")]` and the rename has not been applied yet — see [Renaming a component](#renaming-a-component--renameto). |
+| `ENT0100` | Error | A generator threw; it names itself and the reason. The API it owns will be missing. |
+| `ENT0101` | Error | Entitas could not build its data model from the assembly. Nothing was generated. |
+
+`ENT0002` exists because generation is opt-in: without an `[assembly: ContextDefinition("…")]` the generator emits nothing at all, and that silence used to be the most confusing way to meet this framework — you write a component, `GameEntity` does not exist, and nothing says why. Assemblies that merely *use* the generated API (a systems asmdef, a test assembly) declare no components and are left alone.
 
 ## Configuring generation — EntitasGeneration.cs
 Create one file (any name) with assembly-level attributes. This replaces the old `JennyRoslyn.properties`. Example:
