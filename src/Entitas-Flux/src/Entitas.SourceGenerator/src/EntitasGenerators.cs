@@ -56,31 +56,40 @@ namespace Entitas.SourceGenerator
         /// [assembly: ContextDefinition]). The returned Content has no auto-generated
         /// header — the caller adds whichever header it wants.
         /// </summary>
-        public static IReadOnlyList<GeneratedSource> Generate(Compilation compilation)
+        public static IReadOnlyList<GeneratedSource> Generate(Compilation compilation) =>
+            Generate(GenerationInput.From(compilation)).Sources;
+
+        /// <summary>
+        /// Runs generation over an already-extracted <see cref="GenerationInput"/>. The
+        /// incremental generator calls this so the expensive half of the pipeline runs
+        /// only when the input actually changed; the CLIs go through the Compilation
+        /// overload above.
+        /// </summary>
+        public static GenerationResult Generate(GenerationInput input) =>
+            Generate(input, null);
+
+        /// <summary>
+        /// Same, with an explicit generator set — the config-resolved default when null.
+        /// Power-users composing their own set can reuse the whole pipeline this way.
+        /// </summary>
+        public static GenerationResult Generate(GenerationInput input, IReadOnlyList<AbstractGenerator>? generators)
         {
-            // Opt-in guard: must reference Entitas AND declare at least one context.
-            if (compilation.GetTypeByMetadataName("Entitas.IComponent") is null)
-                return Array.Empty<GeneratedSource>();
+            if (input.DiscoveryError != null)
+            {
+                return new GenerationResult(
+                    new GeneratedSource[0],
+                    new[] { EntitasDiagnostics.DiscoveryFailed(input.DiscoveryError) });
+            }
 
-            var resolver = ContextResolver.FromCompilation(compilation);
-            if (resolver.ContextNames.Length == 0)
-                return Array.Empty<GeneratedSource>();
+            if (!input.Enabled)
+                return GenerationResult.Empty;
 
-            var options = ReadOptions(compilation);
-            CodeGeneratorExtensions.ignoreNamespaces = options.IgnoreNamespaces;
-            CodeGeneratorExtensions.debugHooks = options.DebugHooks;
-            var generators = Default(compilation);
+            CodeGeneratorExtensions.ignoreNamespaces = input.Options.IgnoreNamespaces;
+            CodeGeneratorExtensions.debugHooks = input.Options.DebugHooks;
 
-            var types = EntitasDiscovery.GetCandidateTypes(compilation).ToArray();
-            var result = EntitasDiscovery.Discover(types, resolver, options.IgnoreNamespaces);
-
-            var data = new List<CodeGeneratorData>();
-            data.AddRange(result.Components);
-            data.AddRange(result.Contexts);
-            data.AddRange(result.EntityIndices);
-            data.AddRange(result.Cleanups);
-            data.AddRange(result.WatchedCleanups);
-            var dataArray = data.ToArray();
+            generators ??= Default(input.Options);
+            var dataArray = input.Data;
+            var diagnostics = new List<Diagnostic>();
 
             // Merge fragments by logical FileName (reproduces the legacy Jenny layout),
             // preserving first-seen order for deterministic output.
@@ -93,9 +102,13 @@ namespace Entitas.SourceGenerator
                 {
                     files = generator.Generate(dataArray);
                 }
-                catch
+                catch (Exception exception)
                 {
-                    // A single misbehaving generator must not abort the whole run.
+                    // One misbehaving generator must not abort the whole run — but it
+                    // must not vanish silently either: the API it owns will be missing,
+                    // and without this the user only sees the fallout in their own code.
+                    diagnostics.Add(EntitasDiagnostics.GeneratorFailed(
+                        generator.GetType().Name, GenerationInput.Describe(exception)));
                     continue;
                 }
 
@@ -130,7 +143,7 @@ namespace Entitas.SourceGenerator
                 output.Add(new GeneratedSource(fileName, sb.ToString()));
             }
 
-            return output;
+            return new GenerationResult(output, diagnostics);
         }
 
         /// <summary>
@@ -173,9 +186,12 @@ namespace Entitas.SourceGenerator
         /// <see cref="EntitasIncrementalGenerator"/> runs. <see cref="ReadOptions"/>
         /// returns the remaining (non-generator-list) options such as IgnoreNamespaces.
         /// </summary>
-        public static IReadOnlyList<AbstractGenerator> Default(Compilation compilation)
+        public static IReadOnlyList<AbstractGenerator> Default(Compilation compilation) =>
+            Default(ReadOptions(compilation));
+
+        /// <summary>Same, for callers that already resolved the options.</summary>
+        public static IReadOnlyList<AbstractGenerator> Default(EntitasGenerationOptions options)
         {
-            var options = ReadOptions(compilation);
             var generators = All().ToList();
 
             // EntityApi == Atomic: swap the plain entity-API generator for the atomic
@@ -270,7 +286,7 @@ namespace Entitas.SourceGenerator
     public enum EntityApiStyle { Plain = 0, Atomic = 1 }
 
     /// <summary>Resolved Entitas-Flux generation config for a single compilation.</summary>
-    public sealed class EntitasGenerationOptions
+    public sealed class EntitasGenerationOptions : IEquatable<EntitasGenerationOptions>
     {
         public EntityApiStyle EntityApi { get; }
         public bool IgnoreNamespaces { get; }
@@ -287,6 +303,26 @@ namespace Entitas.SourceGenerator
             IgnoreNamespaces = ignoreNamespaces;
             DebugHooks = debugHooks;
             DisabledGenerators = disabledGenerators;
+        }
+
+        // Compared by value so GenerationInput can be: a config change must invalidate
+        // the incremental cache, an unrelated edit must not.
+        public bool Equals(EntitasGenerationOptions? other) =>
+            other != null &&
+            EntityApi == other.EntityApi &&
+            IgnoreNamespaces == other.IgnoreNamespaces &&
+            DebugHooks == other.DebugHooks &&
+            DisabledGenerators.SequenceEqual(other.DisabledGenerators, StringComparer.Ordinal);
+
+        public override bool Equals(object? obj) => Equals(obj as EntitasGenerationOptions);
+
+        public override int GetHashCode()
+        {
+            var hash = ((int)EntityApi * 397) ^ (IgnoreNamespaces ? 1 : 0) ^ (DebugHooks ? 2 : 0);
+            foreach (var name in DisabledGenerators)
+                hash = unchecked(hash * 31 + StringComparer.Ordinal.GetHashCode(name));
+
+            return hash;
         }
     }
 }

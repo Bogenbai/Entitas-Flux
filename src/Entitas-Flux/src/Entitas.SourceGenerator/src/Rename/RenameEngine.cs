@@ -52,7 +52,17 @@ namespace Entitas.SourceGenerator.Rename
                 ? newBare.AddComponentSuffix()
                 : newBare;
 
-            var oldSources = EntitasGenerators.Generate(compilation);
+            var generated = EntitasGenerators.Generate(GenerationInput.From(compilation));
+            var failures = generated.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => d.GetMessage())
+                .ToArray();
+            if (failures.Length > 0)
+                throw new RenameException(
+                    "code generation failed, so the set of identifiers to rename cannot be trusted:\n  " +
+                    string.Join("\n  ", failures));
+
+            var oldSources = generated.Sources;
             if (oldSources.Count == 0)
                 throw new RenameException(
                     "the engine produced no output. The assembly must reference Entitas " +
