@@ -2,6 +2,7 @@ using System.Linq;
 using DesperateDevs.Serialization;
 using DesperateDevs.Unity.Editor;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEngine;
 
 namespace Entitas.VisualDebugging.Unity.Editor
@@ -28,9 +29,9 @@ namespace Entitas.VisualDebugging.Unity.Editor
 
             _scriptingDefineSymbols = new ScriptingDefineSymbols();
             _enableVisualDebugging = !ScriptingDefineSymbols.BuildTargetGroups
-                .All(buildTarget => PlayerSettings.GetScriptingDefineSymbolsForGroup(buildTarget).Contains(ENTITAS_DISABLE_VISUAL_DEBUGGING));
+                .All(buildTarget => PlayerSettings.GetScriptingDefineSymbols(NamedBuildTarget.FromBuildTargetGroup(buildTarget)).Contains(ENTITAS_DISABLE_VISUAL_DEBUGGING));
             _enableDeviceDeepProfiling = !ScriptingDefineSymbols.BuildTargetGroups
-                .All(buildTarget => PlayerSettings.GetScriptingDefineSymbolsForGroup(buildTarget).Contains(ENTITAS_DISABLE_DEEP_PROFILING));
+                .All(buildTarget => PlayerSettings.GetScriptingDefineSymbols(NamedBuildTarget.FromBuildTargetGroup(buildTarget)).Contains(ENTITAS_DISABLE_DEEP_PROFILING));
         }
 
         public override void DrawHeader(Preferences preferences) { }

@@ -2,6 +2,7 @@ using System.Linq;
 using DesperateDevs.Serialization;
 using DesperateDevs.Unity.Editor;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEngine;
 
 namespace Entitas.Unity.Editor
@@ -28,7 +29,7 @@ namespace Entitas.Unity.Editor
 
             _scriptingDefineSymbols = new ScriptingDefineSymbols();
             _aercMode = ScriptingDefineSymbols.BuildTargetGroups
-                .All(buildTarget => PlayerSettings.GetScriptingDefineSymbolsForGroup(buildTarget).Contains(ENTITAS_FAST_AND_UNSAFE))
+                .All(buildTarget => PlayerSettings.GetScriptingDefineSymbols(NamedBuildTarget.FromBuildTargetGroup(buildTarget)).Contains(ENTITAS_FAST_AND_UNSAFE))
                 ? AERCMode.FastAndUnsafe
                 : AERCMode.Safe;
         }

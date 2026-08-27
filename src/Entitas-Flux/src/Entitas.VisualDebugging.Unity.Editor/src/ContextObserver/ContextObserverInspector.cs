@@ -33,7 +33,7 @@ namespace Entitas.VisualDebugging.Unity.Editor
                     if (GUILayout.Button("Create Entity"))
                     {
                         var entity = contextObserver.context.CreateEntity();
-                        var entityBehaviour = Object.FindObjectsOfType<EntityBehaviour>()
+                        var entityBehaviour = Object.FindObjectsByType<EntityBehaviour>(FindObjectsSortMode.None)
                             .Single(eb => eb.entity == entity);
 
                         Selection.activeGameObject = entityBehaviour.gameObject;

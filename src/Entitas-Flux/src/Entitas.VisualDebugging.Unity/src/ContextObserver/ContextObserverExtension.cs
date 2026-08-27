@@ -6,7 +6,7 @@ namespace Entitas.VisualDebugging.Unity
     {
         public static ContextObserverBehaviour FindContextObserver(this IContext context)
         {
-            var observers = Object.FindObjectsOfType<ContextObserverBehaviour>();
+            var observers = Object.FindObjectsByType<ContextObserverBehaviour>(FindObjectsSortMode.None);
             for (var i = 0; i < observers.Length; i++)
             {
                 var observer = observers[i];
