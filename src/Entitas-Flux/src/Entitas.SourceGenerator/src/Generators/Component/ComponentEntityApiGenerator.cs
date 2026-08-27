@@ -7,6 +7,10 @@ namespace Entitas.SourceGenerator.CodeGeneration
     {
         public override string Name => "Component (Entity API)";
 
+        const string HANDLE_WATCHED_CHANGES_KEY = "${Handle_Watched_Changes}";
+
+        const string MARK_CHANGED_TEMPLATE = @"is${ComponentName}Changed = true;";
+
         const string STANDARD_TEMPLATE =
             @"public partial class ${EntityType} {
 
@@ -21,6 +25,7 @@ namespace Entitas.SourceGenerator.CodeGeneration
             : new ${ComponentType}();
 ${memberAssignmentList}
         AddComponent(index, component);
+        ${Handle_Watched_Changes}
 
         return this;
     }
@@ -33,12 +38,14 @@ ${memberAssignmentList}
             : new ${ComponentType}();
 ${memberAssignmentList}
         ReplaceComponent(index, component);
+        ${Handle_Watched_Changes}
 
         return this;
     }
 
     public ${EntityType} Remove${ComponentName}() {
         RemoveComponent(${Index});
+        ${Handle_Watched_Changes}
 
         return this;
     }
@@ -48,6 +55,7 @@ ${memberAssignmentList}
         if (has${ComponentName})
         {
             RemoveComponent(${Index});
+            ${Handle_Watched_Changes}
         }
 
         return this;
@@ -72,8 +80,10 @@ ${memberAssignmentList}
                             : ${componentName}Component;
 
                     AddComponent(index, component);
+                    ${Handle_Watched_Changes}
                 } else {
                     RemoveComponent(index);
+                    ${Handle_Watched_Changes}
                 }
             }
         }
@@ -97,6 +107,12 @@ ${memberAssignmentList}
             var template = data.GetMemberData().Length == 0
                 ? FLAG_TEMPLATE
                 : STANDARD_TEMPLATE;
+
+            // [Watched] used to be wired into the atomic entity API only, so with the
+            // default plain API the marker component and its cleanup systems were
+            // generated and nothing ever set the flag.
+            template = WatchedChanges.Apply(template, HANDLE_WATCHED_CHANGES_KEY,
+                MARK_CHANGED_TEMPLATE, data.ShouldWatchChanges());
 
             var fileContent = template
                 .Replace("${memberAssignmentList}", getMemberAssignmentList(data.GetMemberData()))

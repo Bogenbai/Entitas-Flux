@@ -94,11 +94,16 @@ namespace Entitas.SourceGenerator.CodeGeneration
             return eventComponentName;
         }
 
-        public static string TrackingChangesComponentName(this ComponentData data)
-        {
-            string shortComponentName = data.GetTypeName().ToComponentName(true);
-            return shortComponentName + "Changed";
-        }
+        /// <summary>
+        /// Name of the generated {X}Changed marker component. It must match the class
+        /// WatchedComponentGenerator emits, which is built from the FLATTENED component
+        /// name — using the short name here made every generated reference to the marker
+        /// (lookup entry, matcher, cleanup system, the `is…Changed` assignment) point at
+        /// a type that does not exist, so [Watched] simply did not compile for a
+        /// component declared inside a namespace unless IgnoreNamespaces was on.
+        /// </summary>
+        public static string TrackingChangesComponentName(this ComponentData data) =>
+            data.ComponentName() + "Changed";
 
         public static string GetEventMethodArgs(this ComponentData data, EventData eventData, string args)
         {

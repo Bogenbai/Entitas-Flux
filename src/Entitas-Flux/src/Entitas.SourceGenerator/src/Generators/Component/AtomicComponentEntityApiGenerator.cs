@@ -189,14 +189,8 @@ ${memberAssignmentList}
 			else
 				template = STANDARD_TEMPLATE;
 
-			if (data.ShouldWatchChanges())
-			{
-				template = template.Replace(HANDLE_WATCHED_CHANGES_KEY, MARK_CHANGED_TEMPLATE);
-			}
-			else
-			{
-				template = template.Replace(HANDLE_WATCHED_CHANGES_KEY, string.Empty);
-			}
+			template = WatchedChanges.Apply(template, HANDLE_WATCHED_CHANGES_KEY,
+				MARK_CHANGED_TEMPLATE, data.ShouldWatchChanges());
 
 			var fileContent = template
 				.Replace("${memberAssignmentList}", GetMemberAssignmentList(data.GetMemberData()))
