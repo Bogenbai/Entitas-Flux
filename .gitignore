@@ -53,3 +53,6 @@ CodeCoverage/
 TestResult.xml
 nunit-*.xml
 *.DS_Store
+
+# BenchmarkDotNet run output — reports are published in PRs, not committed
+BenchmarkDotNet.Artifacts/

@@ -26,6 +26,8 @@ jobs:
         run: chmod +x ./src/Entitas-Flux/build.sh
 
       - name: Build (build.sh)
+        env:
+          FLUX_VERSION: ${{ github.ref_name }}
         run: ./src/Entitas-Flux/build.sh
 
       - name: Test (solution)

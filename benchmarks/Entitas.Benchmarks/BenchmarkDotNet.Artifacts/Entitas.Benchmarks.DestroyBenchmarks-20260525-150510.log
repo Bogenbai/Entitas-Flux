@@ -1,0 +1,138 @@
+// Validating benchmarks:
+// ***** BenchmarkRunner: Start   *****
+// ***** Found 1 benchmark(s) in total *****
+// ***** Building 1 exe(s) in Parallel: Start   *****
+// ***** Done, took 00:00:00 (0.02 sec)   *****
+// Found 1 benchmarks:
+//   DestroyBenchmarks.CreateDestroySparseChurn: ShortRun(Toolchain=InProcessEmitToolchain, IterationCount=3, LaunchCount=1, WarmupCount=3)
+
+// **************************
+// Benchmark: DestroyBenchmarks.CreateDestroySparseChurn: ShortRun(Toolchain=InProcessEmitToolchain, IterationCount=3, LaunchCount=1, WarmupCount=3)
+// *** Execute ***
+// Launch: 1 / 1
+// ! Failed to set up priority High for process System.Diagnostics.Process (Entitas.Benchma). Make sure you have the right permissions. Message: Permission denied
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.14.0
+// Runtime=.NET 8.0.5 (8.0.524.21615), Arm64 RyuJIT AdvSIMD
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AdvSIMD,AES,CRC32,DP,RDM,SHA1,SHA256 VectorSize=128
+// Job: Job-AIBOPT(Toolchain=InProcessEmitToolchain, IterationCount=3, LaunchCount=1, WarmupCount=3)
+
+OverheadJitting  1: 1 op, 101333.00 ns, 101.3330 us/op
+WorkloadJitting  1: 1 op, 2312750.00 ns, 2.3128 ms/op
+
+OverheadJitting  2: 16 op, 203750.00 ns, 12.7344 us/op
+WorkloadJitting  2: 16 op, 30441708.00 ns, 1.9026 ms/op
+
+WorkloadPilot    1: 16 op, 28510209.00 ns, 1.7819 ms/op
+WorkloadPilot    2: 32 op, 57044542.00 ns, 1.7826 ms/op
+WorkloadPilot    3: 64 op, 115037083.00 ns, 1.7975 ms/op
+WorkloadPilot    4: 128 op, 75321084.00 ns, 588.4460 us/op
+WorkloadPilot    5: 256 op, 94507208.00 ns, 369.1688 us/op
+WorkloadPilot    6: 512 op, 188571792.00 ns, 368.3043 us/op
+WorkloadPilot    7: 1024 op, 388437375.00 ns, 379.3334 us/op
+WorkloadPilot    8: 2048 op, 772293083.00 ns, 377.0962 us/op
+
+OverheadWarmup   1: 2048 op, 5125.00 ns, 2.5024 ns/op
+OverheadWarmup   2: 2048 op, 3459.00 ns, 1.6890 ns/op
+OverheadWarmup   3: 2048 op, 3084.00 ns, 1.5059 ns/op
+OverheadWarmup   4: 2048 op, 3291.00 ns, 1.6069 ns/op
+OverheadWarmup   5: 2048 op, 3292.00 ns, 1.6074 ns/op
+OverheadWarmup   6: 2048 op, 2875.00 ns, 1.4038 ns/op
+OverheadWarmup   7: 2048 op, 3291.00 ns, 1.6069 ns/op
+OverheadWarmup   8: 2048 op, 3208.00 ns, 1.5664 ns/op
+
+OverheadActual   1: 2048 op, 3708.00 ns, 1.8105 ns/op
+OverheadActual   2: 2048 op, 3333.00 ns, 1.6274 ns/op
+OverheadActual   3: 2048 op, 2834.00 ns, 1.3838 ns/op
+OverheadActual   4: 2048 op, 3417.00 ns, 1.6685 ns/op
+OverheadActual   5: 2048 op, 3208.00 ns, 1.5664 ns/op
+OverheadActual   6: 2048 op, 3291.00 ns, 1.6069 ns/op
+OverheadActual   7: 2048 op, 2916.00 ns, 1.4238 ns/op
+OverheadActual   8: 2048 op, 3209.00 ns, 1.5669 ns/op
+OverheadActual   9: 2048 op, 2917.00 ns, 1.4243 ns/op
+OverheadActual  10: 2048 op, 2917.00 ns, 1.4243 ns/op
+OverheadActual  11: 2048 op, 2917.00 ns, 1.4243 ns/op
+OverheadActual  12: 2048 op, 3125.00 ns, 1.5259 ns/op
+OverheadActual  13: 2048 op, 2833.00 ns, 1.3833 ns/op
+OverheadActual  14: 2048 op, 2875.00 ns, 1.4038 ns/op
+OverheadActual  15: 2048 op, 3208.00 ns, 1.5664 ns/op
+OverheadActual  16: 2048 op, 3375.00 ns, 1.6479 ns/op
+OverheadActual  17: 2048 op, 5000.00 ns, 2.4414 ns/op
+OverheadActual  18: 2048 op, 4292.00 ns, 2.0957 ns/op
+OverheadActual  19: 2048 op, 3250.00 ns, 1.5869 ns/op
+OverheadActual  20: 2048 op, 3041.00 ns, 1.4849 ns/op
+
+WorkloadWarmup   1: 2048 op, 752634542.00 ns, 367.4973 us/op
+WorkloadWarmup   2: 2048 op, 775384917.00 ns, 378.6059 us/op
+WorkloadWarmup   3: 2048 op, 798715500.00 ns, 389.9978 us/op
+
+WorkloadActual   1: 2048 op, 807937458.00 ns, 394.5007 us/op
+WorkloadActual   2: 2048 op, 837172292.00 ns, 408.7755 us/op
+WorkloadActual   3: 2048 op, 792198792.00 ns, 386.8158 us/op
+
+WorkloadResult   1: 2048 op, 807934250.00 ns, 394.4991 us/op
+WorkloadResult   2: 2048 op, 837169084.00 ns, 408.7740 us/op
+WorkloadResult   3: 2048 op, 792195584.00 ns, 386.8143 us/op
+// GC:  0 0 0 1024 2048
+// Threading:  0 0 2048
+
+
+Mean = 396.696 μs, StdErr = 6.434 μs (1.62%), N = 3, StdDev = 11.143 μs
+Min = 386.814 μs, Q1 = 390.657 μs, Median = 394.499 μs, Q3 = 401.637 μs, Max = 408.774 μs
+IQR = 10.980 μs, LowerFence = 374.187 μs, UpperFence = 418.106 μs
+ConfidenceInterval = [193.398 μs; 599.994 μs] (CI 99.9%), Margin = 203.298 μs (51.25% of Mean)
+Skewness = 0.19, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 0 (0,0 %) benchmark(s) to run. Estimated finish 2026-05-25 15:05 (0h 0m from now) **
+// ***** BenchmarkRunner: Finish  *****
+
+// * Export *
+  BenchmarkDotNet.Artifacts/results/Entitas.Benchmarks.DestroyBenchmarks-report.csv
+  BenchmarkDotNet.Artifacts/results/Entitas.Benchmarks.DestroyBenchmarks-report-github.md
+  BenchmarkDotNet.Artifacts/results/Entitas.Benchmarks.DestroyBenchmarks-report.html
+
+// * Detailed results *
+DestroyBenchmarks.CreateDestroySparseChurn: ShortRun(Toolchain=InProcessEmitToolchain, IterationCount=3, LaunchCount=1, WarmupCount=3)
+Runtime = ; GC = 
+Mean = 396.696 μs, StdErr = 6.434 μs (1.62%), N = 3, StdDev = 11.143 μs
+Min = 386.814 μs, Q1 = 390.657 μs, Median = 394.499 μs, Q3 = 401.637 μs, Max = 408.774 μs
+IQR = 10.980 μs, LowerFence = 374.187 μs, UpperFence = 418.106 μs
+ConfidenceInterval = [193.398 μs; 599.994 μs] (CI 99.9%), Margin = 203.298 μs (51.25% of Mean)
+Skewness = 0.19, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[380.516 μs ; 400.798 μs) | @@
+[400.798 μs ; 418.915 μs) | @
+---------------------------------------------------
+
+// * Summary *
+
+BenchmarkDotNet v0.14.0, macOS Sequoia 15.5 (24F74) [Darwin 24.5.0]
+Apple M1 Max, 1 CPU, 10 logical and 10 physical cores
+.NET SDK 9.0.303
+  [Host] : .NET 8.0.5 (8.0.524.21615), Arm64 RyuJIT AdvSIMD
+
+Job=ShortRun  Toolchain=InProcessEmitToolchain  IterationCount=3  
+LaunchCount=1  WarmupCount=3  
+
+| Method                   | Mean     | Error    | StdDev   | Allocated |
+|------------------------- |---------:|---------:|---------:|----------:|
+| CreateDestroySparseChurn | 396.7 μs | 203.3 μs | 11.14 μs |         - |
+
+// * Legends *
+  Mean      : Arithmetic mean of all measurements
+  Error     : Half of 99.9% confidence interval
+  StdDev    : Standard deviation of all measurements
+  Allocated : Allocated memory per single operation (managed only, inclusive, 1KB = 1024B)
+  1 μs      : 1 Microsecond (0.000001 sec)
+
+// * Diagnostic Output - MemoryDiagnoser *
+
+
+// ***** BenchmarkRunner: End *****
+Run time: 00:00:07 (7.65 sec), executed benchmarks: 1
+
+Global total time: 00:00:08 (8.07 sec), executed benchmarks: 1
+// * Artifacts cleanup *
+Artifacts cleanup is finished

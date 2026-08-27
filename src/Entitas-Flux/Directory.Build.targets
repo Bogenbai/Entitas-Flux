@@ -11,7 +11,14 @@
     <PackageTags>Entitas, ECS, Entity, Component, System, DesperateDevs, Desperate, Devs</PackageTags>
     <RepositoryUrl>https://github.com/sschmid/Entitas</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageVersion>1.14.1</PackageVersion>
+    <!--
+      Entitas-Flux's own version. It used to say 1.14.1, which is UPSTREAM Entitas's
+      version — a different product, and a guaranteed source of confusion once this fork
+      reaches 1.0. The release workflow overrides it with the tag being built.
+    -->
+    <FluxVersion Condition="'$(FluxVersion)' == ''">0.1.1</FluxVersion>
+    <PackageVersion>$(FluxVersion)</PackageVersion>
+    <Version>$(FluxVersion)</Version>
   </PropertyGroup>
 
 </Project>

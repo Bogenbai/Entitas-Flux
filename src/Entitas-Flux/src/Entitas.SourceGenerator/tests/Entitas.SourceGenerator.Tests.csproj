@@ -9,13 +9,12 @@
   </PropertyGroup>
 
   <!--
-    JennyBaseline/ holds the frozen Jenny golden output (the Phase 4 equivalence
-    reference). These are generated .cs files read from disk by the test, NOT part
-    of the test assembly — exclude them from compilation.
+    Snapshot/ holds the approved generator output. These are generated .cs files read
+    from disk by the test, NOT part of the test assembly — exclude them from compilation.
   -->
   <ItemGroup>
-    <Compile Remove="JennyBaseline/**/*.cs" />
-    <None Include="JennyBaseline/**/*.cs" />
+    <Compile Remove="Snapshot/**/*.cs" />
+    <None Include="Snapshot/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>

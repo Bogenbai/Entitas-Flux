@@ -46,6 +46,9 @@ Entitas.dll
 Entitas.CodeGeneration.Attributes.dll
 Entitas.Unity.dll
 Entitas.VisualDebugging.Unity.dll
+// Assets/Entitas/DesperateDevs:
+DesperateDevs.*.dll               ← third-party assemblies Entitas is built against
+Sherlog.dll
 // Assets/Entitas/Entitas/Editor:
 Entitas.Migration.dll
 Entitas.Migration.Unity.Editor.dll

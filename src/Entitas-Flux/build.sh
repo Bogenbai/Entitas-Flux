@@ -5,6 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOLUTION="$SCRIPT_DIR/Entitas.sln"
 CONFIG="${1:-Release}"
+# Version stamped into the built assemblies; CI passes the tag, locally it falls back
+# to whatever Directory.Build.targets declares.
+FLUX_VERSION="${FLUX_VERSION:-}"
 
 # temp build output and final artifacts
 TMP_OUT="$SCRIPT_DIR/.buildout"
@@ -24,6 +27,10 @@ MSBUILD_PROPS=(
 )
 
 dotnet clean "$SOLUTION" -c "$CONFIG" >/dev/null || true
+if [[ -n "$FLUX_VERSION" ]]; then
+  MSBUILD_PROPS+=("-p:FluxVersion=${FLUX_VERSION#v}")
+fi
+
 dotnet build "$SOLUTION" -c "$CONFIG" "${MSBUILD_PROPS[@]}"
 
 # Copy only the requested DLLs into requested subfolders (no flat copies)
@@ -42,19 +49,26 @@ copy_map_line() {
   fi
 }
 
-# mapping of dll -> subfolder (relative to Artifacts/)
+# Mapping of dll -> subfolder (relative to Artifacts/). DesperateDevs and Sherlog are
+# third-party assemblies Entitas itself is built against; shipping without them left a
+# fresh project unable to compile (the generated Feature class references
+# DesperateDevs.Extensions) — existing projects only worked because they still had the
+# copies from the original Entitas distribution.
 while IFS='|' read -r dll dest
 do
   copy_map_line "$dll" "$dest"
 done <<'EOF'
 Entitas.CodeGeneration.Attributes.dll|Assets/Entitas/Entitas
+DesperateDevs.Caching.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Extensions.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Reflection.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Serialization.dll|Assets/Entitas/DesperateDevs
+Sherlog.dll|Assets/Entitas/DesperateDevs
 Entitas.dll|Assets/Entitas/Entitas
 Entitas.SourceGenerator.dll|Assets/Entitas/Entitas/Analyzers
 Entitas.CodeFixes.dll|Assets/Entitas/Entitas/Analyzers
 Entitas.Unity.dll|Assets/Entitas/Entitas
 Entitas.VisualDebugging.Unity.dll|Assets/Entitas/Entitas
-Entitas.Migration.dll|Assets/Entitas/Entitas/Editor
-Entitas.Migration.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 Entitas.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 Entitas.VisualDebugging.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 EOF
