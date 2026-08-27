@@ -1,0 +1,15 @@
+{
+  "name": "com.bogenbai.entitas-flux",
+  "version": "0.2.0",
+  "displayName": "Entitas Flux",
+  "description": "A fork of the Entitas ECS framework: atomic components, [Watched] deferred reactivity, safe component removal, a searchable component dropdown, and compile-time code generation with a Roslyn source generator.",
+  "unity": "2022.3",
+  "author": {
+    "name": "Bogdan Kurilo",
+    "url": "https://github.com/Bogenbai"
+  },
+  "documentationUrl": "https://github.com/Bogenbai/Entitas-Flux",
+  "changelogUrl": "https://github.com/Bogenbai/Entitas-Flux/blob/master/CHANGELOG.md",
+  "licensesUrl": "https://github.com/Bogenbai/Entitas-Flux/blob/master/LICENSE",
+  "keywords": [ "entitas", "ecs", "entity", "component", "system", "source-generator" ]
+}
