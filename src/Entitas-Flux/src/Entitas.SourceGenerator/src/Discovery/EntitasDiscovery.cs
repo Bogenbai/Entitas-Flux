@@ -29,10 +29,12 @@ namespace Entitas.SourceGenerator.Discovery
     }
 
     /// <summary>
-    /// Single discovery entry point. Given a compilation (and the candidate types),
-    /// runs the ported data providers and returns the full discovery data model.
-    /// This is NOT yet wired into an IIncrementalGenerator (Phase 3); it is callable
-    /// directly from tests.
+    /// Single discovery entry point. Runs the data providers over a set of
+    /// <see cref="TypeSnapshot"/>s and returns the full data model.
+    ///
+    /// The incremental generator takes those snapshots per type declaration in the
+    /// syntax pipeline; the Compilation overloads below take them by walking the
+    /// assembly, which is what the CLIs and tests want.
     /// </summary>
     public static class EntitasDiscovery
     {
@@ -43,7 +45,10 @@ namespace Entitas.SourceGenerator.Discovery
             return Discover(types, resolver, ignoreNamespaces);
         }
 
-        public static DiscoveryResult Discover(INamedTypeSymbol[] types, ContextResolver resolver, bool ignoreNamespaces = false)
+        public static DiscoveryResult Discover(INamedTypeSymbol[] types, ContextResolver resolver, bool ignoreNamespaces = false) =>
+            Discover(types.Select(TypeSnapshot.From).ToArray(), resolver, ignoreNamespaces);
+
+        public static DiscoveryResult Discover(TypeSnapshot[] types, ContextResolver resolver, bool ignoreNamespaces = false)
         {
             var components = new ComponentDataProvider(types, resolver, ignoreNamespaces).GetData();
 
@@ -64,9 +69,10 @@ namespace Entitas.SourceGenerator.Discovery
         }
 
         /// <summary>
-        /// Collects all named types declared in the compilation's source assembly.
-        /// Phase 3 will narrow this via syntax predicates for incremental caching;
-        /// for discovery/tests we walk the global namespace.
+        /// Collects all named types declared in the compilation's source assembly. The
+        /// incremental generator does NOT use this — it snapshots type declarations from
+        /// the syntax pipeline so unchanged files are never revisited — but the CLIs and
+        /// tests, which start from a whole compilation, do.
         /// </summary>
         public static IEnumerable<INamedTypeSymbol> GetCandidateTypes(Compilation compilation)
         {

@@ -1,6 +1,5 @@
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
-using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Discovery
 {
@@ -11,11 +10,11 @@ namespace Entitas.SourceGenerator.Discovery
     /// </summary>
     public sealed class WatchedCleanupDataProvider
     {
-        readonly INamedTypeSymbol[] _types;
+        readonly TypeSnapshot[] _types;
         readonly ContextResolver _contextResolver;
         readonly bool _ignoreNamespaces;
 
-        public WatchedCleanupDataProvider(INamedTypeSymbol[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
+        public WatchedCleanupDataProvider(TypeSnapshot[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
         {
             _types = types;
             _contextResolver = contextResolver;
@@ -24,10 +23,8 @@ namespace Entitas.SourceGenerator.Discovery
 
         public WatchedCleanupData[] GetData()
         {
-            var componentInterface = WellKnownTypes.ComponentInterface;
-
             var watchedTypes = _types
-                .Where(t => t.AllInterfaces.Any(i => i.ToCompilableString() == componentInterface))
+                .Where(t => t.IsComponent)
                 .Where(t => !t.IsAbstract)
                 .Where(t => t.GetAttribute(AttributeNames.Watched) != null)
                 .ToArray();

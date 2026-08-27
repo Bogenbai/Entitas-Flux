@@ -1,6 +1,5 @@
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
-using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Discovery
 {
@@ -11,11 +10,11 @@ namespace Entitas.SourceGenerator.Discovery
     /// </summary>
     public sealed class CleanupDataProvider
     {
-        readonly INamedTypeSymbol[] _types;
+        readonly TypeSnapshot[] _types;
         readonly ContextResolver _contextResolver;
         readonly bool _ignoreNamespaces;
 
-        public CleanupDataProvider(INamedTypeSymbol[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
+        public CleanupDataProvider(TypeSnapshot[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
         {
             _types = types;
             _contextResolver = contextResolver;
@@ -24,17 +23,15 @@ namespace Entitas.SourceGenerator.Discovery
 
         public CleanupData[] GetData()
         {
-            var componentInterface = WellKnownTypes.ComponentInterface;
-
             var cleanupTypes = _types
-                .Where(type => type.AllInterfaces.Any(i => i.ToCompilableString() == componentInterface))
+                .Where(type => type.IsComponent)
                 .Where(type => !type.IsAbstract)
                 .Where(type => type.GetAttribute(AttributeNames.Cleanup) != null)
                 .ToArray();
 
             var cleanupLookup = cleanupTypes.ToDictionary(
-                type => type.ToCompilableString(),
-                type => (CleanupMode)(int)type.GetAttribute(AttributeNames.Cleanup)!.ConstructorArguments[0].Value!);
+                type => type.FullName,
+                type => (CleanupMode)int.Parse(type.GetAttribute(AttributeNames.Cleanup)!.Arguments[0]!));
 
             var componentDataProvider = new ComponentDataProvider(cleanupTypes, _contextResolver, _ignoreNamespaces);
 

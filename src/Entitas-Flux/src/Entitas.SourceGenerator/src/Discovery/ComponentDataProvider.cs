@@ -1,6 +1,5 @@
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
-using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Discovery
 {
@@ -12,12 +11,12 @@ namespace Entitas.SourceGenerator.Discovery
     /// </summary>
     public sealed class ComponentDataProvider
     {
-        readonly INamedTypeSymbol[] _types;
+        readonly TypeSnapshot[] _types;
         readonly ContextResolver _contextResolver;
         readonly IComponentDataProvider[] _dataProviders;
         readonly bool _ignoreNamespaces;
 
-        public ComponentDataProvider(INamedTypeSymbol[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
+        public ComponentDataProvider(TypeSnapshot[] types, ContextResolver contextResolver, bool ignoreNamespaces = false)
         {
             _types = types;
             _contextResolver = contextResolver;
@@ -45,16 +44,14 @@ namespace Entitas.SourceGenerator.Discovery
             // the legacy plugin), so set it before building any data.
             CodeGeneratorExtensions.ignoreNamespaces = _ignoreNamespaces;
 
-            var componentInterface = WellKnownTypes.ComponentInterface;
-
             var dataFromComponents = _types
-                .Where(type => type.AllInterfaces.Any(i => i.ToCompilableString() == componentInterface))
+                .Where(type => type.IsComponent)
                 .Where(type => !type.IsAbstract)
                 .Select(CreateDataForComponent)
                 .ToArray();
 
             var dataFromNonComponents = _types
-                .Where(type => !type.AllInterfaces.Any(i => i.ToCompilableString() == componentInterface))
+                .Where(type => !type.IsComponent)
                 .Where(type => !type.IsGenericType)
                 .Where(HasContexts)
                 .SelectMany(CreateDataForNonComponent)
@@ -93,7 +90,7 @@ namespace Entitas.SourceGenerator.Discovery
                 .ToArray();
         }
 
-        ComponentData CreateDataForComponent(INamedTypeSymbol type)
+        ComponentData CreateDataForComponent(TypeSnapshot type)
         {
             var data = new ComponentData();
             foreach (var provider in _dataProviders)
@@ -102,14 +99,14 @@ namespace Entitas.SourceGenerator.Discovery
             return data;
         }
 
-        ComponentData[] CreateDataForNonComponent(INamedTypeSymbol type) => GetComponentNames(type)
+        ComponentData[] CreateDataForNonComponent(TypeSnapshot type) => GetComponentNames(type)
             .Select(componentName =>
             {
                 var data = CreateDataForComponent(type);
                 data.SetTypeName(componentName.AddComponentSuffix());
                 data.SetMemberData(new[]
                 {
-                    new MemberData(type.ToCompilableString(), "value")
+                    new MemberData(type.FullName, "value")
                 });
 
                 return data;
@@ -153,15 +150,15 @@ namespace Entitas.SourceGenerator.Discovery
                 return dataForTrackingChanges;
             }).ToArray();
 
-        bool HasContexts(INamedTypeSymbol type) => _contextResolver.GetContextNames(type).Length != 0;
+        bool HasContexts(TypeSnapshot type) => _contextResolver.GetContextNames(type).Length != 0;
 
-        string[] GetComponentNames(INamedTypeSymbol type)
+        string[] GetComponentNames(TypeSnapshot type)
         {
             var attr = type.GetAttribute(AttributeNames.ComponentName);
             if (attr == null)
-                return new[] { type.ToCompilableString().TypeName().AddComponentSuffix() };
+                return new[] { type.FullName.TypeName().AddComponentSuffix() };
 
-            return attr.ConstructorArguments.First().Values.Select(arg => (string)arg.Value!).ToArray();
+            return attr.Arguments.Where(arg => arg != null).Select(arg => arg!).ToArray();
         }
     }
 }

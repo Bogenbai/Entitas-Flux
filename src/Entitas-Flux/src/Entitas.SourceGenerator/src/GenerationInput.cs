@@ -52,25 +52,54 @@ namespace Entitas.SourceGenerator
         static EntitasGenerationOptions DefaultOptions() =>
             new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, new string[0]);
 
+        /// <summary>
+        /// Walks the whole assembly. Used by the CLIs and by anything that starts from a
+        /// Compilation; the incremental generator instead snapshots type declarations as
+        /// they come out of the syntax pipeline and calls the overload below.
+        /// </summary>
         public static GenerationInput From(Compilation compilation)
         {
-            // Opt-in guard: must reference Entitas AND declare at least one context.
-            if (compilation.GetTypeByMetadataName(WellKnownTypes.ComponentInterface) is null)
+            var config = GenerationConfig.From(compilation);
+            if (!config.Enabled)
                 return Disabled;
 
-            var resolver = ContextResolver.FromCompilation(compilation);
-            if (resolver.ContextNames.Length == 0)
-                return Disabled;
+            try
+            {
+                CodeGeneratorExtensions.ignoreNamespaces = config.Options.IgnoreNamespaces;
+                var snapshots = EntitasDiscovery.GetCandidateTypes(compilation)
+                    .Select(TypeSnapshot.From)
+                    .ToArray();
 
-            var options = EntitasGenerators.ReadOptions(compilation);
+                return From(snapshots, config);
+            }
+            catch (Exception exception)
+            {
+                return new GenerationInput(
+                    false, config.ContextNames, config.Options, new CodeGeneratorData[0], Describe(exception));
+            }
+        }
+
+        public static GenerationInput From(IEnumerable<TypeSnapshot> snapshots, GenerationConfig config)
+        {
+            if (!config.Enabled)
+                return Disabled;
 
             try
             {
                 // Discovery reads this static (faithful to the legacy plugin).
-                CodeGeneratorExtensions.ignoreNamespaces = options.IgnoreNamespaces;
+                CodeGeneratorExtensions.ignoreNamespaces = config.Options.IgnoreNamespaces;
 
-                var types = EntitasDiscovery.GetCandidateTypes(compilation).ToArray();
-                var result = EntitasDiscovery.Discover(types, resolver, options.IgnoreNamespaces);
+                // A partial type yields one snapshot per declaration, and the syntax
+                // pipeline hands them over in tree order; dedupe and sort so the model is
+                // the same regardless of how many parts a type has or which file changed.
+                var types = snapshots
+                    .GroupBy(snapshot => snapshot.FullName, StringComparer.Ordinal)
+                    .Select(group => group.First())
+                    .OrderBy(snapshot => snapshot.FullName, StringComparer.Ordinal)
+                    .ToArray();
+
+                var resolver = new ContextResolver(config.ContextNames);
+                var result = EntitasDiscovery.Discover(types, resolver, config.Options.IgnoreNamespaces);
 
                 var data = new List<CodeGeneratorData>();
                 data.AddRange(result.Components);
@@ -79,12 +108,12 @@ namespace Entitas.SourceGenerator
                 data.AddRange(result.Cleanups);
                 data.AddRange(result.WatchedCleanups);
 
-                return new GenerationInput(true, resolver.ContextNames, options, data.ToArray(), null);
+                return new GenerationInput(true, config.ContextNames, config.Options, data.ToArray(), null);
             }
             catch (Exception exception)
             {
                 return new GenerationInput(
-                    false, resolver.ContextNames, options, new CodeGeneratorData[0], Describe(exception));
+                    false, config.ContextNames, config.Options, new CodeGeneratorData[0], Describe(exception));
             }
         }
 
@@ -189,6 +218,59 @@ namespace Entitas.SourceGenerator
                 return DataEquals(leftData, rightData);
 
             return left.Equals(right);
+        }
+    }
+
+    /// <summary>
+    /// The assembly-level half of the input: whether this assembly opted in, its
+    /// contexts and its generation options. Cheap to recompute and compared by value, so
+    /// it does not by itself invalidate anything downstream.
+    /// </summary>
+    public sealed class GenerationConfig : IEquatable<GenerationConfig>
+    {
+        public static readonly GenerationConfig Disabled = new GenerationConfig(
+            false, new string[0], new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, new string[0]));
+
+        public bool Enabled { get; }
+        public string[] ContextNames { get; }
+        public EntitasGenerationOptions Options { get; }
+
+        public GenerationConfig(bool enabled, string[] contextNames, EntitasGenerationOptions options)
+        {
+            Enabled = enabled;
+            ContextNames = contextNames;
+            Options = options;
+        }
+
+        public static GenerationConfig From(Compilation compilation)
+        {
+            // Opt-in guard: must reference Entitas AND declare at least one context.
+            if (compilation.GetTypeByMetadataName(WellKnownTypes.ComponentInterface) is null)
+                return Disabled;
+
+            var contextNames = ContextResolver.FromCompilation(compilation).ContextNames;
+            if (contextNames.Length == 0)
+                return Disabled;
+
+            return new GenerationConfig(true, contextNames, EntitasGenerators.ReadOptions(compilation));
+        }
+
+        public bool Equals(GenerationConfig? other) =>
+            other != null &&
+            Enabled == other.Enabled &&
+            ContextNames.SequenceEqual(other.ContextNames, StringComparer.Ordinal) &&
+            Options.Equals(other.Options);
+
+        public override bool Equals(object? obj) => Equals(obj as GenerationConfig);
+
+        public override int GetHashCode()
+        {
+            var hash = Enabled ? 17 : 23;
+            hash = unchecked(hash * 31 + Options.GetHashCode());
+            foreach (var name in ContextNames)
+                hash = unchecked(hash * 31 + StringComparer.Ordinal.GetHashCode(name));
+
+            return hash;
         }
     }
 

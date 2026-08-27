@@ -13,19 +13,36 @@ namespace Entitas.SourceGenerator
     /// ported code generator over the discovered data model and emits each
     /// resulting fragment as its own compilation unit.
     ///
-    /// Pipeline note: the compilation is projected into <see cref="GenerationInput"/> —
-    /// a value holding only strings, bools and the data POCOs — and generation hangs off
-    /// THAT. Roslyn re-runs the projection on every keystroke (discovery needs the full
-    /// semantic model plus the assembly-level [ContextDefinition] list), but compares the
-    /// result by value, so editing a method body or a comment leaves the input equal and
-    /// the whole generation half of the pipeline is skipped.
+    /// Pipeline: the compilation is projected into a <see cref="GenerationInput"/> — a
+    /// value built from per-type <see cref="TypeSnapshot"/>s, holding no symbols and no
+    /// syntax — and generation hangs off THAT. Roslyn re-runs the projection on every
+    /// keystroke (deciding what is a component is semantic), but compares its result by
+    /// value, so an edit that changes no component, attribute or config leaves the input
+    /// equal and the entire generation half of the pipeline is skipped.
+    ///
+    /// This is why snapshots and the input model must stay equatable and free of
+    /// anything rooted in a compilation. Put a symbol in there and the caching silently
+    /// stops working (see IncrementalityTests).
     /// </summary>
     [Generator(LanguageNames.CSharp)]
     public sealed class EntitasIncrementalGenerator : IIncrementalGenerator
     {
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
-            var pipeline = context.CompilationProvider.Select((compilation, _) => GenerationInput.From(compilation));
+            // NOTE: a SyntaxProvider pipeline (snapshot each type declaration, collect,
+            // combine with the config) was built and measured against this one on a real
+            // 2247-file project. It was 3.8x SLOWER per keystroke (146 ms vs 38 ms) and
+            // 2.2x slower cold. The reason is structural, not a tuning problem: deciding
+            // whether a type is a component is a SEMANTIC question, and Roslyn re-runs
+            // every semantic transform when the compilation changes — a single-file edit
+            // re-ran the snapshot transform 2968 times — so the syntax pipeline redoes
+            // all of the work anyway and adds per-node bookkeeping on top.
+            // ForAttributeWithMetadataName would avoid that, but only for attribute-
+            // marked types, and a component here is defined by implementing IComponent.
+            // Narrowing the predicate changed nothing (145 ms). Don't re-try this without
+            // new measurements.
+            var pipeline = context.CompilationProvider.Select(static (compilation, _) => GenerationInput.From(compilation));
+
             context.RegisterSourceOutput(pipeline, Execute);
         }
 

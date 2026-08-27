@@ -202,7 +202,7 @@ namespace Entitas.SourceGenerator.Rename
         {
             try
             {
-                return ContextResolver.FromCompilation(compilation).GetContextNames(target);
+                return ContextResolver.FromCompilation(compilation).GetContextNames(TypeSnapshot.From(target));
             }
             catch
             {
