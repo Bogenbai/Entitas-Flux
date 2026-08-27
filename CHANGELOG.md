@@ -11,6 +11,8 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-27
+
 ### Added
 - **`ENT0003`** — a component in a different assembly than the contexts now says so.
   Generation runs per assembly, into the one declaring the contexts, so such a component
@@ -182,7 +184,8 @@ First release of the fork.
 - **Safe component removal** — `SafeRemoveX()` instead of guarding every `RemoveX()`.
 - **Searchable component dropdown** in the Unity inspector.
 
-[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.0.7...v0.1.0
