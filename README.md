@@ -6,6 +6,71 @@ Don’t expect major changes or a big redesign like [Entitas Redux](https://gith
 ![CI](https://github.com/Bogenbai/Entitas-Flux/actions/workflows/ci.yml/badge.svg)
 ![Release](https://github.com/Bogenbai/Entitas-Flux/actions/workflows/release-on-tag.yml/badge.svg)
 
+## Contents
+
+- [Installation](#installation)
+- [Features](#features)
+  - [Atomic components](#atomic-components)
+  - [Watched attribute](#watched-attribute)
+  - [Friendly Component Dropdown](#friendly-component-dropdown)
+  - [Safe component removal](#safe-component-removal)
+  - [Renaming components](#renaming-components)
+  - [Defines](#defines)
+- [Code generation](#code-generation)
+- [Configuring generation](#configuring-generation--entitasgenerationcs)
+- [Debugging a mutation](#debugging-a-mutation--debughooks)
+- [Renaming a component](#renaming-a-component--renameto)
+- [License](#license)
+
+## Installation
+
+> **Requires Unity 2022.3+** (Roslyn 4.x, needed for the incremental source generator). Verified against 2022.3 LTS and Unity 6.
+
+**Package Manager (recommended).** *Window → Package Manager → + → Install package from git URL*:
+
+```
+https://github.com/Bogenbai/Entitas-Flux.git#upm
+```
+
+or pin a version: `https://github.com/Bogenbai/Entitas-Flux.git#upm/v0.1.0`. Everything arrives configured — the analyzer DLLs already carry the `RoslynAnalyzer` label, so there is nothing to set up by hand.
+
+<details>
+<summary><b>Manual install</b> (no Package Manager)</summary>
+
+Download the `Entitas-Flux-vX.X.X` archive from [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and copy the DLLs, which are organized by destination folder:
+
+```
+// Assets/Entitas/Entitas:
+Entitas.dll
+Entitas.CodeGeneration.Attributes.dll
+Entitas.Unity.dll
+Entitas.VisualDebugging.Unity.dll
+// Assets/Entitas/Entitas/Editor:
+Entitas.Migration.dll
+Entitas.Migration.Unity.Editor.dll
+Entitas.Unity.Editor.dll
+Entitas.VisualDebugging.Unity.Editor.dll
+// Assets/Entitas/Entitas/Analyzers:
+Entitas.SourceGenerator.dll      ← the Roslyn source generator
+Entitas.CodeFixes.dll            ← IDE quick fixes, e.g. [RenameTo]
+```
+
+**The analyzer DLLs are special.** Select **both** `Entitas.SourceGenerator.dll` and `Entitas.CodeFixes.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed them to the compiler instead of trying to load them as managed plugins.
+</details>
+
+Then add an `EntitasGeneration.cs` declaring your contexts and options — that one file is all the setup there is:
+
+```cs
+using Entitas.CodeGeneration.Attributes;
+
+[assembly: ContextDefinition("Game")]    // the first one is the DEFAULT context
+[assembly: ContextDefinition("Input")]
+```
+
+See [Configuring generation](#configuring-generation--entitasgenerationcs) for the rest of the options.
+
+> **Coming from Entitas or an older Entitas-Flux?** Delete the old `Jenny/` folder, the `*.CodeGeneration.Plugins.dll`s, any `JennyRoslyn.properties`, any committed `Generated/` folders, and the Entitas DLLs previously copied into `Assets/`. None of them are used anymore, and a leftover copy will clash with the package.
+
 ## Features
 ### Atomic components
 Components that have a single field are generated with a single property, which simplifies access to the value:
@@ -65,52 +130,6 @@ Generated code isn't on disk anymore, so renaming a component used to mean fixin
 `ENTITAS_HIDE_STANDARD_MEMBERS` - hides standard generated component members that start with a lowercase letter in atomic components.
 
 ### More features coming soon (or not)
-
-## How to use
-> **Requires Unity 2022.3+** (Roslyn 4.x, needed for the incremental source generator). Verified against 2022.3 LTS and Unity 6.
-
-### If you start fresh
-Just create a new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
-
-### If you already have Entitas in the project
-
-**Package Manager (recommended).** *Window → Package Manager → + → Install package from git URL*:
-
-```
-https://github.com/Bogenbai/Entitas-Flux.git#upm
-```
-
-or pin a version: `https://github.com/Bogenbai/Entitas-Flux.git#upm/v0.1.0`. Everything arrives configured — the analyzer DLLs already carry the `RoslynAnalyzer` label, so there is nothing to set up by hand.
-
-Then:
-1. **Delete Jenny and the old Entitas.** Remove the old `Jenny/` folder, the `*.CodeGeneration.Plugins.dll`s, any `JennyRoslyn.properties`, any committed `Generated/` folders, and the Entitas DLLs you previously copied into `Assets/` — none of them are used anymore, and a leftover copy will clash with the package.
-2. Add an `EntitasGeneration.cs` declaring your contexts and options — see [Configuring generation](#configuring-generation--entitasgenerationcs).
-
-<details>
-<summary><b>Manual install</b> (no Package Manager)</summary>
-
-Download the `Entitas-Flux-vX.X.X` archive from [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and copy the DLLs, which are organized by destination folder:
-
-```
-// Assets/Entitas/Entitas:
-Entitas.dll
-Entitas.CodeGeneration.Attributes.dll
-Entitas.Unity.dll
-Entitas.VisualDebugging.Unity.dll
-// Assets/Entitas/Entitas/Editor:
-Entitas.Migration.dll
-Entitas.Migration.Unity.Editor.dll
-Entitas.Unity.Editor.dll
-Entitas.VisualDebugging.Unity.Editor.dll
-// Assets/Entitas/Entitas/Analyzers:
-Entitas.SourceGenerator.dll      ← the Roslyn source generator
-Entitas.CodeFixes.dll            ← IDE quick fixes, e.g. [RenameTo]
-```
-
-**The analyzer DLLs are special.** Select **both** `Entitas.SourceGenerator.dll` and `Entitas.CodeFixes.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed them to the compiler instead of trying to load them as managed plugins.
-
-Then do steps 1–2 above.
-</details>
 
 ## Code generation
 Entitas-Flux generates the whole ECS API — contexts, entities, matchers, component accessors, events, and the cleanup/watched systems — at **compile time** with a Roslyn [incremental source generator](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview). It replaced the old Jenny pipeline, so:
