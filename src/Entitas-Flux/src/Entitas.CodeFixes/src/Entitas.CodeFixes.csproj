@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    IDE-only companion to Entitas.SourceGenerator: the quick fix for ENT0001
+    ([RenameTo] pending rename). It is a SEPARATE assembly on purpose — CodeFixProvider
+    lives in Microsoft.CodeAnalysis.Workspaces, which the compiler (Unity's included)
+    does not load, while IDEs do. Keeping it out of the generator DLL means the
+    compile path never has to resolve Workspaces.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- Keeps the Workspaces assemblies in bin/ so they are at hand if an IDE needs them supplied. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Not PrivateAssets: the Workspaces assemblies stay in bin/ so they can be copied
+      next to this DLL if an IDE turns out not to provide them itself.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Entitas.SourceGenerator\src\Entitas.SourceGenerator.csproj" />
+  </ItemGroup>
+
+</Project>

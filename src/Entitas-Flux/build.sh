@@ -50,6 +50,7 @@ done <<'EOF'
 Entitas.CodeGeneration.Attributes.dll|Assets/Entitas/Entitas
 Entitas.dll|Assets/Entitas/Entitas
 Entitas.SourceGenerator.dll|Assets/Entitas/Entitas/Analyzers
+Entitas.CodeFixes.dll|Assets/Entitas/Entitas/Analyzers
 Entitas.Unity.dll|Assets/Entitas/Entitas
 Entitas.VisualDebugging.Unity.dll|Assets/Entitas/Entitas
 Entitas.Migration.dll|Assets/Entitas/Entitas/Editor

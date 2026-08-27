@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    entitas-rename: renames a component and every identifier the source generator
+    derives from its name, across a Unity project. It reuses the generator engine
+    (Entitas.SourceGenerator) to work out WHICH identifiers change, by regenerating
+    the code under the new name and diffing the declarations.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>entitas-rename</AssemblyName>
+    <RootNamespace>Entitas.Rename</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>entitas-rename</ToolCommandName>
+    <PackageId>Entitas.Rename</PackageId>
+    <Description>Renames an Entitas component and every identifier the source generator derives from it.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Entitas.SourceGenerator\src\Entitas.SourceGenerator.csproj" />
+  </ItemGroup>
+
+  <!-- Shared with entitas-gen so both see the exact same Unity project model. -->
+  <ItemGroup>
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\ProjectLoader.cs" Link="ProjectLoader.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
+  </ItemGroup>
+
+</Project>

@@ -15,6 +15,7 @@ namespace Entitas.SourceGenerator.CodeGeneration
         public const string DontGenerate = Ns + "DontGenerateAttribute";
         public const string Event = Ns + "EventAttribute";
         public const string ComponentName = Ns + "ComponentNameAttribute";
+        public const string RenameTo = Ns + "RenameToAttribute";
         public const string Cleanup = Ns + "CleanupAttribute";
         public const string CustomEntityIndex = Ns + "CustomEntityIndexAttribute";
         public const string EntityIndexGetMethod = Ns + "EntityIndexGetMethodAttribute";
