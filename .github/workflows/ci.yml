@@ -11,9 +11,13 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
-  schedule:
-      - cron: '0 5 * * 1'   # Monday 05:00 UTC
   workflow_dispatch:       # manual start from Actions tab
+
+# NOTE: no `schedule:` on purpose. GitHub auto-disables workflows that have a cron
+# trigger in repositories with no activity for ~60 days — and it disables the WHOLE
+# workflow, so push and pull_request checks die silently with it. That is exactly what
+# happened between v0.0.6 (June) and v0.1.0: PRs #6 and #7 got no checks at all and
+# nobody noticed. A weekly rebuild of unchanged code is not worth that risk.
 
 concurrency:
   group: ci-${{ github.ref }}
