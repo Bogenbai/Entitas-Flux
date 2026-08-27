@@ -5,6 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOLUTION="$SCRIPT_DIR/Entitas.sln"
 CONFIG="${1:-Release}"
+# Version stamped into the built assemblies; CI passes the tag, locally it falls back
+# to whatever Directory.Build.targets declares.
+FLUX_VERSION="${FLUX_VERSION:-}"
 
 # temp build output and final artifacts
 TMP_OUT="$SCRIPT_DIR/.buildout"
@@ -24,6 +27,10 @@ MSBUILD_PROPS=(
 )
 
 dotnet clean "$SOLUTION" -c "$CONFIG" >/dev/null || true
+if [[ -n "$FLUX_VERSION" ]]; then
+  MSBUILD_PROPS+=("-p:FluxVersion=${FLUX_VERSION#v}")
+fi
+
 dotnet build "$SOLUTION" -c "$CONFIG" "${MSBUILD_PROPS[@]}"
 
 # Copy only the requested DLLs into requested subfolders (no flat copies)
