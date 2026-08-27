@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>Entitas.Benchmarks.CoreBenchmarks-20260827-172948</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.14.0, macOS Sequoia 15.5 (24F74) [Darwin 24.5.0]
+Apple M1 Max, 1 CPU, 10 logical and 10 physical cores
+.NET SDK 9.0.303
+  [Host] : .NET 8.0.5 (8.0.524.21615), Arm64 RyuJIT AdvSIMD
+</code></pre>
+<pre><code>Job=ShortRun  Toolchain=InProcessEmitToolchain  IterationCount=3  
+LaunchCount=1  WarmupCount=3  
+</code></pre>
+
+<table>
+<thead><tr><th>Method             </th><th>Mean </th><th>Error </th><th>StdDev</th><th>Gen0</th><th>Gen1</th><th>Gen2</th><th>Allocated</th>
+</tr>
+</thead><tbody><tr><td>CreateDestroy</td><td>4,614.26 &mu;s</td><td>3,195.360 &mu;s</td><td>175.148 &mu;s</td><td>890.6250</td><td>539.0625</td><td>359.3750</td><td>5302656 B</td>
+</tr><tr><td>CreateDestroyNew</td><td>4,746.56 &mu;s</td><td>753.003 &mu;s</td><td>41.275 &mu;s</td><td>921.8750</td><td>632.8125</td><td>273.4375</td><td>5302164 B</td>
+</tr><tr><td>ComponentChurnWithGroups</td><td>891.11 &mu;s</td><td>144.685 &mu;s</td><td>7.931 &mu;s</td><td>-</td><td>-</td><td>-</td><td>1 B</td>
+</tr><tr><td>SingleGroupChurn</td><td>533.20 &mu;s</td><td>218.391 &mu;s</td><td>11.971 &mu;s</td><td>-</td><td>-</td><td>-</td><td>1 B</td>
+</tr><tr><td>MatcherMatches</td><td>44.84 &mu;s</td><td>25.519 &mu;s</td><td>1.399 &mu;s</td><td>-</td><td>-</td><td>-</td><td>-</td>
+</tr><tr><td>ComponentRead</td><td>34.24 &mu;s</td><td>4.474 &mu;s</td><td>0.245 &mu;s</td><td>-</td><td>-</td><td>-</td><td>-</td>
+</tr><tr><td>UniqueAccessorGetGroup</td><td>166.92 &mu;s</td><td>13.302 &mu;s</td><td>0.729 &mu;s</td><td>-</td><td>-</td><td>-</td><td>-</td>
+</tr><tr><td>UniqueAccessorCachedGroup</td><td>21.38 &mu;s</td><td>4.276 &mu;s</td><td>0.234 &mu;s</td><td>-</td><td>-</td><td>-</td><td>-</td>
+</tr><tr><td>EntityIndexChurn</td><td>1,101.90 &mu;s</td><td>32.343 &mu;s</td><td>1.773 &mu;s</td><td>-</td><td>-</td><td>-</td><td>2 B</td>
+</tr></tbody></table>
+</body>
+</html>

@@ -14,8 +14,19 @@
     <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
   </ItemGroup>
 
-  <ItemGroup>
+  <!--
+    The benchmarks compile against either this fork or the upstream Entitas they forked
+    from, chosen with -p:UseUpstream=true. Both ship an assembly literally called
+    Entitas.dll, so they cannot sit in one output folder, and the benchmark code itself
+    needs no #if: the API these benchmarks use is identical in both.
+  -->
+  <ItemGroup Condition="'$(UseUpstream)' != 'true'">
     <ProjectReference Include="..\..\src\Entitas-Flux\src\Entitas\src\Entitas.csproj" />
   </ItemGroup>
+
+  <ItemGroup Condition="'$(UseUpstream)' == 'true'">
+    <PackageReference Include="Entitas" Version="1.14.1" />
+  </ItemGroup>
+
 
 </Project>
