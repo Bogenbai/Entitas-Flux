@@ -35,7 +35,10 @@ jobs:
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x'
+          # 6.0 builds the framework and its tests; 8.0 is only for the benchmarks.
+          dotnet-version: |
+            6.0.x
+            8.0.x
 
       - name: Make build.sh executable
         run: chmod +x ./src/Entitas-Flux/build.sh
@@ -45,6 +48,12 @@ jobs:
 
       - name: Test (solution)
         run: dotnet test ./src/Entitas-Flux/Entitas.sln --nologo --configuration Release
+
+      # Built, not run: shared runners share their CPU, so timings from them would be
+      # noise dressed up as data. Building still catches a benchmark that stopped
+      # compiling after a refactor — see benchmarks/README.md for how to measure.
+      - name: Build benchmarks
+        run: dotnet build ./benchmarks/Entitas.Benchmarks -c Release --nologo
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
