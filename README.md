@@ -67,13 +67,30 @@ Generated code isn't on disk anymore, so renaming a component used to mean fixin
 ### More features coming soon (or not)
 
 ## How to use
-> **Requires Unity 2022.3+** (Roslyn 4.x, needed for the incremental source generator).
+> **Requires Unity 2022.3+** (Roslyn 4.x, needed for the incremental source generator). Verified against 2022.3 LTS and Unity 6.
 
 ### If you start fresh
 Just create a new repo using [THIS](https://github.com/Bogenbai/Entitas-Flux-Template) as a template.
 
 ### If you already have Entitas in the project
-1. Go to [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and download the Entitas-Flux-vX.X.X archive (framework DLLs + the source-generator analyzer). The DLLs are organized by folder so it's easy to see where each goes:
+
+**Package Manager (recommended).** *Window → Package Manager → + → Install package from git URL*:
+
+```
+https://github.com/Bogenbai/Entitas-Flux.git#upm
+```
+
+or pin a version: `https://github.com/Bogenbai/Entitas-Flux.git#upm/v0.1.0`. Everything arrives configured — the analyzer DLLs already carry the `RoslynAnalyzer` label, so there is nothing to set up by hand.
+
+Then:
+1. **Delete Jenny and the old Entitas.** Remove the old `Jenny/` folder, the `*.CodeGeneration.Plugins.dll`s, any `JennyRoslyn.properties`, any committed `Generated/` folders, and the Entitas DLLs you previously copied into `Assets/` — none of them are used anymore, and a leftover copy will clash with the package.
+2. Add an `EntitasGeneration.cs` declaring your contexts and options — see [Configuring generation](#configuring-generation--entitasgenerationcs).
+
+<details>
+<summary><b>Manual install</b> (no Package Manager)</summary>
+
+Download the `Entitas-Flux-vX.X.X` archive from [Releases](https://github.com/Bogenbai/Entitas-Flux/releases) and copy the DLLs, which are organized by destination folder:
+
 ```
 // Assets/Entitas/Entitas:
 Entitas.dll
@@ -86,12 +103,14 @@ Entitas.Migration.Unity.Editor.dll
 Entitas.Unity.Editor.dll
 Entitas.VisualDebugging.Unity.Editor.dll
 // Assets/Entitas/Entitas/Analyzers:
-Entitas.SourceGenerator.dll      ← the Roslyn source generator (see below)
+Entitas.SourceGenerator.dll      ← the Roslyn source generator
 Entitas.CodeFixes.dll            ← IDE quick fixes, e.g. [RenameTo]
 ```
-2. **The analyzer DLLs are special.** Select **both** `Entitas.SourceGenerator.dll` and `Entitas.CodeFixes.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed them to the compiler instead of trying to load them as managed plugins.
-3. **Delete Jenny.** Remove the old `Jenny/` folder, the `*.CodeGeneration.Plugins.dll`s, any `JennyRoslyn.properties`, and any committed `Generated/` folders — none of them are used anymore. Generation now happens entirely inside the compiler.
-4. Add an `EntitasGeneration.cs` declaring your contexts and options — see [Configuring generation](#configuring-generation--entitasgenerationcs).
+
+**The analyzer DLLs are special.** Select **both** `Entitas.SourceGenerator.dll` and `Entitas.CodeFixes.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed them to the compiler instead of trying to load them as managed plugins.
+
+Then do steps 1–2 above.
+</details>
 
 ## Code generation
 Entitas-Flux generates the whole ECS API — contexts, entities, matchers, component accessors, events, and the cleanup/watched systems — at **compile time** with a Roslyn [incremental source generator](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview). It replaced the old Jenny pipeline, so:
@@ -100,6 +119,8 @@ Entitas-Flux generates the whole ECS API — contexts, entities, matchers, compo
 - **No committed `Generated/` folders.** The generated code lives in the compiler's output, not on disk.
 - **Components are discovered from the compilation** — any class implementing `IComponent`, plus its context/`[Watched]`/`[Unique]`/etc. attributes. No external config files.
 - **IDE-native.** Rider/Visual Studio see the generated API immediately; Cmd/Ctrl-click navigates straight into it.
+- **Incremental.** Generation is keyed on the components, their attributes and your generation config — nothing else. Editing a method body or a comment re-runs nothing.
+- **Loud when it breaks.** A generator that fails reports `ENT0100` naming itself and the reason, instead of silently leaving a hole in the API for you to find via a hundred errors in your own code.
 
 > Want the generated files on disk anyway (e.g. to read them, diff them, or step through with a breakpoint)? The repo ships an `entitas-gen` CLI that writes the same output to real `.cs` files from your `Assembly-CSharp.csproj`. It's optional — the analyzer is the default path.
 
