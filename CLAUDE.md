@@ -39,6 +39,8 @@ The key layers of the solution (`src/Entitas-Flux/Entitas.sln`):
 
 **Source Generator** (`src/Entitas-Flux/src/Entitas.SourceGenerator/`) — A Roslyn `IIncrementalGenerator` that generates the ECS API (contexts, entities, matchers, component accessors, events, cleanup/watched systems) at **compile time**. It replaced the previous Jenny CLI pipeline: there is no separate generation step and no committed `Generated/` folders — consuming projects reference it as an analyzer (`OutputItemType="Analyzer"`). It is a netstandard2.0 analyzer depending only on `Microsoft.CodeAnalysis.CSharp`. Internals: `src/Discovery/` (semantic-model data providers that build the data model from the current compilation) → `src/Generators/` (the ported string-template generators) → `EntitasIncrementalGenerator` (wires them and emits each fragment via `AddSource`).
 
+**Standalone CLIs** — `Entitas.SourceGenerator.Cli` (`entitas-gen`, writes the generated code to disk as real .cs files) and `Entitas.Rename` (`entitas-rename`, renames a component and every identifier derived from it). Both turn a Unity-generated `Assembly-CSharp.csproj` into a Roslyn `Compilation` through the shared `ProjectLoader` (`src/Entitas.SourceGenerator.Cli/src/ProjectLoader.cs`, linked into the rename tool) and then drive the same generator engine.
+
 **Unity Integration** — `Entitas.Unity`, `Entitas.Unity.Editor`, `Entitas.VisualDebugging.*` projects provide Unity inspector/editor tooling.
 
 **Migration** — `Entitas.Migration` and related projects handle upgrading between Entitas versions.
@@ -79,6 +81,32 @@ foreach (var gen in EntitasGenerators.Default(compilation))      // built-ins
     Emit(spc, taken, gen.Generate(data));
 Emit(spc, taken, new MyGenerator().Generate(data));             // your AbstractGenerator
 ```
+
+### Renaming a component
+
+Generated code no longer lives on disk, so an IDE rename of a component class does not reach the members the generator derives from its name (`GameMatcher.Health`, `entity.health`, `hasHealth`, `AddHealth`, `SafeRemoveHealth`, `HealthChanged`, `IAnyHealthListener`, …) — those are declared in read-only generated documents. The supported way to rename is `[RenameTo]`:
+
+```csharp
+[RenameTo("Hp")]
+[Game] public class Health : IComponent { public int Value; }
+```
+
+`Alt+Enter` on the attribute → *"Rename component 'Health' to 'Hp' and update all usages"*. The attribute is inert (generation ignores it), so the project keeps compiling between marking and applying. See `src/Entitas.CodeFixes/README.md`.
+
+The same engine runs from the terminal when the IDE is not an option:
+
+```bash
+# dry run: identifier map, every usage, the file move
+dotnet run --project src/Entitas-Flux/src/Entitas.Rename/src -- Health Hp -r <unity-project>
+
+# the same with -a applies the changes
+```
+
+Options: `-a/--apply`, `-r/--root <dir>` (where to look for the csproj, default cwd), `-p/--project <csproj>`, `-s/--include-strings` (also rewrite string literals and comments), `-k/--keep-file-name`. The CLI is deliberately not installed as a global tool: the identifier map comes out of the generator engine, so a tool version that drifts from the generator the project compiles with would compute the wrong names.
+
+`RenameEngine` (`src/Entitas.SourceGenerator/src/Rename/`) is shared by both fronts, and its identifier map is **not** hand-maintained: it calls `EntitasGenerators.Generate` twice — on the compilation as-is, and on a copy where only the component's declaration (plus any `[ComponentName("…")]` argument) is renamed — and diffs the *declared* names of both outputs. What the generator stops declaring, paired with what it starts declaring, is the map. New generators or changed naming rules need no change here; anything the diff cannot pair is reported as a warning instead of being renamed silently. Usages are then resolved through a semantic model of the project **plus the generated trees**, so only members that really come from generated Entitas code (or the component type itself) are rewritten — `monster.Health` on an unrelated type is left alone. The CLI additionally moves the component's `.cs` together with its Unity `.cs.meta` (via `git mv` when tracked) so the asset GUID survives.
+
+Usages are also rewritten in assemblies that merely *reference* the declaring one (Editor assemblies, test asmdefs), where the generated API is visible only through an assembly reference: `ExternalRename.CollectEdits` accepts an identifier whose symbol comes from the declaring assembly and belongs to the component or to a generator-declared type (`GameEntity`, `GameMatcher`, `GameComponentsLookup`, …). These are collected before the declaring assembly is rewritten, since afterwards the old names stop resolving. The code fix walks the solution's referencing projects; the CLI compiles the sibling csprojs that mention the declaring one and wires them to its live compilation via `ToMetadataReference()`.
 
 ### Flux-Specific Features
 

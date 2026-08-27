@@ -52,6 +52,14 @@ Under the hood it does this:
 if (hasBoxCollider2D) 
     RemoveComponent(GameComponentsLookup.BoxCollider2D);
 ```
+### Renaming components
+Generated code isn't on disk anymore, so renaming a component used to mean fixing every `entity.isCanAttack` and `GameMatcher.CanAttack` by hand. Mark it instead, and let the IDE do all of it:
+```cs
+[RenameTo("AbleToAttack")]
+[Game] public class CanAttack : IComponent { }
+```
+`Alt+Enter` on the attribute → *"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"*. See [Renaming a component](#renaming-a-component--renameto).
+
 ### Defines
 `ENTITAS_DISABLE_REACTIVITY` - partially disables Entitas' default reactivity. Gives small performance boost.
 `ENTITAS_HIDE_STANDARD_MEMBERS` - hides standard generated component members that start with a lowercase letter in atomic components.
@@ -79,8 +87,9 @@ Entitas.Unity.Editor.dll
 Entitas.VisualDebugging.Unity.Editor.dll
 // Assets/Entitas/Entitas/Analyzers:
 Entitas.SourceGenerator.dll      ← the Roslyn source generator (see below)
+Entitas.CodeFixes.dll            ← IDE quick fixes, e.g. [RenameTo]
 ```
-2. **The analyzer DLL is special.** Select `Entitas.SourceGenerator.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed it to the compiler as a source generator instead of trying to load it as a managed plugin.
+2. **The analyzer DLLs are special.** Select **both** `Entitas.SourceGenerator.dll` and `Entitas.CodeFixes.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed them to the compiler instead of trying to load them as managed plugins.
 3. **Delete Jenny.** Remove the old `Jenny/` folder, the `*.CodeGeneration.Plugins.dll`s, any `JennyRoslyn.properties`, and any committed `Generated/` folders — none of them are used anymore. Generation now happens entirely inside the compiler.
 4. Add an `EntitasGeneration.cs` declaring your contexts and options — see [Configuring generation](#configuring-generation--entitasgenerationcs).
 
@@ -145,6 +154,52 @@ EntitasDebugHooks.OnReplace = (entity, index, value) =>
 - Works even with `ENTITAS_DISABLE_REACTIVITY` + atomic — the hook fires from inside `ReplaceX` *before* the in-place value mutation, where component-change events don't.
 - `EntitasDebugHooks` lives in the runtime (not generated code), so the IDE always resolves it — no fiddling with partial methods.
 - A `null` handler costs a single null-check. **Turn `DebugHooks` off for release builds.**
+
+## Renaming a component — `[RenameTo]`
+One component name fans out into a lot of generated API: `GameMatcher.CanAttack`, `entity.isCanAttack`, `AddCanAttack`, `ReplaceCanAttack`, `SafeRemoveCanAttack`, `CanAttackChanged`, `ICanAttackListener`… With Jenny you could rename those in the generated files and let the IDE propagate it. Now that generation happens inside the compiler, those symbols live in read-only documents — the IDE renames the class and leaves every usage broken.
+
+So mark the component instead:
+```cs
+using Entitas.CodeGeneration.Attributes;
+
+[RenameTo("AbleToAttack")]
+[Game] public class CanAttack : IComponent { }
+```
+Then `Alt+Enter` on the attribute → **"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"**. The component, every identifier derived from it, all their usages, and the attribute itself are dealt with in one step:
+```cs
+// before                                    // after
+attacker.isCanAttack = true;                 attacker.isAbleToAttack = true;
+GameMatcher.CanAttack                        GameMatcher.AbleToAttack
+entity.hasCanAttackChanged                   entity.hasAbleToAttackChanged
+```
+
+A few things worth knowing:
+
+- **The attribute is inert.** Generation ignores it completely, so the project keeps compiling between marking a component and applying the rename. Mark five components today, rename them tomorrow.
+- **Other assemblies are covered.** Usages in your test asmdef or an Editor assembly are rewritten too — anything that references the assembly declaring the component.
+- **Same-named members are safe.** A `monster.Health` on some unrelated class of yours is left alone: every usage is resolved through the compiler, not matched by text.
+- **One component at a time.** There is deliberately no *Fix All*: each rename is planned against the current state of the code, so applying several at once would use stale positions.
+- **After updating the DLLs, restart the IDE.** It keeps analyzer assemblies loaded in-process; until it restarts you may get the old ones (the quick fix silently disappears from `Alt+Enter`).
+
+### From the terminal
+The same rename runs headless — for CI, for bulk work, or when the IDE isn't cooperating. It reads your `Assembly-CSharp.csproj`, so run it from the Unity project root:
+```bash
+# dry run: prints the identifier map, every usage, and the file move
+dotnet run --project src/Entitas-Flux/src/Entitas.Rename/src -- CanAttack AbleToAttack -r <unity-project>
+
+# the same with -a applies it
+```
+| Option | Effect |
+| --- | --- |
+| `-a`, `--apply` | Write the changes (without it, nothing is written). |
+| `-r`, `--root <dir>` | Where to look for the csproj. Defaults to the current directory. |
+| `-p`, `--project <csproj>` | Use this csproj instead of searching for one. |
+| `-s`, `--include-strings` | Also rewrite occurrences in string literals and comments. |
+| `-k`, `--keep-file-name` | Don't rename the component's `.cs` file. |
+
+Unlike the quick fix, the CLI also renames the component's file (`CanAttack.cs` → `AbleToAttack.cs`) together with its `.cs.meta`, via `git mv` when the file is tracked, so the Unity asset GUID survives.
+
+> The CLI sees your project exactly as `Assembly-CSharp.csproj` describes it. If Unity hasn't regenerated it lately, files missing from it are invisible to the rename — it will tell you when the csproj looks stale, and *Edit → Preferences → External Tools → Regenerate project files* fixes it.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
