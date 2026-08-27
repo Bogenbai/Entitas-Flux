@@ -6,6 +6,8 @@ Don’t expect major changes or a big redesign like [Entitas Redux](https://gith
 ![CI](https://github.com/Bogenbai/Entitas-Flux/actions/workflows/ci.yml/badge.svg)
 ![Release](https://github.com/Bogenbai/Entitas-Flux/actions/workflows/release-on-tag.yml/badge.svg)
 
+What changed in each version: [CHANGELOG.md](CHANGELOG.md).
+
 ## Contents
 
 - [Installation](#installation)

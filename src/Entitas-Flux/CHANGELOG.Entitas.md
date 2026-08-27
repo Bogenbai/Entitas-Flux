@@ -1,3 +1,7 @@
+> **This is upstream [Entitas](https://github.com/sschmid/Entitas)'s changelog**, kept for
+> reference because the fork inherits that history. Entitas-Flux's own changes are in
+> [CHANGELOG.md](../../CHANGELOG.md) at the repository root.
+
 ## [1.14.1] - 2022-09-26
 
 ### Entitas

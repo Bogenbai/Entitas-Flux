@@ -34,6 +34,8 @@ fi
 cp "$ARTIFACTS"/Editor/*.dll "$PACKAGE/Editor/"
 cp "$ARTIFACTS"/Analyzers/*.dll "$PACKAGE/Analyzers/"
 cp "$SCRIPT_DIR/../../README.md" "$PACKAGE/README.md"
+# Unity's Package Manager shows CHANGELOG.md as a tab on the package page.
+cp "$SCRIPT_DIR/../../CHANGELOG.md" "$PACKAGE/CHANGELOG.md"
 cp "$SCRIPT_DIR/LICENSE.txt" "$PACKAGE/LICENSE.md"
 
 cat > "$PACKAGE/package.json" <<EOF
@@ -48,7 +50,7 @@ cat > "$PACKAGE/package.json" <<EOF
     "url": "https://github.com/Bogenbai"
   },
   "documentationUrl": "https://github.com/Bogenbai/Entitas-Flux",
-  "changelogUrl": "https://github.com/Bogenbai/Entitas-Flux/releases",
+  "changelogUrl": "https://github.com/Bogenbai/Entitas-Flux/blob/master/CHANGELOG.md",
   "licensesUrl": "https://github.com/Bogenbai/Entitas-Flux/blob/master/LICENSE",
   "keywords": [ "entitas", "ecs", "entity", "component", "system", "source-generator" ]
 }
