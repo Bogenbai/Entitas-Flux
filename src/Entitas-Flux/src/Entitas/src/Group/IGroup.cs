@@ -39,6 +39,6 @@ namespace Entitas
         TEntity GetSingleEntity();
 
         IEnumerable<TEntity> AsEnumerable();
-        HashSet<TEntity>.Enumerator GetEnumerator();
+        GroupEnumerator<TEntity> GetEnumerator();
     }
 }

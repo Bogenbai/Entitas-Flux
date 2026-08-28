@@ -165,6 +165,23 @@ Generators live in `src/Entitas-Flux/src/Entitas.SourceGenerator/src/Generators/
 - `ENTITAS_DISABLE_REACTIVITY` — Disables default reactivity for performance
 - `ENTITAS_HIDE_STANDARD_MEMBERS` — Hides lowercase standard members in atomic components
 
+## Performance-sensitive internals
+
+Two pieces of the runtime look odd until you know why; both came out of a CPU profile and
+both are covered by `GroupStorageTests`:
+
+- **`Entity` stores components in `ComponentSlot[]`, not `IComponent[]`.** Arrays of a
+  reference type are covariant, so every store into an `IComponent[]` costs a runtime
+  type check (the JIT's `StelemRef`) — a fifth of the component-change path. Writing to a
+  field of a struct element has no such check. Do not "simplify" it back.
+- **`Group` stores entities in a sparse set keyed by `Entity.denseIndex`.** A `HashSet`
+  was ~27% of that same path. The dense index is per context, so membership checks verify
+  the entity's identity in the slot, not just that the slot is taken — two contexts number
+  their entities from zero and would otherwise be confused for each other.
+
+Benchmarks and the profiling target live in `benchmarks/` — measure before and after, and
+prefer the allocation column: timings on a busy machine move by tens of percent.
+
 ## Conventions
 
 - Target frameworks: `netstandard2.1` for libraries, `net6.0` for executables and tests

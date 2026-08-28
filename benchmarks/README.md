@@ -60,6 +60,36 @@ any machine — while timings on a laptop with other work running moved by more 
 between two runs of the same build here. A single run tells you about a 2x difference,
 not about a 5% one.
 
+## Comparing against another ECS
+
+`MorpehComparisonBenchmarks` runs the same scenarios against
+[Morpeh](https://github.com/scellecs/morpeh) in the same process and table. Read them as
+orientation, not a verdict: Morpeh stores struct components in stashes and updates its
+filters when the world is committed, Entitas stores pooled class components and updates
+groups eagerly on every change. Each side is written the way that framework is meant to
+be used.
+
+The first version of that comparison was wrong in an instructive way: it built a world,
+filled it and threw it away on every iteration, and Morpeh lost badly — its
+`World.Create()/Dispose()` costs more than everything else in the loop put together, so
+the benchmark was comparing world construction. With a live world, which is what a game
+has, the result reverses.
+
+## Profiling
+
+`GroupCostBenchmarks` narrows a slowdown to group maintenance by changing only the number
+of registered groups. For a call tree rather than an A/B, the benchmark executable has a
+profiling target with no harness around it:
+
+```bash
+dotnet-trace collect --format speedscope -- \
+  dotnet benchmarks/Entitas.Benchmarks/bin/Release/net8.0/Entitas.Benchmarks.dll profile-churn 12000
+```
+
+That is how the two optimizations in v0.3.0 were found — and how the guess that preceded
+them (matcher evaluation) was shown to be worth 7%, not the 60% it looked like from the
+outside.
+
 ## Why CI only builds them
 
 Shared CI runners share their CPU, so wall-clock numbers from them are noise — comparing

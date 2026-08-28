@@ -11,6 +11,41 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
+Performance work in the runtime core, found with a profiler rather than guessed at.
+
+### Changed
+- **Components are stored without the array covariance check.** Arrays of a reference
+  type are covariant, so every write into the entity's `IComponent[]` was type-checked at
+  runtime by the JIT — a fifth of the time spent changing a component. They now live in a
+  one-field struct wrapper, which turns the write into a plain field store.
+- **Groups use a sparse set instead of a `HashSet`.** Membership changes on every
+  component add and remove of every entity a group watches, and hashing plus bucket
+  probing was ~27% of that path. Entities carry a dense index — assigned per entity object
+  and reused with it, so it stays bounded by the peak number of live entities — and a
+  group addresses a flat array with it.
+
+  Measured over 10k entities: component churn with one group **459 → 355 µs**, with three
+  groups **884 → 702 µs**, iterating a group and reading a component **31.9 → 22.9 µs**.
+
+- **`IGroup.GetEnumerator()` returns `GroupEnumerator<TEntity>`** instead of
+  `HashSet<TEntity>.Enumerator`. `foreach` binds by pattern and does not notice; code that
+  names the type explicitly does. Compiling a real 2243-file project against the new
+  runtime produced exactly the same diagnostics as against the old one.
+- **An `IEntity` implementation that does not derive from `Entitas.Entity` can no longer
+  be added to a group**, and says so with an exception instead of misbehaving. Generated
+  entities always derive from `Entity`.
+
+Group enumeration order changed, as it may whenever the storage does. It was never
+guaranteed — `HashSet` gave an arbitrary order too.
+
+### Added
+- Benchmarks comparing the fork against [Morpeh](https://github.com/scellecs/morpeh) in
+  one process and one table, benchmarks that isolate group maintenance from component
+  plumbing, and a profiling target for `dotnet-trace` with no benchmark harness in the
+  trace. See `benchmarks/README.md`.
+
 ## [0.2.0] - 2026-08-27
 
 ### Added
@@ -184,7 +219,8 @@ First release of the fork.
 - **Safe component removal** — `SafeRemoveX()` instead of guarding every `RemoveX()`.
 - **Searchable component dropdown** in the Unity inspector.
 
-[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.0...v0.1.1
