@@ -58,6 +58,11 @@ namespace Entitas
 
         readonly HashSet<TEntity> _entities = new HashSet<TEntity>(EntityEqualityComparer<TEntity>.comparer);
         readonly Stack<TEntity> _reusableEntities = new Stack<TEntity>();
+
+        // Counts entity OBJECTS ever created by this context, which is the peak number of
+        // simultaneously live entities — entities are pooled, so this does not grow with
+        // churn the way creationIndex does.
+        int _denseIndexCounter;
         readonly HashSet<TEntity> _retainedEntities = new HashSet<TEntity>(EntityEqualityComparer<TEntity>.comparer);
 
         readonly Dictionary<IMatcher<TEntity>, IGroup<TEntity>> _groups = new Dictionary<IMatcher<TEntity>, IGroup<TEntity>>();
@@ -141,6 +146,7 @@ namespace Entitas
             {
                 entity = _entityFactory();
                 entity.Initialize(_creationIndex++, _totalComponents, _componentPools, _contextInfo, _aercFactory(entity));
+                (entity as Entity)?.AssignDenseIndex(_denseIndexCounter++);
             }
 
             _entities.Add(entity);

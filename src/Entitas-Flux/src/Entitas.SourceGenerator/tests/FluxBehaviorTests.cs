@@ -214,6 +214,55 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
             }
         }
 
+        // -- groups and collectors through the generated API -------------------
+
+        [Fact]
+        public void Groups_and_collectors_follow_component_changes()
+        {
+            var assembly = Build(
+                nameof(Groups_and_collectors_follow_component_changes),
+                Attributes + GameContext + @"
+public sealed class HealthComponent : Entitas.IComponent { public int value; }
+public sealed class DeadComponent : Entitas.IComponent { }
+");
+
+            dynamic contexts = Activator.CreateInstance(assembly.GetType("Contexts")!)!;
+            dynamic game = contexts.game;
+
+            var matcherType = assembly.GetType("GameMatcher")!;
+            dynamic healthMatcher = matcherType.GetProperty("Health")!.GetValue(null)!;
+            dynamic group = game.GetGroup(healthMatcher);
+
+            var entities = new List<dynamic>();
+            for (var i = 0; i < 50; i++)
+            {
+                dynamic entity = game.CreateEntity();
+                entity.AddHealth(i);
+                entities.Add(entity);
+            }
+
+            ((int)group.count).Should().Be(50);
+
+            // Remove from the middle: the group swaps entities into freed slots, and this
+            // is where losing or duplicating one would show.
+            for (var i = 0; i < 50; i += 2)
+                entities[i].RemoveHealth();
+
+            ((int)group.count).Should().Be(25);
+            foreach (var (entity, index) in entities.Select((e, i) => (e, i)))
+                ((bool)group.ContainsEntity(entity)).Should().Be(index % 2 != 0);
+
+            // Entities come back from the pool with the same identity; the group must not
+            // remember them from their previous life.
+            game.DestroyAllEntities();
+            ((int)group.count).Should().Be(0);
+
+            dynamic revived = game.CreateEntity();
+            revived.AddHealth(1);
+            ((int)group.count).Should().Be(1);
+            ((bool)group.ContainsEntity(revived)).Should().BeTrue();
+        }
+
         // -- harness -----------------------------------------------------------
 
         static dynamic CreateEntity(string assemblyName, string source)
