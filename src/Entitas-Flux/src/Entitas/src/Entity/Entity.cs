@@ -73,7 +73,24 @@ namespace Entitas
         bool _isEnabled;
 
         int _totalComponents;
-        IComponent[] _components;
+        // Components live in a struct wrapper rather than an IComponent[] on purpose.
+        // Arrays of a reference type are covariant, so every `array[i] = component` goes
+        // through the JIT's StelemRef helper to type-check the store at runtime — which
+        // the profiler showed eating a fifth of the time spent changing components.
+        // Writing into a field of a struct element is a plain store with a write barrier
+        // and no type check.
+        ComponentSlot[] _components;
+
+        // Dense, per-context index of this entity OBJECT — unlike creationIndex it is
+        // assigned once and survives reuse, so it stays bounded by the peak number of
+        // live entities. Groups use it to address a flat array instead of hashing.
+        int _denseIndex = -1;
+
+        // Entities created through a context get a dense per-context index; one created
+        // directly (tests, tools) still needs an index that no other entity shares, so it
+        // falls back to a global counter. A group only ever sees entities of one context,
+        // so the two schemes never mix inside one group.
+        static int _fallbackDenseIndexCounter;
 
         // Compact list of indices that currently hold a component. Lets
         // RemoveAllComponents / destroy run in O(component count) instead of
@@ -96,11 +113,12 @@ namespace Entitas
             Reactivate(creationIndex);
 
             _totalComponents = totalComponents;
-            _components = new IComponent[totalComponents];
+            _components = new ComponentSlot[totalComponents];
             _activeComponentIndices = new int[8];
             _activeComponentCount = 0;
             _componentPools = componentPools;
 
+            _denseIndex = _fallbackDenseIndexCounter++;
             _contextInfo = contextInfo ?? createDefaultContextInfo();
             _aerc = aerc ?? new SafeAERC(this);
         }
@@ -113,6 +131,12 @@ namespace Entitas
 
             return new ContextInfo("No Context", componentNames, null);
         }
+
+        /// Dense per-context index of this entity object; see _denseIndex.
+        public int denseIndex => _denseIndex;
+
+        /// Assigned by the context when the entity object is first created.
+        public void AssignDenseIndex(int denseIndex) => _denseIndex = denseIndex;
 
         public void Reactivate(int creationIndex)
         {
@@ -136,7 +160,7 @@ namespace Entitas
                     "You should check if an entity already has the component before adding it or use entity.ReplaceComponent()."
                 );
 
-            _components[index] = component;
+            _components[index].Value = component;
             if (_activeComponentCount == _activeComponentIndices.Length)
                 Array.Resize(ref _activeComponentIndices, _activeComponentCount << 1);
             _activeComponentIndices[_activeComponentCount++] = index;
@@ -183,10 +207,10 @@ namespace Entitas
             // TODO VD PERFORMANCE
             // _toStringCache = null;
 
-            var previousComponent = _components[index];
+            var previousComponent = _components[index].Value;
             if (replacement != previousComponent)
             {
-                _components[index] = replacement;
+                _components[index].Value = replacement;
                 _componentsCache = null;
                 if (replacement != null)
                 {
@@ -227,7 +251,7 @@ namespace Entitas
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public IComponent GetComponent(int index)
         {
-            var component = _components[index];
+            var component = _components[index].Value;
             if (component == null)
                 throw getDoesNotHaveComponentException(index);
 
@@ -248,7 +272,7 @@ namespace Entitas
                 _componentBuffer ??= new List<IComponent>();
                 for (var i = 0; i < _components.Length; i++)
                 {
-                    var component = _components[i];
+                    var component = _components[i].Value;
                     if (component != null)
                         _componentBuffer.Add(component);
                 }
@@ -267,7 +291,7 @@ namespace Entitas
             {
                 _indexBuffer ??= new List<int>();
                 for (var i = 0; i < _components.Length; i++)
-                    if (_components[i] != null)
+                    if (_components[i].Value != null)
                         _indexBuffer.Add(i);
 
                 _componentIndicesCache = _indexBuffer.ToArray();
@@ -280,7 +304,7 @@ namespace Entitas
         /// Determines whether this entity has a component
         /// at the specified index.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool HasComponent(int index) => _components[index] != null;
+        public bool HasComponent(int index) => _components[index].Value != null;
 
         /// Determines whether this entity has components
         /// at all the specified indices.
@@ -288,7 +312,7 @@ namespace Entitas
         public bool HasComponents(int[] indices)
         {
             for (var i = 0; i < indices.Length; i++)
-                if (_components[indices[i]] == null)
+                if (_components[indices[i]].Value == null)
                     return false;
 
             return true;
@@ -300,7 +324,7 @@ namespace Entitas
         public bool HasAnyComponent(int[] indices)
         {
             for (var i = 0; i < indices.Length; i++)
-                if (_components[indices[i]] != null)
+                if (_components[indices[i]].Value != null)
                     return true;
 
             return false;
