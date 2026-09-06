@@ -58,7 +58,7 @@ public sealed class HealthComponent : Entitas.IComponent {
         {
             var input = new GenerationInput(
                 false, new[] { "Game" },
-                new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, new string[0]),
+                new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, VisualDebuggingStyle.EntityGameObjects, new string[0]),
                 new CodeGeneratorData[0],
                 "InvalidOperationException: no");
 

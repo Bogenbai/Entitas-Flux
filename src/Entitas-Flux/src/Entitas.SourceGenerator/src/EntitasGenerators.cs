@@ -215,6 +215,18 @@ namespace Entitas.SourceGenerator
                 generators.RemoveAll(g => g is ComponentEntityApiInterfaceGenerator);
             }
 
+            if (options.VisualDebugging == VisualDebuggingStyle.SingleGameObject)
+            {
+                for (var i = 0; i < generators.Count; i++)
+                {
+                    if (generators[i] is ContextObserverGenerator)
+                    {
+                        generators[i] = new ContextObserverSingleObjectGenerator();
+                        break;
+                    }
+                }
+            }
+
             // DisableEntitasGenerator: drop matching built-ins (case-insensitive exact
             // short-name OR prefix match — see ReadOptions doc).
             if (options.DisabledGenerators.Count > 0)
@@ -250,6 +262,7 @@ namespace Entitas.SourceGenerator
             var entityApi = EntityApiStyle.Plain;
             var ignoreNamespaces = false;
             var debugHooks = false;
+            var visualDebugging = VisualDebuggingStyle.EntityGameObjects;
             var disabled = new List<string>();
 
             foreach (var attr in compilation.Assembly.GetAttributes())
@@ -265,6 +278,8 @@ namespace Entitas.SourceGenerator
                             ignoreNamespaces = ignore;
                         else if (named.Key == "DebugHooks" && named.Value.Value is bool hooks)
                             debugHooks = hooks;
+                        else if (named.Key == "VisualDebugging" && named.Value.Value is int visualDebuggingInt)
+                            visualDebugging = (VisualDebuggingStyle)visualDebuggingInt;
                     }
                 }
                 else if (name == AttributeNames.DisableEntitasGenerator)
@@ -275,7 +290,7 @@ namespace Entitas.SourceGenerator
                 }
             }
 
-            return new EntitasGenerationOptions(entityApi, ignoreNamespaces, debugHooks, disabled);
+            return new EntitasGenerationOptions(entityApi, ignoreNamespaces, debugHooks, visualDebugging, disabled);
         }
     }
 
@@ -285,23 +300,31 @@ namespace Entitas.SourceGenerator
     /// </summary>
     public enum EntityApiStyle { Plain = 0, Atomic = 1 }
 
+    /// <summary>
+    /// Mirror of the local <c>VisualDebuggingStyle</c> enum in the attributes assembly.
+    /// </summary>
+    public enum VisualDebuggingStyle { EntityGameObjects = 0, SingleGameObject = 1 }
+
     /// <summary>Resolved Entitas-Flux generation config for a single compilation.</summary>
     public sealed class EntitasGenerationOptions : IEquatable<EntitasGenerationOptions>
     {
         public EntityApiStyle EntityApi { get; }
         public bool IgnoreNamespaces { get; }
         public bool DebugHooks { get; }
+        public VisualDebuggingStyle VisualDebugging { get; }
         public IReadOnlyList<string> DisabledGenerators { get; }
 
         public EntitasGenerationOptions(
             EntityApiStyle entityApi,
             bool ignoreNamespaces,
             bool debugHooks,
+            VisualDebuggingStyle visualDebugging,
             IReadOnlyList<string> disabledGenerators)
         {
             EntityApi = entityApi;
             IgnoreNamespaces = ignoreNamespaces;
             DebugHooks = debugHooks;
+            VisualDebugging = visualDebugging;
             DisabledGenerators = disabledGenerators;
         }
 
@@ -312,13 +335,14 @@ namespace Entitas.SourceGenerator
             EntityApi == other.EntityApi &&
             IgnoreNamespaces == other.IgnoreNamespaces &&
             DebugHooks == other.DebugHooks &&
+            VisualDebugging == other.VisualDebugging &&
             DisabledGenerators.SequenceEqual(other.DisabledGenerators, StringComparer.Ordinal);
 
         public override bool Equals(object? obj) => Equals(obj as EntitasGenerationOptions);
 
         public override int GetHashCode()
         {
-            var hash = ((int)EntityApi * 397) ^ (IgnoreNamespaces ? 1 : 0) ^ (DebugHooks ? 2 : 0);
+            var hash = ((int)EntityApi * 397) ^ (IgnoreNamespaces ? 1 : 0) ^ (DebugHooks ? 2 : 0) ^ ((int)VisualDebugging * 4099);
             foreach (var name in DisabledGenerators)
                 hash = unchecked(hash * 31 + StringComparer.Ordinal.GetHashCode(name));
 

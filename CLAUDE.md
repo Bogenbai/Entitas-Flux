@@ -104,6 +104,16 @@ Consumers customize generation via assembly-level attributes (in `Entitas.CodeGe
 - `[assembly: EntitasGeneration(EntityApi = EntityApiStyle.Atomic)]` — swaps the plain `ComponentEntityApiGenerator` for `AtomicComponentEntityApiGenerator` (one or the other, never both — they emit conflicting entity members). `EntityApiStyle.Plain` (default) keeps the canonical plain API.
 - `[assembly: EntitasGeneration(IgnoreNamespaces = true)]` — drops the namespace from generated component names (e.g. `My.Game.HealthComponent` → `Health` instead of `MyGameHealth`).
 - `[assembly: EntitasGeneration(DebugHooks = true)]` — injects `Entitas.EntitasDebugHooks.OnAdd/OnReplace?.Invoke(this, index, value)` at the top of every generated `Add`/`Replace` (via `DebugHookInjector`; runs only when on, so default/golden output stays byte-identical). `EntitasDebugHooks` is a runtime class (`src/Entitas/src/EntitasDebugHooks.cs`) holding two `Action<IEntity,int,object>` delegates; assign one and breakpoint inside to catch a specific mutation — the call stack shows which system did it. Replaces the old "edit the generated ReplaceX + breakpoint" workflow; works with atomic + `ENTITAS_DISABLE_REACTIVITY` (the hook fires before the in-place mutation). Debug only — turn off for release; a null handler costs one null-check.
+- `[assembly: EntitasGeneration(VisualDebugging = VisualDebuggingStyle.SingleGameObject)]` —
+  swaps `ContextObserverGenerator` for `ContextObserverSingleObjectGenerator`, so
+  `Contexts.CreateContextObserver` registers the context on the single
+  `Entitas.VisualDebugging.Unity.EntitasDebugBehaviour` GameObject instead of constructing
+  a `ContextObserver` (one GameObject per context, plus a child per entity — the editor
+  slows to a crawl at a few thousand entities). `EntitasDebugInspector` draws the same
+  stats, groups, Create/Destroy buttons and `EntityDrawer` component editing, with the
+  entity list searchable, paged and multi-selectable inside the inspector. Default is
+  `VisualDebuggingStyle.EntityGameObjects` (the classic observer); both generators share
+  the `"ContextObserver"` disable prefix.
 - `[assembly: DisableEntitasGenerator("X")]` (repeatable) — removes any built-in generator whose CLASS short name matches `"X"` case-insensitively **or starts with** `"X"` (prefix match). So `"Event"` disables all `Event*` generators, `"Watched"` disables all `Watched*`, and `"ContextObserver"` disables just `ContextObserverGenerator`. Note: `[Event]` listener components are synthesized at discovery time, so disabling `Event` generators is intended for assemblies that don't use `[Event]`.
 
 Example:

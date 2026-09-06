@@ -156,6 +156,58 @@ public sealed class CurrentHealthComponent : Entitas.IComponent {
             Errors(output).Should().BeEmpty("the remaining (non-event) generated code must still compile");
         }
 
+        [Fact]
+        public void SingleGameObjectVisualDebuggingSwapsTheContextObserver()
+        {
+            const string attrs =
+                "[assembly: Entitas.CodeGeneration.Attributes.ContextDefinition(\"Game\")]\n" +
+                "[assembly: Entitas.CodeGeneration.Attributes.EntitasGeneration(VisualDebugging = Entitas.CodeGeneration.Attributes.VisualDebuggingStyle.SingleGameObject)]\n";
+
+            var (_, allSource) = Run(attrs, Components);
+
+            allSource.Should().Contain("Entitas.VisualDebugging.Unity.EntitasDebugBehaviour.Observe(context)");
+            allSource.Should().NotContain("new Entitas.VisualDebugging.Unity.ContextObserver(context)");
+
+            allSource.Should().Contain("public void InitializeContextObservers()");
+            allSource.Should().Contain("CreateContextObserver(game);");
+        }
+
+        [Fact]
+        public void DefaultVisualDebuggingKeepsTheGameObjectPerEntityObserver()
+        {
+            const string attrs =
+                "[assembly: Entitas.CodeGeneration.Attributes.ContextDefinition(\"Game\")]\n";
+
+            var (_, allSource) = Run(attrs, Components);
+
+            allSource.Should().Contain("new Entitas.VisualDebugging.Unity.ContextObserver(context)");
+            allSource.Should().NotContain("EntitasDebugBehaviour");
+        }
+
+        [Fact]
+        public void SingleGameObjectVisualDebuggingSwapsTheGeneratorInTheDefaultSet()
+        {
+            const string attrs =
+                "[assembly: Entitas.CodeGeneration.Attributes.ContextDefinition(\"Game\")]\n" +
+                "[assembly: Entitas.CodeGeneration.Attributes.EntitasGeneration(VisualDebugging = Entitas.CodeGeneration.Attributes.VisualDebuggingStyle.SingleGameObject)]\n";
+
+            var names = EntitasGenerators.Default(Compile(attrs, Components))
+                .Select(g => g.GetType().Name).ToArray();
+
+            names.Should().Contain(nameof(ContextObserverSingleObjectGenerator));
+            names.Should().NotContain(nameof(ContextObserverGenerator));
+
+            const string disabledAttrs =
+                "[assembly: Entitas.CodeGeneration.Attributes.ContextDefinition(\"Game\")]\n" +
+                "[assembly: Entitas.CodeGeneration.Attributes.EntitasGeneration(VisualDebugging = Entitas.CodeGeneration.Attributes.VisualDebuggingStyle.SingleGameObject)]\n" +
+                "[assembly: Entitas.CodeGeneration.Attributes.DisableEntitasGenerator(\"ContextObserver\")]\n";
+
+            EntitasGenerators.Default(Compile(disabledAttrs, Components))
+                .Select(g => g.GetType().Name)
+                .Where(n => n.StartsWith("ContextObserver"))
+                .Should().BeEmpty();
+        }
+
         // -- Level 1: IgnoreNamespaces changes ComponentName -------------------
 
         [Fact]

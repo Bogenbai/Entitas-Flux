@@ -125,6 +125,16 @@ namespace Entitas.VisualDebugging.Unity.Editor
             EditorApplication.hierarchyWindowItemOnGUI += onHierarchyWindowItemOnGUI;
         }
 
+        static bool hasRetainedEntities(EntitasDebugBehaviour behaviour)
+        {
+            var observedContexts = behaviour.observedContexts;
+            for (var i = 0; i < observedContexts.Count; i++)
+                if (observedContexts[i].context.retainedEntitiesCount != 0)
+                    return true;
+
+            return false;
+        }
+
         static void onHierarchyWindowItemOnGUI(int instanceID, Rect selectionRect)
         {
             var gameObject = EditorUtility.InstanceIDToObject(instanceID) as GameObject;
@@ -142,6 +152,13 @@ namespace Entitas.VisualDebugging.Unity.Editor
                     else
                         GUI.DrawTexture(rect, contextHierarchyIcon);
 
+                    return;
+                }
+
+                var debugBehaviour = gameObject.GetComponent<EntitasDebugBehaviour>();
+                if (debugBehaviour != null)
+                {
+                    GUI.DrawTexture(rect, hasRetainedEntities(debugBehaviour) ? contextErrorHierarchyIcon : contextHierarchyIcon);
                     return;
                 }
 
