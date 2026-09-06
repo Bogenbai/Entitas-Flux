@@ -50,7 +50,7 @@ namespace Entitas.SourceGenerator
         }
 
         static EntitasGenerationOptions DefaultOptions() =>
-            new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, new string[0]);
+            new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, VisualDebuggingStyle.EntityGameObjects, new string[0]);
 
         /// <summary>
         /// Walks the whole assembly. Used by the CLIs and by anything that starts from a
@@ -229,7 +229,7 @@ namespace Entitas.SourceGenerator
     public sealed class GenerationConfig : IEquatable<GenerationConfig>
     {
         public static readonly GenerationConfig Disabled = new GenerationConfig(
-            false, new string[0], new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, new string[0]));
+            false, new string[0], new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, VisualDebuggingStyle.EntityGameObjects, new string[0]));
 
         public bool Enabled { get; }
         public string[] ContextNames { get; }

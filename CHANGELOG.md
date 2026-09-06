@@ -11,6 +11,23 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
+### Added
+- **A visual debugging mode that does not create a GameObject per entity.**
+  `[assembly: EntitasGeneration(VisualDebugging = VisualDebuggingStyle.SingleGameObject)]`
+  swaps the generated context observer for one that registers every context on a single
+  `Entitas Debug` GameObject; its inspector browses the contexts, their groups and their
+  entities (searchable, paged, multi-select) and edits components through the same
+  `EntityDrawer` as before. The default stays `VisualDebuggingStyle.EntityGameObjects` —
+  the classic observer, one GameObject per context plus one per entity — which is what
+  makes the editor crawl once a context holds thousands of entities.
+
+  The entity list is ordered by creation index and re-read twice a second rather than
+  every repaint, so entities that live a single frame no longer make it jump; `Live` and
+  `Refresh` freeze it entirely while you click through one. The classic mode is
+  untouched, and `EntityLink`'s "Show entity" finds its entity under either one.
+
 ## [0.3.0] - 2026-08-28
 
 Performance work in the runtime core, found with a profiler rather than guessed at.
@@ -219,7 +236,8 @@ First release of the fork.
 - **Safe component removal** — `SafeRemoveX()` instead of guarding every `RemoveX()`.
 - **Searchable component dropdown** in the Unity inspector.
 
-[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.1...v0.1.2

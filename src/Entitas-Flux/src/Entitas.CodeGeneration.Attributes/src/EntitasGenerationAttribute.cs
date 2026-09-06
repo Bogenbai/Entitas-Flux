@@ -10,6 +10,16 @@ namespace Entitas.CodeGeneration.Attributes
     public enum EntityApiStyle { Plain = 0, Atomic = 1 }
 
     /// <summary>
+    /// Selects how the Unity visual debugging observes contexts.
+    /// <see cref="EntityGameObjects"/> mirrors the canonical default: one GameObject per
+    /// context, plus one child GameObject per entity. <see cref="SingleGameObject"/> emits
+    /// a single "Entitas Debug" GameObject for all contexts and browses their entities from
+    /// its inspector instead, which keeps the hierarchy (and the editor) fast with a large
+    /// number of entities.
+    /// </summary>
+    public enum VisualDebuggingStyle { EntityGameObjects = 0, SingleGameObject = 1 }
+
+    /// <summary>
     /// Assembly-level configuration for the Entitas-Flux source generator. Place a
     /// single instance on the assembly that owns the components to customize
     /// generation without rebuilding the framework. Read by the generator via
@@ -28,6 +38,8 @@ namespace Entitas.CodeGeneration.Attributes
         /// removed by the compiler, so this is zero-cost when you don't use it). For debugging only.
         /// </summary>
         public bool DebugHooks { get; set; } = false;
+
+        public VisualDebuggingStyle VisualDebugging { get; set; } = VisualDebuggingStyle.EntityGameObjects;
     }
 
     /// <summary>
