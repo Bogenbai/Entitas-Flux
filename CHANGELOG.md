@@ -11,6 +11,23 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-10
+
+### Changed
+- **`Group.GetEntities(buffer)` copies with one `Array.Copy` instead of one `Add` per
+  entity.** The buffered overload has no snapshot cache to fall back on, so every call
+  paid a capacity check, a bounds check and a version bump per element — about ten times
+  the cost of the copy itself, and enough that switching a project from `GetEntities()`
+  to the buffered overload made its loading slower. The list is now grown to the group's
+  size in one step rather than doubling its way up from its initial capacity, and filled
+  through `AddRange` over a cached view of the storage, so a fill still allocates
+  nothing.
+
+  Measured as 100 reads of a 10k-entity group: **4,029 → 1,230 µs** while the group is
+  stable, **4,094 → 1,255 µs** with a membership change before every read. The new
+  `GroupReadBenchmarks` puts the three ways of reading a group side by side;
+  `benchmarks/README.md` has the table.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added
@@ -236,7 +253,8 @@ First release of the fork.
 - **Safe component removal** — `SafeRemoveX()` instead of guarding every `RemoveX()`.
 - **Searchable component dropdown** in the Unity inspector.
 
-[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.1.2...v0.2.0

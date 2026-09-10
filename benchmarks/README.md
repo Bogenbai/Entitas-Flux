@@ -90,6 +90,33 @@ That is how the two optimizations in v0.3.0 were found — and how the guess tha
 them (matcher evaluation) was shown to be worth 7%, not the 60% it looked like from the
 outside.
 
+## Reading a group
+
+`GroupReadBenchmarks` measures the three ways of reading a group, each 100 times over
+10k entities, on a group that kept its members between reads and on one that changed
+before every read. The question it answers is the one that comes up when a project
+switches every `GetEntities()` to the buffered overload to get rid of the allocation and
+finds itself slower: `GetEntities()` caches its snapshot until the membership changes,
+the buffered overload copies on every call, and `foreach` copies nothing at all.
+
+As measured on an Apple M1 Max (macOS 15.5, .NET 8, ShortRun), including the loop that
+reads the entities:
+
+| Benchmark | v0.4.0 | v0.4.1 | allocations |
+| --- | ---: | ---: | ---: |
+| Foreach_Stable | 757 μs | 748 μs | — |
+| GetEntities_Stable | 737 μs | 734 μs | — |
+| GetEntitiesBuffer_Stable | 4,029 μs | **1,230 μs** | — |
+| Foreach_Changed | 703 μs | 696 μs | — |
+| GetEntities_Changed | 1,149 μs | 1,195 μs | 8.0 MB |
+| GetEntitiesBuffer_Changed | 4,094 μs | **1,255 μs** | 3.2 KB |
+
+The buffered overload used to add the entities one by one; it now grows the buffer in
+one step and copies with `Array.Copy` through a cached view of the storage. The 3.2 KB
+on the changed group is that view being re-boxed once per membership change, 32 bytes
+each — not per read. Reading with `foreach` is still the cheapest when the loop does not
+change the group's membership, and `GetEntities()` is free while the group is stable.
+
 ## Why CI only builds them
 
 Shared CI runners share their CPU, so wall-clock numbers from them are noise — comparing
