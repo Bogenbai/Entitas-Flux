@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Entitas;
@@ -135,5 +136,77 @@ public class GroupStorageTests
         first.RemoveComponentA();
 
         group.GetSingleEntity().Should().BeSameAs(second);
+    }
+
+    [Fact]
+    public void BufferFollowsMembershipChangesAcrossCalls()
+    {
+        // GetEntities(buffer) copies from a cached view of the storage. The view must be
+        // dropped on every add and remove — including the resize of the dense array past
+        // its initial 8 slots — or a reused buffer would keep receiving stale members.
+        var group = _context.GetGroup(_matcherA);
+        var buffer = new List<TestEntity>();
+        var entities = new List<TestEntity>();
+
+        for (var i = 0; i < 20; i++)
+        {
+            entities.Add(CreateA());
+            AssertSameMembers(group.GetEntities(buffer), entities);
+        }
+
+        var removed = entities[5];
+        removed.RemoveComponentA();
+        entities.Remove(removed);
+        AssertSameMembers(group.GetEntities(buffer), entities);
+
+        entities.Add(CreateA());
+        AssertSameMembers(group.GetEntities(buffer), entities);
+
+        _context.DestroyAllEntities();
+        group.GetEntities(buffer).Should().BeEmpty();
+    }
+
+    // By reference: BeEquivalentTo walks the entities' members, and the generated
+    // component accessors throw on an entity that lacks the component.
+    static void AssertSameMembers(List<TestEntity> actual, List<TestEntity> expected)
+    {
+        actual.Count.Should().Be(expected.Count);
+        actual.Should().OnlyHaveUniqueItems();
+        foreach (var entity in expected)
+            actual.Should().Contain(e => ReferenceEquals(e, entity));
+    }
+
+    [Fact]
+    public void BufferGrowsToTheGroupSizeInOneStep()
+    {
+        // A small buffer handed a large group should end up sized to the group, not to
+        // the next power of two that repeated doubling would have reached.
+        var group = _context.GetGroup(_matcherA);
+        for (var i = 0; i < 100; i++)
+            CreateA();
+
+        var buffer = new List<TestEntity>(4);
+        group.GetEntities(buffer);
+
+        buffer.Count.Should().Be(100);
+        buffer.Capacity.Should().Be(100);
+    }
+
+    [Fact]
+    public void FillingTheBufferDoesNotAllocate()
+    {
+        // The point of the buffered overload. The second fill of an unchanged group must
+        // not allocate: the boxed view of the storage is cached alongside the entity
+        // array, and the buffer already has the capacity.
+        var group = _context.GetGroup(_matcherA);
+        for (var i = 0; i < 100; i++)
+            CreateA();
+
+        var buffer = new List<TestEntity>();
+        group.GetEntities(buffer);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        group.GetEntities(buffer);
+        GC.GetAllocatedBytesForCurrentThread().Should().Be(before);
     }
 }

@@ -124,6 +124,10 @@ namespace Entitas
         }
 
         TEntity[] _entitiesCache;
+        // The live part of _dense as an ICollection, for List.AddRange to Array.Copy from.
+        // ArraySegment is a struct and boxes on the way into AddRange; boxing once per
+        // membership change instead of once per call keeps GetEntities(buffer) allocation-free.
+        ICollection<TEntity> _denseView;
         TEntity _singleEntityCache;
         string _toStringCache;
 
@@ -197,6 +201,7 @@ namespace Entitas
                 if (added)
                 {
                     _entitiesCache = null;
+                    _denseView = null;
                     _singleEntityCache = null;
                     entity.Retain(this);
                 }
@@ -219,6 +224,7 @@ namespace Entitas
             if (removed)
             {
                 _entitiesCache = null;
+                _denseView = null;
                 _singleEntityCache = null;
                 entity.Release(this);
             }
@@ -232,6 +238,7 @@ namespace Entitas
             if (removed)
             {
                 _entitiesCache = null;
+                _denseView = null;
                 _singleEntityCache = null;
                 OnEntityRemoved?.Invoke(this, entity, index, component);
                 entity.Release(this);
@@ -257,8 +264,20 @@ namespace Entitas
         public List<TEntity> GetEntities(List<TEntity> buffer)
         {
             buffer.Clear();
-            for (var i = 0; i < _count; i++)
-                buffer.Add(_dense[i]);
+            if (_count == 0)
+                return buffer;
+
+            // Grow to the final size in one step. Left to itself the list doubles its way
+            // up from its initial capacity, allocating and copying at every step. The
+            // buffer is empty at this point, so the resize copies nothing.
+            if (buffer.Capacity < _count)
+                buffer.Capacity = _count;
+
+            // AddRange sees an ICollection and does one Array.Copy, where adding the
+            // entities one by one paid a capacity check, a bounds check and a version
+            // bump per element — about ten times slower on the same data.
+            _denseView ??= new ArraySegment<TEntity>(_dense, 0, _count);
+            buffer.AddRange(_denseView);
             return buffer;
         }
 
