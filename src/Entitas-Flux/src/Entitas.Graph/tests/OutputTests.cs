@@ -91,6 +91,50 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void An_answer_over_the_budget_starts_with_a_summary_and_says_what_it_left_out()
+        {
+            var full = Queries.WhoReads("Selected");
+            var capped = new GraphQueries(FixtureProject.Graph, budget: 40).WhoReads("Selected");
+
+            capped.Should().StartWith("Selected — read by 4");
+            capped.Should().Contain("  by feature: FurnitureFeature 3, (unregistered) 1");
+            capped.Should().Contain("more systems and types not shown — the answer is capped at ~40 tokens (--budget 0 prints everything).");
+            capped.Length.Should().BeLessThan(full.Length);
+            full.Should().NotContain("not shown", "the default budget fits every fixture answer");
+        }
+
+        [Fact]
+        public void Every_command_summarises_its_own_shape_when_cut()
+        {
+            var tiny = new GraphQueries(FixtureProject.Graph, budget: 10);
+
+            tiny.Lifecycle("Destructed").Should().Contain("  steps by root: GameplayFeature").And.Contain("  by feature: ");
+            tiny.SystemsOf("GameplayFeature").Should().Contain("nested features, largest: FurnitureFeature 8, GameCleanupSystems 1");
+            tiny.Explain("PlaceFurnitureByRequestSystem").Should().Contain("  connections: creates 6, reads 2, registered by 1");
+            tiny.Query("furniture", 20).Should().Contain("more nodes not shown");
+        }
+
+        [Fact]
+        public void A_budget_of_zero_prints_everything()
+        {
+            var unlimited = new GraphQueries(FixtureProject.Graph, budget: 0);
+
+            unlimited.Lifecycle("FurniturePlacedEvent").Should().Be(Queries.Lifecycle("FurniturePlacedEvent"));
+            unlimited.WhoReads("Selected").Should().Be(Queries.WhoReads("Selected"));
+            unlimited.SystemsOf("GameplayFeature").Should().NotContain("not shown");
+        }
+
+        [Fact]
+        public void Systems_in_execution_order_come_before_types_outside_features()
+        {
+            var lines = Queries.WhoCreates("Furniture").Split('\n').Select(l => l.Trim()).ToList();
+
+            lines.Should().ContainInOrder(
+                "PlaceFurnitureByRequestSystem  [Flag*]  FurnitureFeature #2, GameplayFeature order 3",
+                "FurnitureFactory  [Flag]  [type]");
+        }
+
+        [Fact]
         public void Names_are_never_guessed()
         {
             Action ambiguous = () => Queries.Resolve("Sample");

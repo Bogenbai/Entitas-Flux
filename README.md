@@ -415,10 +415,10 @@ LateFeature:
 ```text
 $ entitas-graph who-creates Furniture
 Furniture — created by 2 (1 direct, 1 inferred)
-  FurnitureFactory  [Flag]  [type]
-      creates via Flag  Assets/Infrastructure.cs:32
   PlaceFurnitureByRequestSystem  [Flag*]  FurnitureFeature #2, GameplayFeature order 3
       creates via Flag (FurnitureFactory.CreateFurniture)  Assets/Infrastructure.cs:32
+  FurnitureFactory  [Flag]  [type]
+      creates via Flag  Assets/Infrastructure.cs:32
 ```
 
 `path` gives the shortest data-flow chain between two systems or components:
@@ -456,12 +456,24 @@ GameplayFeature (root) — 11 systems
 
 Names may drop the `Component` suffix. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
 
+**Every answer is capped at about 2000 tokens** (`--budget`; `0` turns the cap off). Most answers are far below it: on a 2000-file project, `who-reads` of an event is ~400 tokens. But a component most of the code touches (an `Id`, a position) has hundreds of readers, and uncapped `who-reads` of one was ~23 000 tokens. An answer over the budget starts with a summary of its shape (by feature, by root, or by relation), lists the entries that fit, and says what it left out. Here the same answer is cut on purpose, with a tiny budget:
+```text
+$ entitas-graph who-reads Selected --budget 40
+Selected — read by 4 (4 direct, 0 inferred)
+  by feature: FurnitureFeature 3, (unregistered) 1
+  SelectSystem  [NoneOf]  FurnitureFeature #4, GameplayFeature order 5
+      filters via NoneOf  Assets/Systems/FurnitureSystems.cs:63
+
+… 3 more systems and types not shown — the answer is capped at ~40 tokens (--budget 0 prints everything).
+```
+
 | Option | Effect |
 | --- | --- |
 | `-r`, `--root <dir>` | Unity project root (default: current directory). |
 | `-p`, `--project <csproj>` | The project declaring the contexts (default: found under the root). |
 | `-o`, `--out <dir>` | Output folder (default: `entitas-graph-out` in the root — add it to `.gitignore`). |
 | `--request-suffix <s>`, `--event-suffix <s>` | How requests and events are recognised (default: `Request`, `Event`). |
+| `--budget <tokens>` | Cap each answer at about this many tokens (default: 2000; `0` = no cap). |
 | `--limit <n>` | Results for `query` (default: 20). |
 | `--no-html` | Skip `graph.html`. |
 
@@ -482,9 +494,33 @@ Names may drop the `Component` suffix. A name that matches several nodes is neve
   These are leads, not errors. A component read but never created may be added from data, from a prefab's component list for example, which the tool cannot see.
 - **`graph.html`**: the graph in a browser, offline. Search a node, see its neighbours one or two steps out, filter by kind and relation; the side panel lists who creates, reads and destroys it. It inlines [vis-network](https://visjs.github.io/vis-network/) 9.1.9 (Apache-2.0 or MIT; its licence ships next to the tool).
 
-**For AI coding assistants:** answering "who uses this component?" with grep misses everything that goes through generated code. Point your assistant at `entitas-graph who-reads X`, `lifecycle X` or `graph.json` instead.
-
 Out of scope: dependency injection, scenes, prefabs and other assets. The graph covers code in the assembly that declares the contexts.
+
+### For AI coding assistants
+An assistant answering "who uses this component?" with grep reads every file that mentions it. It still misses what goes through factories and query classes, and it never learns the order systems run in. The commands answer the same question for a fraction of the tokens. Measured on a 2000-file production project:
+
+| What the assistant reads | Tokens |
+| --- | --- |
+| `who-reads` or `lifecycle` of an event | ~350–400 |
+| `path` between two systems | ~110 |
+| The same question by grep, then reading the 8 files that mention the event | ~5 900 |
+| `GRAPH_REPORT.md`, once, for an overview | ~3 900 |
+| Any answer, at most | ~2 000 (the budget) |
+| `graph.json` | ~1 400 000 — never let an assistant read it; it is for programs |
+
+Tell the assistant so in the project's `CLAUDE.md` or `AGENTS.md`. The path is the manual install's; with UPM it is `Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll`:
+```md
+## ECS data flow
+This is an Entitas project. To find who creates, reads, filters, removes or destroys a
+component, what a feature runs and in what order, or how data gets from one system to
+another, run entitas-graph from the Unity project root instead of searching the code:
+
+    dotnet Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component>
+
+Commands: who-creates, who-reads, lifecycle, systems-of, path, explain, query. Each answer
+is capped at ~2000 tokens. entitas-graph-out/GRAPH_REPORT.md is a short overview worth
+reading once; never read entitas-graph-out/graph.json.
+```
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

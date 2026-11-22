@@ -32,6 +32,14 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   events are recognised by name suffix (`--request-suffix`, `--event-suffix`). It ships in
   the package's `Tools~/` next to `entitas-gen`.
 
+  Made to be asked by AI assistants as much as by people: every answer is capped at about
+  2000 tokens (`--budget`, `0` for no cap). A component half the code touches would
+  otherwise answer with hundreds of readers (~23 000 tokens). An answer over the cap starts
+  with a summary by feature or root, then says what it left out. `who-reads` of an event costs
+  ~400 tokens where grep and reading the files that mention it costs ~6000. `graph.json`
+  (~1.4 M tokens on that project) is for programs, and the README says so, with a snippet
+  for the project's `CLAUDE.md` / `AGENTS.md`.
+
   On a production project (1906 files plus ~900 generated, 772 components, 747 systems,
   88 features) a build takes 2.2–2.8 s. The tree-sitter graph that missed both producers and
   all 7 consumers of an event component now finds them: 2 creators, 7 readers, all in the

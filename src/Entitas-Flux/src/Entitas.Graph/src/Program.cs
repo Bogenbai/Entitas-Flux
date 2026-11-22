@@ -37,7 +37,7 @@ namespace Entitas.Graph
                 }
 
                 var graph = LoadOrBuild(options);
-                var queries = new GraphQueries(graph);
+                var queries = new GraphQueries(graph, options.Budget);
                 var output = options.Command switch
                 {
                     "who-creates" => queries.WhoCreates(options.Arg(0)),
@@ -99,10 +99,12 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  -o, --out <dir>             Output folder (default: <root>/entitas-graph-out).");
             Console.Error.WriteLine("      --request-suffix <s>    Name suffix of request components (default: Request).");
             Console.Error.WriteLine("      --event-suffix <s>      Name suffix of event components (default: Event).");
+            Console.Error.WriteLine("      --budget <tokens>       Cap each answer at about this many tokens (default: 2000; 0 = no cap).");
             Console.Error.WriteLine("      --limit <n>             Results for query (default: 20).");
             Console.Error.WriteLine("      --no-html               Skip graph.html on build.");
             Console.Error.WriteLine();
-            Console.Error.WriteLine("Queries reuse graph.json and rebuild it first when a source file is newer.");
+            Console.Error.WriteLine("Queries reuse graph.json and rebuild it first when a source file is newer. An answer over");
+            Console.Error.WriteLine("the budget starts with a summary by feature and says how much it left out.");
             Console.Error.WriteLine("Exit codes: 0 answer, 1 error, 2 usage, 3 ambiguous name, 4 not found.");
         }
 
@@ -257,6 +259,7 @@ namespace Entitas.Graph
             public string RequestSuffix = "Request";
             public string EventSuffix = "Event";
             public int Limit = 20;
+            public int Budget = GraphQueries.DefaultBudget;
             public bool Html = true;
 
             public string Out => OutOverride ?? Path.Combine(Root, "entitas-graph-out");
@@ -296,6 +299,9 @@ namespace Entitas.Graph
                             break;
                         case "--limit":
                             if (++i >= args.Length || !int.TryParse(args[i], out options.Limit)) return null;
+                            break;
+                        case "--budget":
+                            if (++i >= args.Length || !int.TryParse(args[i], out options.Budget) || options.Budget < 0) return null;
                             break;
                         case "--no-html":
                             options.Html = false;

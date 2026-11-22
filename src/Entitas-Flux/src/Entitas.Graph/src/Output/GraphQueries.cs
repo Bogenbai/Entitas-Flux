@@ -23,13 +23,34 @@ namespace Entitas.Graph.Output
 
     /// <summary>
     /// The questions entitas-graph answers. Output is plain text meant to be read by a
-    /// person or pasted to an assistant: one line per fact, the code location at the end.
+    /// person or an assistant: one line per fact, the code location at the end.
+    ///
+    /// Every answer is capped at a token budget (Graphify's default, 2000), because an
+    /// assistant pays for every line it reads: a component most systems touch would otherwise
+    /// answer with 300 readers. An answer that does not fit starts with a summary by feature or
+    /// root — so the shape of a hub survives the cut — lists what fits, and says how much is
+    /// left out. A budget of 0 prints everything.
     /// </summary>
     public sealed class GraphQueries
     {
-        readonly EcsGraph _graph;
+        public const int DefaultBudget = 2000;
 
-        public GraphQueries(EcsGraph graph) => _graph = graph;
+        /// <summary>The usual estimate for code-like English text.</summary>
+        const int CharsPerToken = 4;
+
+        /// <summary>Sites listed per system in who-creates/who-reads, and items per relation in explain, while capped.</summary>
+        const int SitesPerSource = 3, ItemsPerRelation = 25;
+
+        readonly EcsGraph _graph;
+        readonly int _budget;
+
+        public GraphQueries(EcsGraph graph, int budget = DefaultBudget)
+        {
+            _graph = graph;
+            _budget = Math.Max(0, budget);
+        }
+
+        bool Capped => _budget > 0;
 
         // -- resolving names --------------------------------------------------------------
 
@@ -76,17 +97,23 @@ namespace Entitas.Graph.Output
             var edges = _graph.Incoming(component.Id).Where(e => relations.Contains(e.Relation)).ToList();
             var sources = edges.Select(e => e.Source).Distinct().ToList();
 
-            var sb = new StringBuilder();
-            sb.AppendLine($"{component.Label} — {verb} {sources.Count} ({Count(edges, Confidence.Extracted)} direct, {Count(edges, Confidence.Inferred)} inferred)");
-            foreach (var group in edges.GroupBy(e => e.Source).OrderBy(g => SortKey(g.Key)))
+            var head = new[] { $"{component.Label} — {verb} {sources.Count} ({Count(edges, Confidence.Extracted)} direct, {Count(edges, Confidence.Inferred)} inferred)" };
+            var entries = new List<string>();
+            foreach (var group in edges.GroupBy(e => e.Source).OrderBy(g => SortKey(g.Key), StringComparer.Ordinal))
             {
                 var node = _graph.Node(group.Key)!;
-                sb.AppendLine($"  {node.Label}  [{Describe(group)}]  {Placement(node)}");
-                foreach (var edge in group.OrderBy(e => e.Line))
-                    sb.AppendLine($"      {edge.Relation} via {edge.Via}{Through(edge)}  {Location(edge)}");
+                var entry = new StringBuilder();
+                entry.AppendLine($"  {node.Label}  [{Describe(group)}]  {Placement(node)}");
+                var sites = group.OrderBy(e => e.Line).ToList();
+                var shown = Capped ? Math.Min(sites.Count, SitesPerSource) : sites.Count;
+                foreach (var edge in sites.Take(shown))
+                    entry.AppendLine($"      {edge.Relation} via {edge.Via}{Through(edge)}  {Location(edge)}");
+                if (shown < sites.Count)
+                    entry.AppendLine($"      … {sites.Count - shown} more sites");
+                entries.Add(entry.ToString());
             }
 
-            return sb.ToString();
+            return Render(head, () => new[] { "  by feature: " + ByFeature(sources) }, entries, "systems and types");
         }
 
         /// <summary>
@@ -98,10 +125,14 @@ namespace Entitas.Graph.Output
             var component = Resolve(componentName, NodeKind.Component);
             var edges = _graph.Incoming(component.Id).Where(e => e.Relation != Relation.Contains).ToList();
 
-            var sb = new StringBuilder();
-            sb.AppendLine($"{component.Label}{Attributes(component)}");
-            sb.AppendLine($"  created by {Distinct(edges, Relation.Creates)} · read by {Distinct(edges, Relation.Reads, Relation.Reacts)} · " +
-                          $"filtered by {Distinct(edges, Relation.Filters)} · removed by {Distinct(edges, Relation.Removes)} · destroyed by {Distinct(edges, Relation.Destroys)}");
+            var head = new[]
+            {
+                $"{component.Label}{Attributes(component)}",
+                $"  created by {Distinct(edges, Relation.Creates)} · read by {Distinct(edges, Relation.Reads, Relation.Reacts)} · " +
+                $"filtered by {Distinct(edges, Relation.Filters)} · removed by {Distinct(edges, Relation.Removes)} · destroyed by {Distinct(edges, Relation.Destroys)}"
+            };
+            var entries = new List<string>();
+            var stepsPerRoot = new List<string>();
 
             var bySource = edges.GroupBy(e => e.Source).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
             var roots = bySource.Keys
@@ -112,37 +143,44 @@ namespace Entitas.Graph.Output
 
             foreach (var root in roots)
             {
-                sb.AppendLine();
-                sb.AppendLine($"{Label(root)}:");
                 var steps = bySource
                     .SelectMany(pair => _graph.Node(pair.Key)!.Placements.Where(p => p.Root == root).Select(p => (Placement: p, Node: _graph.Node(pair.Key)!, Edges: pair.Value)))
-                    .OrderBy(s => s.Placement.Order);
+                    .OrderBy(s => s.Placement.Order)
+                    .ToList();
+                stepsPerRoot.Add($"{Label(root)} {steps.Count}");
+                var title = $"\n{Label(root)}:\n";
                 foreach (var step in steps)
                 {
                     var feature = step.Placement.Chain.Count > 0 ? Label(step.Placement.Chain[step.Placement.Chain.Count - 1]) : string.Empty;
-                    sb.AppendLine($"  #{step.Placement.Order,-4} {Verbs(step.Edges),-22} {step.Node.Label}  ({feature}){Inferred(step.Edges)}");
+                    entries.Add(title + $"  #{step.Placement.Order,-4} {Verbs(step.Edges),-22} {step.Node.Label}  ({feature}){Inferred(step.Edges)}\n");
+                    title = string.Empty;
                 }
             }
 
             var unplaced = bySource.Keys.Select(id => _graph.Node(id)!).Where(n => n.Placements.Count == 0).OrderBy(n => n.Label).ToList();
             if (unplaced.Count > 0)
+                stepsPerRoot.Add($"not in any feature {unplaced.Count}");
+            var unplacedTitle = "\nNot in any feature (queries, services, unregistered systems):\n";
+            foreach (var node in unplaced)
             {
-                sb.AppendLine();
-                sb.AppendLine("Not in any feature (queries, services, unregistered systems):");
-                foreach (var node in unplaced)
-                    sb.AppendLine($"  {Verbs(bySource[node.Id]),-22} {node.Label}  [{node.Kind}]{Inferred(bySource[node.Id])}");
+                entries.Add(unplacedTitle + $"  {Verbs(bySource[node.Id]),-22} {node.Label}  [{node.Kind}]{Inferred(bySource[node.Id])}\n");
+                unplacedTitle = string.Empty;
             }
 
-            return sb.ToString();
+            return Render(head, () => new[]
+            {
+                "  steps by root: " + string.Join(", ", stepsPerRoot),
+                "  by feature: " + ByFeature(bySource.Keys)
+            }, entries, "steps");
         }
 
         public string SystemsOf(string featureName)
         {
             var feature = Resolve(featureName, NodeKind.Feature);
-            var sb = new StringBuilder();
-            sb.AppendLine($"{feature.Label}{(feature.Root ? " (root)" : string.Empty)} — {CountSystems(feature.Id, new HashSet<string>())} systems");
+            var head = new[] { $"{feature.Label}{(feature.Root ? " (root)" : string.Empty)} — {CountSystems(feature.Id, new HashSet<string>())} systems" };
+            var entries = new List<string>();
             Tree(feature.Id, "  ", new HashSet<string> { feature.Id });
-            return sb.ToString();
+            return Render(head, Summary, entries, "lines");
 
             void Tree(string id, string indent, HashSet<string> seen)
             {
@@ -150,10 +188,24 @@ namespace Entitas.Graph.Output
                 {
                     var child = _graph.Node(edge.Target)!;
                     var interfaces = child.Interfaces.Count > 0 ? $"  [{string.Join(", ", child.Interfaces)}]" : string.Empty;
-                    sb.AppendLine($"{indent}{edge.Order,3}. {child.Label}{(child.Kind == NodeKind.Feature ? " (feature)" : interfaces)}");
+                    entries.Add($"{indent}{edge.Order,3}. {child.Label}{(child.Kind == NodeKind.Feature ? " (feature)" : interfaces)}\n");
                     if (child.Kind == NodeKind.Feature && seen.Add(child.Id))
                         Tree(child.Id, indent + "     ", seen);
                 }
+            }
+
+            IEnumerable<string> Summary()
+            {
+                var children = _graph.Outgoing(feature.Id).Where(e => e.Relation == Relation.Contains).Select(e => _graph.Node(e.Target)!).ToList();
+                var nested = children.Where(c => c.Kind == NodeKind.Feature)
+                    .Select(c => (c.Label, Systems: CountSystems(c.Id, new HashSet<string> { feature.Id })))
+                    .OrderByDescending(c => c.Systems)
+                    .ThenBy(c => c.Label, StringComparer.Ordinal)
+                    .ToList();
+                const int shown = 12;
+                yield return $"  {children.Count(c => c.Kind == NodeKind.System)} systems directly; {nested.Count} nested features, largest: " +
+                             string.Join(", ", nested.Take(shown).Select(c => $"{c.Label} {c.Systems}")) +
+                             (nested.Count > shown ? $", … {nested.Count - shown} more" : string.Empty);
             }
         }
 
@@ -174,40 +226,45 @@ namespace Entitas.Graph.Output
         public string Explain(string name)
         {
             var node = Resolve(name);
-            var sb = new StringBuilder();
-            sb.AppendLine($"{node.Label}  [{node.Kind}{(node.Generated ? ", generated" : string.Empty)}{(node.Root ? ", root" : string.Empty)}]");
-            if (node.FullName != null) sb.AppendLine($"  type: {node.FullName}");
-            if (node.SourceFile != null) sb.AppendLine($"  source: {node.SourceFile}:{node.Line}");
+            var head = new List<string> { $"{node.Label}  [{node.Kind}{(node.Generated ? ", generated" : string.Empty)}{(node.Root ? ", root" : string.Empty)}]" };
+            if (node.FullName != null) head.Add($"  type: {node.FullName}");
+            if (node.SourceFile != null) head.Add($"  source: {node.SourceFile}:{node.Line}");
             if (node.Kind == NodeKind.Component)
             {
-                sb.AppendLine($"  contexts: {string.Join(", ", node.Contexts)}; {(node.Flag ? "flag" : "data: " + string.Join(", ", node.Fields))}");
-                if (node.Attributes.Count > 0) sb.AppendLine($"  attributes: {string.Join(", ", node.Attributes)}");
-                if (node.Role != null) sb.AppendLine($"  role: {node.Role} (by name)");
+                head.Add($"  contexts: {string.Join(", ", node.Contexts)}; {(node.Flag ? "flag" : "data: " + string.Join(", ", node.Fields))}");
+                if (node.Attributes.Count > 0) head.Add($"  attributes: {string.Join(", ", node.Attributes)}");
+                if (node.Role != null) head.Add($"  role: {node.Role} (by name)");
             }
-            if (node.Interfaces.Count > 0) sb.AppendLine($"  runs: {string.Join(", ", node.Interfaces)}");
+            if (node.Interfaces.Count > 0) head.Add($"  runs: {string.Join(", ", node.Interfaces)}");
             foreach (var registration in node.RegisteredIn)
-                sb.AppendLine($"  registered: {Label(registration.Feature)} #{registration.Index}");
+                head.Add($"  registered: {Label(registration.Feature)} #{registration.Index}");
             foreach (var placement in node.Placements)
-                sb.AppendLine($"  runs under {Label(placement.Root)} at #{placement.Order} via {string.Join(" → ", placement.Chain.Select(Label))}");
+                head.Add($"  runs under {Label(placement.Root)} at #{placement.Order} via {string.Join(" → ", placement.Chain.Select(Label))}");
 
-            AppendEdges(sb, "  ", _graph.Outgoing(node.Id), outgoing: true);
-            AppendEdges(sb, "  ", _graph.Incoming(node.Id), outgoing: false);
-            return sb.ToString();
+            var entries = new List<string>();
+            var counts = new List<string>();
+            AddEdges(entries, counts, _graph.Outgoing(node.Id), outgoing: true);
+            AddEdges(entries, counts, _graph.Incoming(node.Id), outgoing: false);
+            return Render(head, () => new[] { "  connections: " + string.Join(", ", counts) }, entries, "connections");
         }
 
-        void AppendEdges(StringBuilder sb, string indent, IEnumerable<GraphEdge> edges, bool outgoing)
+        void AddEdges(List<string> entries, List<string> counts, IEnumerable<GraphEdge> edges, bool outgoing)
         {
             foreach (var group in edges.GroupBy(e => e.Relation).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
                 var list = group.OrderBy(e => outgoing ? Label(e.Target) : Label(e.Source)).ToList();
-                sb.AppendLine($"{indent}{(outgoing ? group.Key : Passive(group.Key))} ({list.Count}):");
-                foreach (var edge in list.Take(25))
+                var relation = outgoing ? group.Key : Passive(group.Key);
+                counts.Add($"{relation} {list.Count}");
+                var title = $"  {relation} ({list.Count}):\n";
+                var shown = Capped ? Math.Min(list.Count, ItemsPerRelation) : list.Count;
+                foreach (var edge in list.Take(shown))
                 {
                     var other = outgoing ? edge.Target : edge.Source;
-                    sb.AppendLine($"{indent}  {Label(other)}  via {edge.Via}{Through(edge)}  {Location(edge)}");
+                    entries.Add(title + $"    {Label(other)}  via {edge.Via}{Through(edge)}  {Location(edge)}\n");
+                    title = string.Empty;
                 }
-                if (list.Count > 25)
-                    sb.AppendLine($"{indent}  … {list.Count - 25} more (use --json for all)");
+                if (shown < list.Count)
+                    entries.Add($"    … {list.Count - shown} more {relation}\n");
             }
         }
 
@@ -232,16 +289,16 @@ namespace Entitas.Graph.Output
             if (path == null)
                 return $"No data-flow path between {a.Label} and {b.Label}.\n";
 
-            var sb = new StringBuilder();
-            sb.AppendLine($"{a.Label} → {b.Label}: {path.Count} hops{(undirected ? " (no forward path; shown ignoring direction)" : string.Empty)}");
+            var head = new[] { $"{a.Label} → {b.Label}: {path.Count} hops{(undirected ? " (no forward path; shown ignoring direction)" : string.Empty)}" };
+            var entries = new List<string>();
             foreach (var (edge, reversed) in path)
             {
                 var left = reversed ? edge.Target : edge.Source;
                 var right = reversed ? edge.Source : edge.Target;
                 var relation = reversed ? Passive(edge.Relation) : edge.Relation;
-                sb.AppendLine($"  {Label(left)} --{relation}--> {Label(right)}  [{edge.Confidence}] via {edge.Via}{Through(edge)}  {Location(edge)}");
+                entries.Add($"  {Label(left)} --{relation}--> {Label(right)}  [{edge.Confidence}] via {edge.Via}{Through(edge)}  {Location(edge)}\n");
             }
-            return sb.ToString();
+            return Render(head, Array.Empty<string>, entries, "hops");
         }
 
         Dictionary<string, List<(GraphEdge Edge, bool Reversed, string Next)>> DataFlow(bool directed)
@@ -315,15 +372,66 @@ namespace Entitas.Graph.Output
                 .ThenBy(x => x.Node.Label, StringComparer.Ordinal)
                 .ToList();
 
-            var sb = new StringBuilder();
-            sb.AppendLine($"{ranked.Count} nodes match \"{text}\"{(ranked.Count > limit ? $"; showing {limit} (raise --limit for more)" : string.Empty)}");
+            var head = new[] { $"{ranked.Count} nodes match \"{text}\"{(ranked.Count > limit ? $"; showing {limit} (raise --limit for more)" : string.Empty)}" };
+            var entries = new List<string>();
             foreach (var (node, _) in ranked.Take(limit))
             {
                 var relations = _graph.Outgoing(node.Id).GroupBy(e => e.Relation).Select(g => $"{g.Key} {g.Select(e => e.Target).Distinct().Count()}")
                     .Concat(_graph.Incoming(node.Id).GroupBy(e => e.Relation).Select(g => $"{Passive(g.Key)} {g.Select(e => e.Source).Distinct().Count()}"));
-                sb.AppendLine($"  {node.Label}  [{node.Kind}]  {string.Join(", ", relations)}  {node.SourceFile}{(node.Line > 0 ? ":" + node.Line : string.Empty)}");
+                entries.Add($"  {node.Label}  [{node.Kind}]  {string.Join(", ", relations)}  {node.SourceFile}{(node.Line > 0 ? ":" + node.Line : string.Empty)}\n");
             }
+            return Render(head, Array.Empty<string>, entries, "nodes");
+        }
+
+        // -- the budget ---------------------------------------------------------------------------
+
+        /// <summary>
+        /// The answer as it is, when it fits the budget. Otherwise the head, the summary, as many
+        /// whole entries as fit (at least one) and a line saying what was left out. Entries carry
+        /// their own line breaks, so a multi-line entry is never cut in half.
+        /// </summary>
+        string Render(IReadOnlyList<string> head, Func<IEnumerable<string>> summary, IReadOnlyList<string> entries, string noun)
+        {
+            var sb = new StringBuilder();
+            foreach (var line in head)
+                sb.AppendLine(line);
+            var full = sb.Length + entries.Sum(e => e.Length);
+            var limit = _budget * CharsPerToken;
+            if (!Capped || full <= limit)
+            {
+                foreach (var entry in entries)
+                    sb.Append(entry);
+                return sb.ToString();
+            }
+
+            foreach (var line in summary())
+                sb.AppendLine(line);
+            var shown = 0;
+            foreach (var entry in entries)
+            {
+                if (shown > 0 && sb.Length + entry.Length > limit) break;
+                sb.Append(entry);
+                shown++;
+            }
+            sb.AppendLine();
+            sb.AppendLine($"… {entries.Count - shown} more {noun} not shown — the answer is capped at ~{_budget} tokens (--budget 0 prints everything).");
             return sb.ToString();
+        }
+
+        /// <summary>How many of the nodes sit in each feature (the one that registers them), busiest first.</summary>
+        string ByFeature(IEnumerable<string> ids)
+        {
+            var counts = ids.Select(id => _graph.Node(id)!)
+                .SelectMany(n => n.Placements.Count > 0
+                    ? n.Placements.Select(p => Label(p.Chain.Count > 0 ? p.Chain[p.Chain.Count - 1] : p.Root)).Distinct()
+                    : new[] { n.Kind == NodeKind.System ? "(unregistered)" : "(no feature: queries, services…)" })
+                .GroupBy(label => label)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.Ordinal)
+                .ToList();
+            const int shown = 8;
+            return string.Join(", ", counts.Take(shown).Select(g => $"{g.Key} {g.Count()}")) +
+                   (counts.Count > shown ? $", … {counts.Count - shown} more features" : string.Empty);
         }
 
         // -- formatting helpers ------------------------------------------------------------------
