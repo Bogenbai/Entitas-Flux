@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Entitas.SourceGenerator.CodeGeneration;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Entitas.SourceGenerator.Discovery
 {
@@ -41,7 +42,7 @@ namespace Entitas.SourceGenerator.Discovery
         public static DiscoveryResult Discover(Compilation compilation, bool ignoreNamespaces = false)
         {
             var resolver = ContextResolver.FromCompilation(compilation);
-            var types = GetCandidateTypes(compilation).ToArray();
+            var types = GetRelevantTypes(compilation).ToArray();
             return Discover(types, resolver, ignoreNamespaces);
         }
 
@@ -69,14 +70,77 @@ namespace Entitas.SourceGenerator.Discovery
         }
 
         /// <summary>
-        /// Collects all named types declared in the compilation's source assembly. The
-        /// incremental generator does NOT use this — it snapshots type declarations from
-        /// the syntax pipeline so unchanged files are never revisited — but the CLIs and
-        /// tests, which start from a whole compilation, do.
+        /// Collects all named types declared in the compilation's source assembly, except
+        /// the ones Entitas-Flux itself wrote to disk (<c>Output = GenerationOutput.Files</c>).
+        ///
+        /// Those must never be discovered: generated code declares components of its own —
+        /// the <c>{X}Changed</c> markers, event listener components, wrappers for
+        /// <c>[Game]</c>-attributed plain classes — and feeding them back into discovery
+        /// would generate every one of them a second time.
         /// </summary>
         public static IEnumerable<INamedTypeSymbol> GetCandidateTypes(Compilation compilation)
         {
-            return GetAllTypes(compilation.Assembly.GlobalNamespace);
+            var all = GetAllTypes(compilation.Assembly.GlobalNamespace);
+
+            var generated = GeneratedFiles.FindGeneratedTrees(compilation);
+            if (generated.Count == 0)
+                return all;
+
+            var generatedTrees = new HashSet<SyntaxTree>(generated);
+            return all.Where(type => !IsDeclaredOnlyIn(type, generatedTrees));
+        }
+
+        /// <summary>
+        /// The candidate types discovery can draw data from: components, and types carrying
+        /// attributes (a <c>[Game]</c> plain class gets a generated component, a
+        /// <c>[CustomEntityIndex]</c> class an index). Every other type yields nothing, so
+        /// it is not snapshotted at all — on a ~2000-file project that is most of them, and
+        /// snapshotting means binding every public member's type.
+        /// </summary>
+        public static IEnumerable<INamedTypeSymbol> GetRelevantTypes(Compilation compilation) =>
+            GetCandidateTypes(compilation).Where(IsRelevant);
+
+        /// <summary>
+        /// Same, checking types on every core when <paramref name="parallel"/> — deciding
+        /// whether a type is a component binds its base types, the bulk of a cold run.
+        /// </summary>
+        public static IEnumerable<INamedTypeSymbol> GetRelevantTypes(Compilation compilation, bool parallel) =>
+            parallel
+                ? GetCandidateTypes(compilation).ToArray().AsParallel().AsOrdered().Where(IsRelevant).ToArray()
+                : GetRelevantTypes(compilation);
+
+        static bool IsRelevant(INamedTypeSymbol type)
+        {
+            foreach (var reference in type.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is MemberDeclarationSyntax { AttributeLists.Count: > 0 })
+                    return true;
+            }
+
+            foreach (var @interface in type.AllInterfaces)
+            {
+                if (@interface.Name == "IComponent" &&
+                    @interface.ContainingNamespace is { Name: "Entitas" } ns &&
+                    ns.ContainingNamespace is { IsGlobalNamespace: true })
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool IsDeclaredOnlyIn(INamedTypeSymbol type, HashSet<SyntaxTree> trees)
+        {
+            var references = type.DeclaringSyntaxReferences;
+            if (references.Length == 0)
+                return false;
+
+            foreach (var reference in references)
+            {
+                if (!trees.Contains(reference.SyntaxTree))
+                    return false;
+            }
+
+            return true;
         }
 
         static IEnumerable<INamedTypeSymbol> GetAllTypes(INamespaceSymbol root)

@@ -435,19 +435,24 @@ namespace Entitas.SourceGenerator.Rename
             RenameOptions options,
             List<string> warnings)
         {
-            var parseOptions = compilation.SyntaxTrees
-                .Select(t => t.Options)
-                .OfType<CSharpParseOptions>()
-                .FirstOrDefault();
-
-            var generatedTrees = generatedSources
-                .Select(s => CSharpSyntaxTree.ParseText(
-                    s.Content, parseOptions, path: GeneratedPrefix + s.FileName))
-                .ToArray();
-
-            var semanticCompilation = compilation.AddSyntaxTrees(generatedTrees);
-            var generatedPaths = new HashSet<string>(
-                generatedTrees.Select(t => t.FilePath), StringComparer.Ordinal);
+            // In file mode the generated code is already in the compilation, as real files:
+            // resolve against those (adding a second copy would make every generated
+            // member ambiguous) and rewrite them too, so the project compiles straight
+            // after the rename — regeneration then only moves them to their new names.
+            var onDisk = GeneratedFiles.FindGeneratedTrees(compilation);
+            Compilation semanticCompilation;
+            HashSet<string> generatedPaths;
+            if (onDisk.Count > 0)
+            {
+                semanticCompilation = compilation;
+                generatedPaths = new HashSet<string>(onDisk.Select(t => t.FilePath), StringComparer.Ordinal);
+            }
+            else
+            {
+                var generatedTrees = InMemoryTrees(compilation, generatedSources);
+                semanticCompilation = compilation.AddSyntaxTrees(generatedTrees);
+                generatedPaths = new HashSet<string>(generatedTrees.Select(t => t.FilePath), StringComparer.Ordinal);
+            }
 
             // Names that are plain enough to belong to anything (the component name
             // itself, e.g. `Health` / `health`); these are only rewritten when the
@@ -473,8 +478,21 @@ namespace Entitas.SourceGenerator.Rename
                 var root = tree.GetRoot();
                 var edits = new List<TextEdit>();
 
+                // A generated file on disk also DECLARES the derived members (AddHealth,
+                // hasHealth, GameMatcher.Health, …). Every name in the map is, by
+                // construction, one the generator stops declaring for this component, so in
+                // our own files each such declaration is renamed along with its usages.
+                var isGeneratedFile = onDisk.Count > 0 && generatedPaths.Contains(tree.FilePath);
+
                 foreach (var node in root.DescendantNodes())
                 {
+                    if (isGeneratedFile && DeclaredIdentifier(node) is { } declared &&
+                        nameMap.TryGetValue(declared.ValueText, out var renamedDeclaration))
+                    {
+                        edits.Add(Edit(tree, declared, renamedDeclaration));
+                        continue;
+                    }
+
                     switch (node)
                     {
                         case SimpleNameSyntax name when nameMap.ContainsKey(name.Identifier.ValueText):
@@ -491,6 +509,15 @@ namespace Entitas.SourceGenerator.Rename
                             when constructor.Identifier.ValueText == target.Name:
                             edits.Add(Edit(tree, constructor.Identifier, nameMap[target.Name]));
                             break;
+
+                        // A user method implementing a generated interface member — the
+                        // OnAnyHealth of an IAnyHealthListener — follows the member's new name.
+                        case MethodDeclarationSyntax method when nameMap.ContainsKey(method.Identifier.ValueText):
+                            if (model.GetDeclaredSymbol(method) is { } declaredMethod &&
+                                ImplementedInterfaceMembers(declaredMethod)
+                                    .Any(member => IsEntitasGenerated(member, targetDisplay, generatedPaths)))
+                                edits.Add(Edit(tree, method.Identifier, nameMap[method.Identifier.ValueText]));
+                            break;
                     }
                 }
 
@@ -506,6 +533,65 @@ namespace Entitas.SourceGenerator.Rename
             }
 
             return files;
+        }
+
+        /// <summary>The interface members a method implements, implicitly or explicitly.</summary>
+        internal static IEnumerable<ISymbol> ImplementedInterfaceMembers(IMethodSymbol method)
+        {
+            foreach (var member in method.ExplicitInterfaceImplementations)
+                yield return member;
+
+            var type = method.ContainingType;
+            if (type == null)
+                yield break;
+
+            foreach (var @interface in type.AllInterfaces)
+            {
+                foreach (var member in @interface.GetMembers(method.Name))
+                {
+                    if (SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(member), method))
+                        yield return member;
+                }
+            }
+        }
+
+        static SyntaxToken? DeclaredIdentifier(SyntaxNode node) => node switch
+        {
+            BaseTypeDeclarationSyntax type => type.Identifier,
+            DelegateDeclarationSyntax @delegate => @delegate.Identifier,
+            MethodDeclarationSyntax method => method.Identifier,
+            ConstructorDeclarationSyntax constructor => constructor.Identifier,
+            PropertyDeclarationSyntax property => property.Identifier,
+            EventDeclarationSyntax @event => @event.Identifier,
+            EnumMemberDeclarationSyntax member => member.Identifier,
+            VariableDeclaratorSyntax { Parent.Parent: BaseFieldDeclarationSyntax } variable => variable.Identifier,
+            _ => null
+        };
+
+        static SyntaxTree[] InMemoryTrees(Compilation compilation, IReadOnlyList<GeneratedSource> sources)
+        {
+            var parseOptions = compilation.SyntaxTrees
+                .Select(t => t.Options)
+                .OfType<CSharpParseOptions>()
+                .FirstOrDefault();
+
+            return sources
+                .Select(s => CSharpSyntaxTree.ParseText(s.Content, parseOptions, path: GeneratedPrefix + s.FileName))
+                .ToArray();
+        }
+
+        /// <summary>
+        /// The compilation with the generated API in it, as the compiler would see it: as
+        /// is when the generated files are already part of it (file mode), otherwise with
+        /// the source generator's output added. What a referencing assembly must be
+        /// compiled against to resolve generated members.
+        /// </summary>
+        public static Compilation WithGeneratedCode(Compilation compilation)
+        {
+            if (GeneratedFiles.FindGeneratedTrees(compilation).Count > 0)
+                return compilation;
+
+            return compilation.AddSyntaxTrees(InMemoryTrees(compilation, EntitasGenerators.Generate(compilation)));
         }
 
         static void TryRewriteUsage(
@@ -652,6 +738,23 @@ namespace Entitas.SourceGenerator.Rename
 
                 var model = referencing.GetSemanticModel(tree);
                 var edits = new List<TextEdit>();
+
+                foreach (var method in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
+                {
+                    if (!plan.NameMap.TryGetValue(method.Identifier.ValueText, out var renamedMethod))
+                        continue;
+
+                    if (model.GetDeclaredSymbol(method) is { } declared &&
+                        RenameEngine.ImplementedInterfaceMembers(declared)
+                            .Any(member => BelongsToRenamedApi(member, plan, generatedTypes)))
+                    {
+                        edits.Add(new TextEdit(
+                            method.Identifier.Span,
+                            method.Identifier.Text,
+                            renamedMethod.AddPrefixIfIsKeyword(),
+                            Line(tree, method.Identifier.Span)));
+                    }
+                }
 
                 foreach (var name in tree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
                 {

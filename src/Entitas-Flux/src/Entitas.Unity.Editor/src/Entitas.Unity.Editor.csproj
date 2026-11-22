@@ -2,6 +2,13 @@
 
   <PropertyGroup>
     <TargetFramework>$(DefaultTargetFramework)</TargetFramework>
+    <!--
+      Put DesperateDevs.Unity.Editor.dll in the build output so build.sh can ship it: this
+      assembly (and the visual-debugging editor one) reference it, and without it Unity
+      refuses to load them in any project that does not still carry a copy from the
+      original Entitas distribution.
+    -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>

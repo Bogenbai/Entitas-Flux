@@ -20,6 +20,9 @@ namespace Entitas.Unity.Editor
     {
         public const int preferences = 1;
 
+        public const int generate = 2;
+        public const int rename_component = 5;
+
         public const int check_for_updates = 10;
 
         public const int feedback_report_a_bug = 20;

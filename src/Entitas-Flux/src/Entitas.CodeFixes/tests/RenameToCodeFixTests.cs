@@ -87,9 +87,47 @@ public sealed class HealthComponent : Entitas.IComponent {
             texts["Unrelated.cs"].Should().Be(UnrelatedSource);
         }
 
+        /// <summary>
+        /// Output = GenerationOutput.Files: the generated API is in ordinary documents. The
+        /// fix must resolve usages against them (not add a second copy, which would make
+        /// every member ambiguous) and rewrite them too, so the project compiles straight
+        /// after the fix — regeneration then only moves the files to their new names.
+        /// </summary>
+        [Fact]
+        public async Task Fix_works_when_the_generated_code_is_in_files()
+        {
+            var (solution, _) = await ApplyFixToSolutionAsync(filesMode: true);
+            var project = solution.Projects.Single();
+
+            var texts = new Dictionary<string, string>();
+            foreach (var doc in project.Documents)
+                texts[doc.Name] = (await doc.GetTextAsync()).ToString();
+
+            texts["DamageSystem.cs"].Should()
+                .Contain("entity.ReplaceHp(entity.hp.value - 1)")
+                .And.Contain("GameMatcher.Hp")
+                .And.NotContain("Health");
+            texts["Unrelated.cs"].Should().Be(UnrelatedSource);
+            texts["GameHealthComponent.cs"].Should().Contain("public GameEntity AddHp(int newValue)").And.Contain("public bool hasHp").And.NotContain("Health");
+
+            var compilation = await project.GetCompilationAsync();
+            compilation!.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+        }
+
         static async Task<Dictionary<string, string>> ApplyFixAsync()
         {
-            var (solution, diagnostics) = await AnalyzeAsync();
+            var (solution, _) = await ApplyFixToSolutionAsync(filesMode: false);
+
+            var texts = new Dictionary<string, string>();
+            foreach (var doc in solution.Projects.Single().Documents)
+                texts[doc.Name] = (await doc.GetTextAsync()).ToString();
+
+            return texts;
+        }
+
+        static async Task<(Solution Solution, Diagnostic[] Diagnostics)> ApplyFixToSolutionAsync(bool filesMode)
+        {
+            var (solution, diagnostics) = await AnalyzeAsync(filesMode);
             var document = solution.Projects.Single().Documents.Single(d => d.Name == "Components.cs");
 
             CodeAction? registered = null;
@@ -103,17 +141,19 @@ public sealed class HealthComponent : Entitas.IComponent {
             registered.Should().NotBeNull("the fix must offer an action for ENT0001");
 
             var operations = await registered!.GetOperationsAsync(CancellationToken.None);
-            var changed = operations.OfType<ApplyChangesOperation>().Single().ChangedSolution;
-
-            var texts = new Dictionary<string, string>();
-            foreach (var doc in changed.Projects.Single().Documents)
-                texts[doc.Name] = (await doc.GetTextAsync()).ToString();
-
-            return texts;
+            return (operations.OfType<ApplyChangesOperation>().Single().ChangedSolution, diagnostics);
         }
 
-        static async Task<(Solution Solution, Diagnostic[] Diagnostics)> AnalyzeAsync()
+        const string FilesOutput = "[assembly: EntitasGeneration(Output = GenerationOutput.Files)]\n";
+
+        static Task<(Solution Solution, Diagnostic[] Diagnostics)> AnalyzeAsync() => AnalyzeAsync(filesMode: false);
+
+        static async Task<(Solution Solution, Diagnostic[] Diagnostics)> AnalyzeAsync(bool filesMode)
         {
+            var componentSource = filesMode
+                ? ComponentSource.Replace("[assembly: ContextDefinition(\"Game\")]\n", "[assembly: ContextDefinition(\"Game\")]\n" + FilesOutput)
+                : ComponentSource;
+
             var workspace = new AdhocWorkspace();
             var projectId = ProjectId.CreateNewId();
 
@@ -122,12 +162,27 @@ public sealed class HealthComponent : Entitas.IComponent {
                 .WithProjectMetadataReferences(projectId, References())
                 .WithProjectCompilationOptions(projectId,
                     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
-                .AddDocument(DocumentId.CreateNewId(projectId), "Components.cs", SourceText.From(ComponentSource),
+                .AddDocument(DocumentId.CreateNewId(projectId), "Components.cs", SourceText.From(componentSource),
                     filePath: "Components.cs")
                 .AddDocument(DocumentId.CreateNewId(projectId), "DamageSystem.cs", SourceText.From(SystemSource),
                     filePath: "DamageSystem.cs")
                 .AddDocument(DocumentId.CreateNewId(projectId), "Unrelated.cs", SourceText.From(UnrelatedSource),
                     filePath: "Unrelated.cs");
+
+            if (filesMode)
+            {
+                // What entitas-gen would have written, as documents of the project.
+                var plain = await solution.GetProject(projectId)!.GetCompilationAsync();
+                foreach (var source in Entitas.SourceGenerator.EntitasGenerators.Generate(plain!))
+                {
+                    var path = "Generated/" + source.FileName;
+                    solution = solution.AddDocument(
+                        DocumentId.CreateNewId(projectId),
+                        Path.GetFileName(path),
+                        SourceText.From(Entitas.SourceGenerator.GeneratedFiles.FileText(source)),
+                        filePath: path);
+                }
+            }
 
             var compilation = await solution.GetProject(projectId)!.GetCompilationAsync();
             var withAnalyzers = compilation!.WithAnalyzers(

@@ -32,6 +32,7 @@ namespace Entitas.SourceGenerator.Cli
             var missingSourceFiles = new List<string>();
             var references = new List<string>();
             var defines = new List<string>();
+            string? languageVersion = null;
 
             foreach (var element in root.Descendants())
             {
@@ -59,6 +60,25 @@ namespace Entitas.SourceGenerator.Cli
                             references.Add(resolved);
                         break;
                     }
+                    case "ProjectReference":
+                    {
+                        // Unity lists asmdef dependencies as project references. Their
+                        // compiled output is what Unity itself references; without it, a
+                        // component field typed from another asmdef would not resolve and
+                        // its generated code would name the type differently.
+                        var include = element.Attribute("Include")?.Value;
+                        if (string.IsNullOrWhiteSpace(include))
+                            break;
+
+                        var name = Path.GetFileNameWithoutExtension(include!.Replace('\\', '/'));
+                        var compiled = Path.Combine(projectDir, "Library", "ScriptAssemblies", name + ".dll");
+                        if (File.Exists(compiled))
+                            references.Add(compiled);
+                        break;
+                    }
+                    case "LangVersion":
+                        languageVersion = element.Value.Trim();
+                        break;
                     case "DefineConstants":
                     {
                         foreach (var symbol in element.Value.Split(';'))
@@ -75,8 +95,9 @@ namespace Entitas.SourceGenerator.Cli
             return new ProjectInfo(
                 sourceFiles,
                 missingSourceFiles,
-                references,
-                defines.Distinct(StringComparer.Ordinal).ToList());
+                references.Distinct(StringComparer.Ordinal).ToList(),
+                defines.Distinct(StringComparer.Ordinal).ToList(),
+                languageVersion);
         }
 
         static string? ResolvePath(string projectDir, string? raw)
@@ -93,11 +114,26 @@ namespace Entitas.SourceGenerator.Cli
                 : Path.GetFullPath(Path.Combine(projectDir, normalized));
         }
 
-        public static CSharpCompilation BuildCompilation(string csprojPath, ProjectInfo project)
+        public static CSharpCompilation BuildCompilation(string csprojPath, ProjectInfo project) =>
+            Compile(Path.GetFileNameWithoutExtension(csprojPath), project);
+
+        /// <summary>
+        /// Parses every source file — in parallel: on a ~2000-file project reading and
+        /// parsing is a third of a cold run when done one file at a time — and builds the
+        /// compilation. Broken code is fine: discovery reads declarations, which Roslyn
+        /// binds whether or not the method bodies compile.
+        /// </summary>
+        public static CSharpCompilation Compile(string assemblyName, ProjectInfo project)
         {
-            var parseOptions = new CSharpParseOptions(preprocessorSymbols: project.Defines);
+            var parseOptions = new CSharpParseOptions(
+                languageVersion: ParseLanguageVersion(project.LanguageVersion),
+                // Doc comments matter to nobody here, and skipping their structure is free speed.
+                documentationMode: DocumentationMode.None,
+                preprocessorSymbols: project.Defines);
 
             var trees = project.SourceFiles
+                .AsParallel()
+                .AsOrdered()
                 .Select(f => CSharpSyntaxTree.ParseText(File.ReadAllText(f), parseOptions, path: f))
                 .ToArray();
 
@@ -111,13 +147,17 @@ namespace Entitas.SourceGenerator.Cli
             if (references.Count == 0)
                 references.AddRange(GetRuntimeReferences());
 
-            var assemblyName = Path.GetFileNameWithoutExtension(csprojPath);
             var options = new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
                 allowUnsafe: true);
 
             return CSharpCompilation.Create(assemblyName, trees, references, options);
         }
+
+        static LanguageVersion ParseLanguageVersion(string? value) =>
+            !string.IsNullOrWhiteSpace(value) && LanguageVersionFacts.TryParse(value, out var version)
+                ? version
+                : LanguageVersion.Latest;
 
         static IEnumerable<MetadataReference> GetRuntimeReferences()
         {
@@ -144,16 +184,21 @@ namespace Entitas.SourceGenerator.Cli
             public IReadOnlyList<string> References { get; }
             public IReadOnlyList<string> Defines { get; }
 
+            /// <summary>The project's C# version ("9.0"); null for the compiler's latest.</summary>
+            public string? LanguageVersion { get; }
+
             public ProjectInfo(
                 IReadOnlyList<string> sourceFiles,
                 IReadOnlyList<string> missingSourceFiles,
                 IReadOnlyList<string> references,
-                IReadOnlyList<string> defines)
+                IReadOnlyList<string> defines,
+                string? languageVersion = null)
             {
                 SourceFiles = sourceFiles;
                 MissingSourceFiles = missingSourceFiles;
                 References = references;
                 Defines = defines;
+                LanguageVersion = languageVersion;
             }
         }
     }

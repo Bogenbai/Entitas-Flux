@@ -44,6 +44,37 @@ namespace Entitas.Rename
                 }
 
                 var compilation = ProjectLoader.BuildCompilation(csprojPath, project);
+                var projectRoot = Path.GetDirectoryName(csprojPath)!;
+
+                // File mode: the plan resolves usages against the generated files on disk,
+                // so they must be current — regenerate first if they are not.
+                var filesMode = EntitasGenerators.ReadOptions(compilation).Output == GenerationOutput.Files;
+                if (filesMode)
+                {
+                    var check = GeneratedFileWriter.Run(compilation, projectRoot, new WriterOptions { Check = true });
+                    if (check.Staleness != null && !check.Staleness.IsUpToDate)
+                    {
+                        if (options.Apply)
+                        {
+                            Console.WriteLine("           note: generated files were out of date — regenerating them first.");
+                            Regenerate(csprojPath, project, projectRoot);
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                $"           note: generated files are out of date ({check.Staleness.Describe()}); " +
+                                "-a regenerates them before renaming.");
+                        }
+                    }
+
+                    // A csproj Unity has not rewritten since the last generation does not list
+                    // every generated file; usages are resolved against them, so take them all.
+                    if (check.OutputDirectory != null)
+                        project = GenerationHost.WithGeneratedFiles(project, check.OutputDirectory);
+
+                    compilation = ProjectLoader.BuildCompilation(csprojPath, project);
+                }
+
                 var plan = RenameEngine.CreatePlan(
                     compilation,
                     options.OldName,
@@ -63,12 +94,26 @@ namespace Entitas.Rename
                     return 0;
                 }
 
-                var (written, movedFile) = ApplyPlan(plan, external, options);
+                var (written, movedTo) = ApplyPlan(plan, external, options);
                 Console.WriteLine();
                 var total = plan.EditCount + external.Sum(e => e.EditCount);
                 Console.WriteLine($"Renamed {plan.OldClassName} -> {plan.NewClassName} " +
                                   $"({total} replacements in {written} files). Review with `git diff`.");
-                if (movedFile)
+
+                if (filesMode)
+                {
+                    // The csproj still lists the component under its old file name; point the
+                    // project at the moved file, or regeneration would not see the component
+                    // and would delete its generated code instead of renaming it.
+                    if (movedTo != null)
+                        project = WithMovedFile(project, plan.DeclarationFile!, movedTo);
+
+                    var regenerated = Regenerate(csprojPath, project, projectRoot);
+                    if (regenerated.Errors.Count > 0)
+                        return 1;
+                }
+
+                if (movedTo != null)
                 {
                     Console.WriteLine(
                         "The csproj still points at the old file path — reopen the project in Unity " +
@@ -156,9 +201,7 @@ namespace Entitas.Rename
             var root = Path.GetDirectoryName(csprojPath)!;
             var declaringName = Path.GetFileNameWithoutExtension(csprojPath);
 
-            var withGeneratedApi = declaring.AddSyntaxTrees(EntitasGenerators.Generate(declaring)
-                .Select(source => CSharpSyntaxTree.ParseText(source.Content)));
-            var reference = withGeneratedApi.ToMetadataReference();
+            var reference = RenameEngine.WithGeneratedCode(declaring).ToMetadataReference();
 
             foreach (var candidate in Directory
                          .EnumerateFiles(root, "*.csproj", SearchOption.TopDirectoryOnly)
@@ -281,13 +324,30 @@ namespace Entitas.Rename
 
         // -- apply ------------------------------------------------------------
 
-        static (int Written, bool MovedFile) ApplyPlan(
+        static AssemblyResult Regenerate(string csprojPath, ProjectLoader.ProjectInfo project, string projectRoot)
+        {
+            var compilation = ProjectLoader.BuildCompilation(csprojPath, project);
+            var result = GeneratedFileWriter.Run(compilation, projectRoot, new WriterOptions());
+            Console.Write("Generated: ");
+            GenerationHost.Print(result, projectRoot, verbose: false, Console.Out);
+            return result;
+        }
+
+        static ProjectLoader.ProjectInfo WithMovedFile(ProjectLoader.ProjectInfo project, string from, string to) =>
+            new ProjectLoader.ProjectInfo(
+                project.SourceFiles.Select(f => string.Equals(f, from, StringComparison.Ordinal) ? to : f).ToList(),
+                project.MissingSourceFiles,
+                project.References,
+                project.Defines,
+                project.LanguageVersion);
+
+        static (int Written, string? MovedTo) ApplyPlan(
             RenamePlan plan,
             List<ExternalEdits> external,
             CommandLineOptions options)
         {
             var written = 0;
-            var moved = false;
+            string? moved = null;
 
             foreach (var file in plan.Files.Concat(external.SelectMany(e => e.Files)))
             {
@@ -306,7 +366,7 @@ namespace Entitas.Rename
                 if (target != null)
                 {
                     MoveFile(plan.DeclarationFile!, target);
-                    moved = true;
+                    moved = target;
                 }
             }
 

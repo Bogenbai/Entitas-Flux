@@ -53,7 +53,9 @@ copy_map_line() {
 # third-party assemblies Entitas itself is built against; shipping without them left a
 # fresh project unable to compile (the generated Feature class references
 # DesperateDevs.Extensions) — existing projects only worked because they still had the
-# copies from the original Entitas distribution.
+# copies from the original Entitas distribution. The same went for the editor:
+# Entitas.Unity.Editor and Entitas.VisualDebugging.Unity.Editor reference
+# DesperateDevs.Unity.Editor, and without it Unity refuses to load either of them.
 while IFS='|' read -r dll dest
 do
   copy_map_line "$dll" "$dest"
@@ -64,6 +66,7 @@ DesperateDevs.Extensions.dll|Assets/Entitas/DesperateDevs
 DesperateDevs.Reflection.dll|Assets/Entitas/DesperateDevs
 DesperateDevs.Serialization.dll|Assets/Entitas/DesperateDevs
 Sherlog.dll|Assets/Entitas/DesperateDevs
+DesperateDevs.Unity.Editor.dll|Assets/Entitas/DesperateDevs/Editor
 Entitas.dll|Assets/Entitas/Entitas
 Entitas.SourceGenerator.dll|Assets/Entitas/Entitas/Analyzers
 Entitas.CodeFixes.dll|Assets/Entitas/Entitas/Analyzers
@@ -72,6 +75,29 @@ Entitas.VisualDebugging.Unity.dll|Assets/Entitas/Entitas
 Entitas.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 Entitas.VisualDebugging.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 EOF
+
+# The command-line tools the Unity editor runs out of process: entitas-gen (Tools >
+# Entitas > Generate, and regeneration when a component changes) and entitas-rename
+# (Tools > Entitas > Rename Component...). Framework-dependent and OS-independent — the
+# editor starts them with the .NET runtime Unity itself ships. They go in a folder whose
+# name ends in "~", which Unity never imports, so the Roslyn assemblies they carry cannot
+# clash with anything in the project.
+TOOLS_DIR="$ARTIFACTS_DIR/Assets/Entitas/Entitas/Tools~"
+mkdir -p "$TOOLS_DIR"
+for tool in entitas-gen entitas-rename; do
+  for ext in dll deps.json runtimeconfig.json; do
+    src="$TMP_OUT/$tool.$ext"
+    if [[ -f "$src" ]]; then
+      cp -f "$src" "$TOOLS_DIR/"
+    else
+      echo "error: expected tool file not found: $tool.$ext" >&2
+      exit 1
+    fi
+  done
+done
+for dll in Entitas.SourceGenerator.dll Microsoft.CodeAnalysis.dll Microsoft.CodeAnalysis.CSharp.dll; do
+  cp -f "$TMP_OUT/$dll" "$TOOLS_DIR/"
+done
 
 # optional: remove temp build folder
 rm -rf "$TMP_OUT"

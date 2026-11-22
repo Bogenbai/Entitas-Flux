@@ -228,5 +228,37 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
             plan.NameMap.Should().ContainKey("AddHealth").WhoseValue.Should().Be("AddHp");
             renamed["Components.cs"].Should().Contain("class HpComponent");
         }
+
+        [Fact]
+        public void Renames_the_methods_that_implement_an_event_listener()
+        {
+            // [Event] generates IAnyHealthListener.OnAnyHealth; a view implementing it must
+            // follow, or it stops implementing the renamed interface (CS0535).
+            var compilation = Compile(
+                ("Components.cs", Usings + ContextDefinition + @"
+[Event(EventTarget.Any)]
+public sealed class HealthComponent : Entitas.IComponent { public int value; }
+"),
+                ("HealthView.cs", @"
+public sealed class HealthView : IAnyHealthListener {
+    public void OnAnyHealth(GameEntity entity, int value) { }
+}
+public sealed class ExplicitHealthView : IAnyHealthListener {
+    void IAnyHealthListener.OnAnyHealth(GameEntity entity, int value) { }
+}
+public sealed class Unrelated {
+    public void OnAnyHealth(GameEntity entity, int value) { }
+}
+"));
+
+            var plan = RenameEngine.CreatePlan(compilation, "Health", "Hp");
+            var renamed = ApplyPlan(compilation, plan);
+
+            ErrorsAfterRename(compilation, plan).Should().BeEmpty();
+            renamed["HealthView.cs"].Should()
+                .Contain("public sealed class HealthView : IAnyHpListener {\n    public void OnAnyHp(")
+                .And.Contain("void IAnyHpListener.OnAnyHp(")
+                .And.Contain("public sealed class Unrelated {\n    public void OnAnyHealth(", "a same-named method implementing nothing is left alone");
+        }
     }
 }

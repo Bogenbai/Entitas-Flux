@@ -53,11 +53,21 @@ namespace Entitas.SourceGenerator
             new EntitasGenerationOptions(EntityApiStyle.Plain, false, false, VisualDebuggingStyle.EntityGameObjects, new string[0]);
 
         /// <summary>
-        /// Walks the whole assembly. Used by the CLIs and by anything that starts from a
-        /// Compilation; the incremental generator instead snapshots type declarations as
-        /// they come out of the syntax pipeline and calls the overload below.
+        /// Walks the whole assembly: the incremental generator projects every compilation
+        /// through this, and the CLIs start from it too. Only components and attributed
+        /// types are snapshotted (see <see cref="EntitasDiscovery.GetRelevantTypes"/>), and
+        /// files Entitas-Flux wrote itself are never read back.
         /// </summary>
-        public static GenerationInput From(Compilation compilation)
+        public static GenerationInput From(Compilation compilation) => From(compilation, parallel: false);
+
+        /// <summary>
+        /// <paramref name="parallel"/> snapshots types on every core. Snapshotting binds each
+        /// relevant type's attributes and member types, which dominates a cold run on a fresh
+        /// compilation — the CLIs, which always start cold, pass true. The source generator
+        /// stays serial: inside an IDE it shares the machine with everything else, and its
+        /// warm per-keystroke runs are cheap anyway.
+        /// </summary>
+        public static GenerationInput From(Compilation compilation, bool parallel)
         {
             var config = GenerationConfig.From(compilation);
             if (!config.Enabled)
@@ -66,9 +76,10 @@ namespace Entitas.SourceGenerator
             try
             {
                 CodeGeneratorExtensions.ignoreNamespaces = config.Options.IgnoreNamespaces;
-                var snapshots = EntitasDiscovery.GetCandidateTypes(compilation)
-                    .Select(TypeSnapshot.From)
-                    .ToArray();
+                var types = EntitasDiscovery.GetRelevantTypes(compilation, parallel);
+                var snapshots = parallel
+                    ? types.ToArray().AsParallel().Select(TypeSnapshot.From).ToArray()
+                    : types.Select(TypeSnapshot.From).ToArray();
 
                 return From(snapshots, config);
             }
@@ -299,6 +310,8 @@ namespace Entitas.SourceGenerator
     {
         public const string GeneratorFailedId = "ENT0100";
         public const string DiscoveryFailedId = "ENT0101";
+        public const string StaleGeneratedFilesId = "ENT0004";
+        public const string LeftoverGeneratedFilesId = "ENT0005";
 
         static readonly DiagnosticDescriptor GeneratorFailedRule = new DiagnosticDescriptor(
             GeneratorFailedId,
@@ -315,6 +328,30 @@ namespace Entitas.SourceGenerator
             "Entitas",
             DiagnosticSeverity.Error,
             isEnabledByDefault: true);
+
+        static readonly DiagnosticDescriptor StaleGeneratedFilesRule = new DiagnosticDescriptor(
+            StaleGeneratedFilesId,
+            "Entitas generated files are out of date",
+            "Entitas generated files are out of date: {0}. Regenerate them with Tools > Entitas > Generate in Unity, or run entitas-gen.",
+            "Entitas",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        static readonly DiagnosticDescriptor LeftoverGeneratedFilesRule = new DiagnosticDescriptor(
+            LeftoverGeneratedFilesId,
+            "Entitas generated files left over",
+            "{0} files written by Entitas-Flux are still in this assembly ({1}), but it generates with the source generator. " +
+            "It stands down until they are gone, or every type would be defined twice — delete them (Tools > Entitas > Generate does), " +
+            "or set [assembly: EntitasGeneration(Output = GenerationOutput.Files)] to keep using them.",
+            "Entitas",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        public static Diagnostic StaleGeneratedFiles(string description) =>
+            Diagnostic.Create(StaleGeneratedFilesRule, Location.None, description);
+
+        public static Diagnostic LeftoverGeneratedFiles(int count, string directory) =>
+            Diagnostic.Create(LeftoverGeneratedFilesRule, Location.None, count, directory);
 
         public static Diagnostic GeneratorFailed(string generatorName, string reason) =>
             Diagnostic.Create(GeneratorFailedRule, Location.None, generatorName, reason);

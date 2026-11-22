@@ -263,6 +263,8 @@ namespace Entitas.SourceGenerator
             var ignoreNamespaces = false;
             var debugHooks = false;
             var visualDebugging = VisualDebuggingStyle.EntityGameObjects;
+            var output = GenerationOutput.SourceGenerator;
+            var outputPath = string.Empty;
             var disabled = new List<string>();
 
             foreach (var attr in compilation.Assembly.GetAttributes())
@@ -280,6 +282,10 @@ namespace Entitas.SourceGenerator
                             debugHooks = hooks;
                         else if (named.Key == "VisualDebugging" && named.Value.Value is int visualDebuggingInt)
                             visualDebugging = (VisualDebuggingStyle)visualDebuggingInt;
+                        else if (named.Key == "Output" && named.Value.Value is int outputInt)
+                            output = (GenerationOutput)outputInt;
+                        else if (named.Key == "OutputPath" && named.Value.Value is string path)
+                            outputPath = path;
                     }
                 }
                 else if (name == AttributeNames.DisableEntitasGenerator)
@@ -290,7 +296,7 @@ namespace Entitas.SourceGenerator
                 }
             }
 
-            return new EntitasGenerationOptions(entityApi, ignoreNamespaces, debugHooks, visualDebugging, disabled);
+            return new EntitasGenerationOptions(entityApi, ignoreNamespaces, debugHooks, visualDebugging, disabled, output, outputPath);
         }
     }
 
@@ -305,6 +311,11 @@ namespace Entitas.SourceGenerator
     /// </summary>
     public enum VisualDebuggingStyle { EntityGameObjects = 0, SingleGameObject = 1 }
 
+    /// <summary>
+    /// Mirror of the local <c>GenerationOutput</c> enum in the attributes assembly.
+    /// </summary>
+    public enum GenerationOutput { SourceGenerator = 0, Files = 1 }
+
     /// <summary>Resolved Entitas-Flux generation config for a single compilation.</summary>
     public sealed class EntitasGenerationOptions : IEquatable<EntitasGenerationOptions>
     {
@@ -314,18 +325,32 @@ namespace Entitas.SourceGenerator
         public VisualDebuggingStyle VisualDebugging { get; }
         public IReadOnlyList<string> DisabledGenerators { get; }
 
+        /// <summary>
+        /// Where the generated code goes. Never changes WHAT is generated — only whether the
+        /// source generator emits it (<see cref="GenerationOutput.SourceGenerator"/>) or the
+        /// file writer does (<see cref="GenerationOutput.Files"/>).
+        /// </summary>
+        public GenerationOutput Output { get; }
+
+        /// <summary>Project-root-relative folder for <see cref="GenerationOutput.Files"/>; empty means the default.</summary>
+        public string OutputPath { get; }
+
         public EntitasGenerationOptions(
             EntityApiStyle entityApi,
             bool ignoreNamespaces,
             bool debugHooks,
             VisualDebuggingStyle visualDebugging,
-            IReadOnlyList<string> disabledGenerators)
+            IReadOnlyList<string> disabledGenerators,
+            GenerationOutput output = GenerationOutput.SourceGenerator,
+            string? outputPath = null)
         {
             EntityApi = entityApi;
             IgnoreNamespaces = ignoreNamespaces;
             DebugHooks = debugHooks;
             VisualDebugging = visualDebugging;
             DisabledGenerators = disabledGenerators;
+            Output = output;
+            OutputPath = outputPath ?? string.Empty;
         }
 
         // Compared by value so GenerationInput can be: a config change must invalidate
@@ -336,13 +361,16 @@ namespace Entitas.SourceGenerator
             IgnoreNamespaces == other.IgnoreNamespaces &&
             DebugHooks == other.DebugHooks &&
             VisualDebugging == other.VisualDebugging &&
+            Output == other.Output &&
+            string.Equals(OutputPath, other.OutputPath, StringComparison.Ordinal) &&
             DisabledGenerators.SequenceEqual(other.DisabledGenerators, StringComparer.Ordinal);
 
         public override bool Equals(object? obj) => Equals(obj as EntitasGenerationOptions);
 
         public override int GetHashCode()
         {
-            var hash = ((int)EntityApi * 397) ^ (IgnoreNamespaces ? 1 : 0) ^ (DebugHooks ? 2 : 0) ^ ((int)VisualDebugging * 4099);
+            var hash = ((int)EntityApi * 397) ^ (IgnoreNamespaces ? 1 : 0) ^ (DebugHooks ? 2 : 0) ^ ((int)VisualDebugging * 4099) ^ ((int)Output * 8191);
+            hash = unchecked(hash * 31 + StringComparer.Ordinal.GetHashCode(OutputPath));
             foreach (var name in DisabledGenerators)
                 hash = unchecked(hash * 31 + StringComparer.Ordinal.GetHashCode(name));
 
