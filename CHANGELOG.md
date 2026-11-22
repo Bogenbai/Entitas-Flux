@@ -11,6 +11,8 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-22
+
 ### Added
 - **Generated code as ordinary files:**
   `[assembly: EntitasGeneration(Output = GenerationOutput.Files, OutputPath = "Assets/Code/Generated")]`.
@@ -319,7 +321,8 @@ First release of the fork.
 - **Safe component removal** — `SafeRemoveX()` instead of guarding every `RemoveX()`.
 - **Searchable component dropdown** in the Unity inspector.
 
-[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.2.0...v0.3.0
