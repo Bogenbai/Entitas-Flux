@@ -9,26 +9,24 @@ using UnityEngine;
 namespace Entitas.Unity.Editor.Generation
 {
     /// <summary>
-    /// Sees .cs files saved outside Unity (an IDE) the moment they hit the disk, while
-    /// Unity may still be in the background — regenerating then means the refresh that
-    /// follows compiles the component and its generated code once, instead of compiling the
-    /// stale state first. Events arrive on a thread-pool thread; they are only collected
-    /// here and handed over, debounced, on the main thread.
+    /// Sees .cs files saved outside Unity (an IDE) the moment they hit the disk — ~20 ms
+    /// after the write, well before the refresh the IDE asks Unity for (Rider waits ~500 ms).
+    /// That head start is what lets generation lock the asset database before the refresh
+    /// arrives. Events come in on a thread-pool thread and are only collected here;
+    /// <see cref="EntitasCodeGeneration"/> takes them on its next tick, which runs first in
+    /// the editor's update chain.
     /// </summary>
     [InitializeOnLoad]
     static class EntitasSourceWatcher
     {
-        static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(300);
         static readonly ConcurrentDictionary<string, byte> Pending = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         static FileSystemWatcher? _watcher;
-        static long _lastEventTicks;
 
         static EntitasSourceWatcher()
         {
             if (Application.isBatchMode)
                 return;
 
-            EditorApplication.update += Update;
             AssemblyReloadEvents.beforeAssemblyReload += Stop;
             EditorApplication.quitting += Stop;
             Start();
@@ -55,7 +53,7 @@ namespace Entitas.Unity.Editor.Generation
             }
             catch (Exception exception)
             {
-                // Not fatal: the asset postprocessor still regenerates, just one compile later.
+                // Not fatal: the asset postprocessor still regenerates, one compile later.
                 Debug.LogWarning($"Entitas: not watching Assets/ for component changes ({exception.Message}).");
                 _watcher = null;
             }
@@ -67,36 +65,29 @@ namespace Entitas.Unity.Editor.Generation
             _watcher = null;
         }
 
-        static void Record(string fullPath)
-        {
-            Pending[fullPath] = 0;
-            System.Threading.Interlocked.Exchange(ref _lastEventTicks, DateTime.UtcNow.Ticks);
-        }
+        static void Record(string fullPath) => Pending[fullPath] = 0;
 
-        static void Update()
+        /// <summary>Project-relative paths saved since the last call.</summary>
+        internal static string[] TakePending()
         {
             if (Pending.IsEmpty)
-                return;
-
-            var last = new DateTime(System.Threading.Interlocked.Read(ref _lastEventTicks), DateTimeKind.Utc);
-            if (DateTime.UtcNow - last < Debounce)
-                return;
+                return Array.Empty<string>();
 
             var root = EntitasTools.ProjectRoot;
             var paths = Pending.Keys.ToArray();
             foreach (var path in paths)
                 Pending.TryRemove(path, out _);
 
-            EntitasCodeGeneration.OnSourcesChanged(
-                paths.Select(path => Path.GetRelativePath(root, path).Replace('\\', '/')),
-                fromWatcher: true);
+            return paths.Select(path => Path.GetRelativePath(root, path).Replace('\\', '/')).ToArray();
         }
     }
 
     /// <summary>
-    /// The safety net: whatever Unity imports — a git pull, a file created from Unity, a
-    /// save the watcher missed — is offered for regeneration too. Changes the watcher
-    /// already regenerated for are recognised and skipped.
+    /// The safety net: whatever Unity imports without the watcher having seen it first — a
+    /// file created from Unity, a save the watcher missed — is offered for regeneration too.
+    /// For scripts this runs after Unity compiled them, so a run from here is followed by a
+    /// refresh of its own (the second compilation). Changes the watcher already regenerated
+    /// for are recognised and skipped.
     /// </summary>
     sealed class EntitasGenerationPostprocessor : AssetPostprocessor
     {
@@ -109,8 +100,9 @@ namespace Entitas.Unity.Editor.Generation
                 .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
 
+            // Not from inside the refresh: the asset database is locked on the next tick.
             if (scripts.Length > 0)
-                EntitasCodeGeneration.OnSourcesChanged(scripts, fromWatcher: false);
+                EntitasCodeGeneration.QueueImported(scripts);
         }
     }
 }

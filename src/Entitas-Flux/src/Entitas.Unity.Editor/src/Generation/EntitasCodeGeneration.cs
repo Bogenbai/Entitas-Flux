@@ -7,7 +7,6 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Compilation;
-using UnityEditorInternal;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
@@ -18,13 +17,15 @@ namespace Entitas.Unity.Editor.Generation
     /// asks entitas-gen to bring the generated files up to date — from the menu, from a
     /// batchmode command line, and automatically when a component changes.
     ///
-    /// The automatic runs are built around how Unity refreshes: it compiles changed scripts
-    /// BEFORE any asset postprocessor sees them, so regenerating from a postprocessor alone
-    /// costs a second compile every time a component changes. A file watcher therefore
-    /// regenerates as soon as an IDE saves a component — in the background, usually before
-    /// Unity even has focus again — so the one refresh that follows compiles the component
-    /// and its generated code together. The postprocessor remains as the safety net for
-    /// changes that arrive any other way (a git pull, a file Unity itself created).
+    /// Automatic runs must finish BEFORE Unity compiles the change that caused them, or the
+    /// compile misses a new component's generated file (its API arrives one compile late) or
+    /// trips over a generated file deleted under it (CS2001). Unity has no managed hook
+    /// between noticing a changed script and compiling it, so <see cref="GenerationScheduler"/>
+    /// wins that race instead: the file watcher sees an IDE save within milliseconds, the
+    /// asset database is locked at once (any refresh requested meanwhile — Rider's comes
+    /// ~500 ms after the save — waits), entitas-gen runs, and unlocking lets the refresh that
+    /// waited import the component and its generated files together: one compilation. See
+    /// the scheduler for the fallback when the race is lost anyway.
     ///
     /// Runs are cheap to skip: only files that declare components or the generation config
     /// (or might, judging by their text) trigger one, and entitas-gen rewrites only the
@@ -39,9 +40,9 @@ namespace Entitas.Unity.Editor.Generation
         const string AutomaticPreference = "Entitas.Generation.Automatic";
 
         static readonly ConcurrentQueue<Action> MainThread = new ConcurrentQueue<Action>();
+        static readonly GenerationScheduler Scheduler = new GenerationScheduler();
         static GenerationState? _state;
-        static bool _running;
-        static HashSet<string>? _queued;
+        static DateTime _lastCompilationStartedUtc = DateTime.MinValue;
 
         /// <summary>Kept in SessionState: the postprocessor runs after a domain reload, which clears statics.</summary>
         static DateTime LastRunStartedUtc
@@ -54,7 +55,25 @@ namespace Entitas.Unity.Editor.Generation
 
         static EntitasCodeGeneration()
         {
-            EditorApplication.update += DrainMainThreadQueue;
+            // First in the update chain: when a save and a refresh request land in the same
+            // tick, the lock must be taken before the refresh runs.
+            EditorApplication.update -= Tick;
+            EditorApplication.update = (EditorApplication.CallbackFunction)Tick + EditorApplication.update;
+
+            CompilationPipeline.compilationStarted += _ =>
+            {
+                _lastCompilationStartedUtc = DateTime.UtcNow;
+                Scheduler.CompilationStarted();
+            };
+
+            // Never leave the asset database locked across a domain reload, play mode or exit.
+            AssemblyReloadEvents.beforeAssemblyReload += ResetScheduler;
+            EditorApplication.quitting += ResetScheduler;
+            EditorApplication.playModeStateChanged += change =>
+            {
+                if (change == PlayModeStateChange.ExitingEditMode)
+                    ResetScheduler();
+            };
         }
 
         static string StatePath => Path.Combine(EntitasTools.ScratchDirectory, "state.json");
@@ -93,6 +112,16 @@ namespace Entitas.Unity.Editor.Generation
         [MenuItem(MenuGenerate, false, EntitasMenuItemPriorities.generate)]
         public static void GenerateFromMenu()
         {
+            // Writing or deleting files under a running compile fails it (CS2001): wait for it.
+            if (EditorApplication.isCompiling || !Scheduler.IsIdle)
+            {
+                Debug.Log("Entitas: generation will run as soon as the current compilation (or generation) finishes.");
+                Execute(Scheduler.RunRequested(DateTime.UtcNow));
+                return;
+            }
+
+            // Synchronous: the main thread is busy, so no refresh can start meanwhile; the
+            // refresh afterwards imports everything that changed in one go.
             var response = Generate(check: false, showProgress: true);
             if (response != null)
                 Apply(response, refresh: true, logUnchanged: true);
@@ -169,7 +198,7 @@ namespace Entitas.Unity.Editor.Generation
 
         /// <summary>
         /// Called with project-relative paths of .cs files that changed — by the watcher as
-        /// soon as they are saved, by the postprocessor when Unity imports them.
+        /// soon as they are saved, by the postprocessor after Unity imported (and compiled) them.
         /// </summary>
         internal static void OnSourcesChanged(IEnumerable<string> paths, bool fromWatcher)
         {
@@ -180,26 +209,69 @@ namespace Entitas.Unity.Editor.Generation
             if (relevant.Count == 0)
                 return;
 
-            if (_running)
-            {
-                (_queued ??= new HashSet<string>()).UnionWith(relevant);
-                return;
-            }
-
-            StartBackgroundRun(relevant, fromWatcher);
+            // Unity already compiled these changes if they came through an import, or if a
+            // compilation started after they were written (it beat the watcher to them).
+            var alreadyCompiled = !fromWatcher || relevant.Any(path => WrittenBefore(path, _lastCompilationStartedUtc));
+            Execute(Scheduler.SourcesChanged(relevant, DateTime.UtcNow, alreadyCompiled));
         }
 
-        static void StartBackgroundRun(List<string> changed, bool fromWatcher)
+        static bool WrittenBefore(string path, DateTime moment)
+        {
+            var full = Path.Combine(EntitasTools.ProjectRoot, path);
+            return File.Exists(full) && File.GetLastWriteTimeUtc(full) <= moment;
+        }
+
+        /// <summary>Changes Unity imported, handed over from the asset postprocessor.</summary>
+        internal static void QueueImported(string[] paths) =>
+            MainThread.Enqueue(() => OnSourcesChanged(paths, fromWatcher: false));
+
+        static void Tick()
+        {
+            var saved = EntitasSourceWatcher.TakePending();
+            if (saved.Length > 0)
+                OnSourcesChanged(saved, fromWatcher: true);
+
+            DrainMainThreadQueue();
+            Execute(Scheduler.Tick(DateTime.UtcNow, EditorApplication.isCompiling));
+        }
+
+        static void ResetScheduler() => Execute(Scheduler.Reset());
+
+        static void Execute(List<GenerationCommand> commands)
+        {
+            foreach (var command in commands)
+            {
+                switch (command)
+                {
+                    case GenerationCommand.LockAssetDatabase:
+                        AssetDatabase.StartAssetEditing();
+                        break;
+                    case GenerationCommand.UnlockAssetDatabase:
+                        AssetDatabase.StopAssetEditing();
+                        break;
+                    case GenerationCommand.StartRun:
+                        StartBackgroundRun(Scheduler.RunPaths.ToList());
+                        break;
+                    case GenerationCommand.Refresh:
+                        AssetDatabase.Refresh();
+                        break;
+                }
+            }
+        }
+
+        static void StartBackgroundRun(List<string> changed)
         {
             var tool = EntitasTools.FindTool(EntitasTools.GeneratorName);
             if (tool == null)
+            {
+                Debug.LogError($"Entitas: {EntitasTools.GeneratorName}.dll was not found next to the package's editor assembly (Tools~/).");
+                Execute(Scheduler.RunFinished(changedFiles: false));
                 return;
+            }
 
             // Files the watcher saw may not be imported yet, so Unity's assembly list does
             // not have them: add them to the assembly their folder belongs to.
             var (requestPath, responsePath) = WriteRequest(BuildRequest(check: false, extraSources: changed));
-
-            _running = true;
             LastRunStartedUtc = DateTime.UtcNow;
 
             var stopwatch = Stopwatch.StartNew();
@@ -220,7 +292,7 @@ namespace Entitas.Unity.Editor.Generation
                     Milliseconds = stopwatch.ElapsedMilliseconds
                 };
                 process.Dispose();
-                MainThread.Enqueue(() => FinishBackgroundRun(result, responsePath, fromWatcher));
+                MainThread.Enqueue(() => FinishBackgroundRun(result, responsePath));
             };
 
             try
@@ -231,31 +303,24 @@ namespace Entitas.Unity.Editor.Generation
             }
             catch (Exception exception)
             {
-                _running = false;
                 Debug.LogError($"Entitas: could not start {EntitasTools.GeneratorName}: {exception.Message}");
+                Execute(Scheduler.RunFinished(changedFiles: false));
             }
         }
 
-        static void FinishBackgroundRun(EntitasTools.Result result, string responsePath, bool fromWatcher)
+        static void FinishBackgroundRun(EntitasTools.Result result, string responsePath)
         {
-            _running = false;
-
             var response = ReadResponse(result, responsePath);
+            var changed = false;
             if (response != null)
             {
-                // A save from the IDE while Unity is in the background: leave the refresh to
-                // Unity (it refreshes on focus, or on the user's own Ctrl+R with Auto Refresh
-                // off), so the component and its generated files compile in one go.
-                var refresh = !fromWatcher || InternalEditorUtility.isApplicationActive;
-                Apply(response, refresh, logUnchanged: false);
+                // No refresh here: unlocking lets the refresh that waited run, and the
+                // scheduler adds one only when a compilation already went ahead without us.
+                Apply(response, refresh: false, logUnchanged: false);
+                changed = response.assemblies.Any(a => a.written.Count > 0 || a.deleted.Count > 0);
             }
 
-            if (_queued != null && _queued.Count > 0)
-            {
-                var next = _queued.ToList();
-                _queued = null;
-                StartBackgroundRun(next, fromWatcher);
-            }
+            Execute(Scheduler.RunFinished(changed));
         }
 
         static void DrainMainThreadQueue()

@@ -33,10 +33,15 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   conflict. `OutputPath` defaults to a `Generated` folder next to the file declaring the
   contexts, which is always inside the right assembly.
 - **Unity editor tooling for it:** *Tools → Entitas → Generate*, *Check Generated Files* and
-  *Generate Automatically* (on by default). Automatic generation runs in the background and
-  watches `Assets/` for saves, so a component saved from the IDE is usually regenerated
-  before Unity has focus again and the refresh that follows compiles once. Generation reads
-  source, so it works while the project does not compile. Batchmode entry points:
+  *Generate Automatically* (on by default). Automatic generation finishes before Unity
+  compiles the change: a watcher sees the IDE's save within milliseconds, the asset database
+  is held (`StartAssetEditing`) while `entitas-gen` runs, so the refresh the IDE asks for
+  waits, and releasing it imports the component and its generated files together — one
+  compilation, already complete, whether a component was added and used in the same save,
+  deleted, or changed. Nothing is written or deleted while Unity compiles. A change Unity
+  compiled first anyway (made with Unity closed, or imported by a refresh that started
+  earlier) gets its second compilation started automatically. Generation reads source, so it
+  works while the project does not compile. Batchmode entry points:
   `EntitasCodeGeneration.GenerateFromCommandLine` and `CheckFromCommandLine`.
 - ***Tools → Entitas → Rename Component…*** — preview and apply a component rename from Unity,
   through the same engine as the `[RenameTo]` quick fix.

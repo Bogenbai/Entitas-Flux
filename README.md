@@ -257,7 +257,9 @@ The generated code is then ordinary `.cs` files in your project, and the source 
 | *Tools → Entitas → Generate Automatically* | On by default: regenerates by itself when a file declaring components (or the config) changes. |
 | *Tools → Entitas → Check Generated Files* | Reports what is out of date without writing. |
 
-Automatic generation runs in the background — the editor never waits for it. It notices a component saved from your IDE immediately, typically before you switch back to Unity, so the refresh that follows compiles the component and its generated code **together, once**. On a ~2000-file project a run takes about 0.7 s; files that declare no component never trigger one.
+Automatic generation finishes **before** Unity compiles the change, so a save costs one compilation that already has the new API: add a component and use it in the same save, delete one, change a field — one compile, no errors. It works like this: Unity notices the save within milliseconds and holds its asset database while `entitas-gen` runs (a refresh asked for meanwhile — Rider asks ~500 ms after a save, focusing Unity does too — simply waits), then releases it, and that refresh imports the component and its generated files together. On a ~2000-file project a run takes about 0.7 s; files that declare no component never trigger one, and a run that changes nothing costs no compile.
+
+Unity has no hook between noticing a changed script and compiling it, so a change that reaches Unity before Entitas sees it — made while Unity was closed, or imported by a refresh that started first — is compiled once against the old generated files; Entitas then regenerates and starts the second compilation itself. With Unity closed, `entitas-gen` (for instance from a git `post-merge` hook) avoids even that.
 
 Generation reads source, not compiled assemblies, so it works while the project does not compile — which is exactly when you need it (you just added a component and nothing uses its API yet, or you just renamed one).
 
