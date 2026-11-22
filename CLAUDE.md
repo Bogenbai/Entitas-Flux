@@ -38,6 +38,9 @@ Other scripts:
 # Accept an intended change to generated output, then read the diff
 ENTITAS_UPDATE_SNAPSHOT=1 dotnet test ./src/Entitas-Flux/src/Entitas.SourceGenerator/tests
 
+# ECS graph of a Unity project (-o keeps the output out of that project)
+dotnet src/Entitas-Flux/src/Entitas.Graph/src/bin/Release/entitas-graph.dll build -r <unity-project> -o /tmp/graph
+
 # Benchmarks (never in CI — see benchmarks/README.md)
 dotnet run -c Release --project benchmarks/Entitas.Benchmarks -- --filter '*CoreBenchmarks*'
 ```
@@ -80,7 +83,7 @@ The key layers of the solution (`src/Entitas-Flux/Entitas.sln`):
 
 **Distribution** — `build.sh` produces the Unity DLL layout in `Artifacts/`; `package.sh <version>` turns that into a UPM package (`Artifacts/package/`) with generated `.meta` files whose GUIDs are derived from the asset path, so they stay stable across releases. The release workflow publishes the package as the root of the generated `upm` branch (`…git#upm`, pinnable as `#upm/vX.Y.Z`). The two CLIs ship in the package's `Tools~/` (Unity ignores `~` folders, so no `.meta`, no import, no Roslyn clash) and the editor runs them with Unity's own .NET runtime.
 
-**Standalone CLIs** — `Entitas.SourceGenerator.Cli` (`entitas-gen`, the writer behind `Output = GenerationOutput.Files`) and `Entitas.Rename` (`entitas-rename`, renames a component and every identifier derived from it). Both turn Unity's csproj files — or, for the editor, a JSON request built from `CompilationPipeline` — into a Roslyn `Compilation` through the shared `ProjectLoader`, `GenerationHost` and `GeneratedFileWriter` (in `src/Entitas.SourceGenerator.Cli/src/`, linked into the rename tool) and then drive the same generator engine. Every run is a cold process, so both are tuned for start-up (parallel parse/discovery, quick JIT) — keep it that way.
+**Standalone CLIs** — `Entitas.SourceGenerator.Cli` (`entitas-gen`, the writer behind `Output = GenerationOutput.Files`), `Entitas.Rename` (`entitas-rename`, renames a component and every identifier derived from it) and `Entitas.Graph` (`entitas-graph`, the ECS graph — see below). All three turn Unity's csproj files — or, for the editor, a JSON request built from `CompilationPipeline` — into a Roslyn `Compilation` through the shared `ProjectLoader`, `GenerationHost` and `GeneratedFileWriter` (in `src/Entitas.SourceGenerator.Cli/src/`, linked into the other two) and then drive the same generator engine. Every run is a cold process, so all are tuned for start-up (parallel parse/discovery, quick JIT) — keep it that way.
 
 **Unity Integration** — `Entitas.Unity`, `Entitas.Unity.Editor`, `Entitas.VisualDebugging.*` projects provide Unity inspector/editor tooling.
 
@@ -163,6 +166,17 @@ Options: `-a/--apply`, `-r/--root <dir>` (where to look for the csproj, default 
 `RenameEngine` (`src/Entitas.SourceGenerator/src/Rename/`) is shared by both fronts, and its identifier map is **not** hand-maintained: it calls `EntitasGenerators.Generate` twice — on the compilation as-is, and on a copy where only the component's declaration (plus any `[ComponentName("…")]` argument) is renamed — and diffs the *declared* names of both outputs. What the generator stops declaring, paired with what it starts declaring, is the map. New generators or changed naming rules need no change here; anything the diff cannot pair is reported as a warning instead of being renamed silently. Usages are then resolved through a semantic model of the project **plus the generated trees**, so only members that really come from generated Entitas code (or the component type itself) are rewritten — `monster.Health` on an unrelated type is left alone. The CLI additionally moves the component's `.cs` together with its Unity `.cs.meta` (via `git mv` when tracked) so the asset GUID survives.
 
 Usages are also rewritten in assemblies that merely *reference* the declaring one (Editor assemblies, test asmdefs), where the generated API is visible only through an assembly reference: `ExternalRename.CollectEdits` accepts an identifier whose symbol comes from the declaring assembly and belongs to the component or to a generator-declared type (`GameEntity`, `GameMatcher`, `GameComponentsLookup`, …). These are collected before the declaring assembly is rewritten, since afterwards the old names stop resolving. The code fix walks the solution's referencing projects; the CLI compiles the sibling csprojs that mention the declaring one and wires them to its live compilation via `ToMetadataReference()`.
+
+### The ECS graph — entitas-graph
+
+`src/Entitas.Graph/` answers "who creates / reads / filters / removes / destroys component X, and in which feature at which position" from semantics, not text. The pipeline (`GraphBuilder.Build`):
+
+- **Prepare** (`Analysis/BuildContext.cs`): `GenerationInput.From` + `EntitasGenerators.Generate` give the generated trees (in file mode, the marker files already in the compilation). Generated API members are classified **by the generated file that declares them** (`{Context}/Components/{Context}{Name}Component.cs` → `Add`/`Replace`/`Remove`/`SafeRemove`/`has`/flag/atomic/matcher; the lookup file → index constants; `Contexts.cs` → entity-index methods), so no naming rule is re-implemented here. `[ThreadStatic] ignoreNamespaces` must be set on the calling thread before `ComponentName()`.
+- **Walk** (`Analysis/TreeWalker.cs`, parallel per tree): only identifiers whose text is a generated member name are bound — that filter is what keeps ~2800 trees at 2–3 s. Companion components (`XChanged`, listener components) are folded into the component they serve. Entities are traced (`foreach` over a group → that group; a local's initializer; a factory call) so `Destroy()` and group writes know what they act on.
+- **Assemble** (`GraphBuilder.Assemble`): edges aggregate by key. INFERRED edges come from two places: `Propagate` (accesses made in non-system types, helpers and query classes credited to the calling systems through the call graph, interface dispatch included, depth ≤ 4, `through` names the method) and `InferDestroysFromShapes` (a generic destroyer's `AllOf` ⊆ the components an entity was created with plus those a group write adds). `FeatureTree.Place` finds roots (non-generated features nobody registers) and gives each system its order under each root — no project names anywhere; requests/events only by suffix.
+- **Output** (`Output/`): `EcsGraph.ToJson` (Graphify-like node-link, `schema_version` 1, must round-trip byte for byte), `GraphQueries` (the commands; names are resolved, never guessed — exit 3 ambiguous, 4 not found), `GraphReport`, `GraphHtml` (vis-network 9.1.9 embedded as a resource with its licence banner; `</` in the data is escaped).
+
+Tests run against `tests/Fixture/` — a small Unity-like project compiled with the real generator, in both output modes. Cat Caffeine is the real-world check (expected: `FurnitureAddedToCafeEvent` with 2 creators, 7 readers in the achievements feature, `DestroyEventsSystem` as inferred destroyer); run it **with `-o` outside that project** — the default output folder is inside the Unity root.
 
 ### Flux-Specific Features
 

@@ -26,6 +26,7 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 - [Generated code as files](#generated-code-as-files--output--generationoutputfiles)
 - [Debugging a mutation](#debugging-a-mutation--debughooks)
 - [Renaming a component](#renaming-a-component)
+- [Mapping the ECS — entitas-graph](#mapping-the-ecs--entitas-graph)
 - [License](#license)
 
 ## Installation
@@ -364,6 +365,126 @@ With a manual install the tool is at `Assets/Entitas/Entitas/Tools~/entitas-rena
 - **One component at a time.** There is deliberately no *Fix All*: each rename is planned against the current state of the code, so applying several at once would use stale positions.
 - **After updating the DLLs, restart the IDE.** It keeps analyzer assemblies loaded in-process; until it restarts you may get the old ones (the quick fix silently disappears from `Alt+Enter`).
 - The terminal and Unity fronts see the project as the `.csproj` files describe it. Unity's menu re-syncs them first; from a terminal, if a component seems missing, let Unity regenerate them (*Preferences → External Tools → Regenerate project files*).
+
+## Mapping the ECS — entitas-graph
+In an Entitas project the links that matter run through components, not calls. One system adds `PlaceFurnitureRequest`. A second groups on it and adds `FurniturePlacedEvent`. A third reacts to that. None of them calls another, so a call graph or a text-based code graph (tree-sitter, [Graphify](https://github.com/Graphify-Labs/graphify) and the like) shows three unrelated classes.
+
+`entitas-graph` builds the graph Entitas actually has. It reads the project the way the compiler does, through the same project loader and generator engine as `entitas-gen`. So `CreateEntity.Event().AddFurniturePlacedEvent(…)`, a `GameMatcher.X` inside `AllOf`, `isX = false` and `entity.x.Value` are resolved by symbol, not matched by name. It works in either output mode and needs no generated files on disk.
+
+Run it from the Unity project root (it reads the `.csproj` files Unity's IDE packages write):
+```bash
+dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll build
+```
+With a manual install the tool is at `Assets/Entitas/Entitas/Tools~/entitas-graph.dll`. Any .NET 6 or newer runs it. A ~1900-file production project (770 components, 750 systems, plus ~900 generated files in memory) builds in 2–3 s.
+
+### What it records
+Nodes are components (with their contexts, fields and `[Unique]`, `[Event]`, `[Watched]`, `[Cleanup]`, `[EntityIndex]`), systems, features, and other types of yours that touch components (queries, factories, services). Edges:
+
+| Edge | Comes from |
+| --- | --- |
+| `creates` | `AddX`, `ReplaceX`, `isX = true`, an atomic `X = …`, `AddComponent(GameComponentsLookup.X, …)` — also through a factory the system calls |
+| `reads` | `GameMatcher.X` in a group or a collector trigger (`AllOf`, `AnyOf`, `.Added()`, a plain matcher), `entity.x`, `hasX`, `isX`, `GetEntityWithX` |
+| `filters` | `NoneOf` |
+| `removes` | `RemoveX`, `SafeRemoveX`, `isX = false` |
+| `destroys` | `Destroy()` on an entity of a group; it counts against the components of the group's `AllOf` |
+| `reacts` | a read of a [`[Watched]`](#watched-attribute) component's `XChanged` marker |
+| `contains` | a feature's `Add(…)`, in registration order |
+
+Every edge is **EXTRACTED** (written in the system itself) or **INFERRED**. An inferred edge reached the system through code it calls: a query interface, a factory, a helper method up to four calls deep. Its `through` names that code. Destroys can be inferred from what an entity is made of, too: a generic `DestroyEventsSystem` that destroys every `Event` + `Ready` entity is credited with destroying each event created with the `Event` flag, once something marks those `Ready`.
+
+Features are walked from the roots, the features nobody registers. Every system gets its position in each root. The tool knows no names of yours: requests and events are recognised by suffix only (`*Request`, `*Event`; change them with `--request-suffix` and `--event-suffix`).
+
+### Commands
+These outputs come from the test fixture in `src/Entitas.Graph/tests/Fixture`.
+
+`lifecycle` follows a component from creation to destruction, per root feature in execution order:
+```text
+$ entitas-graph lifecycle FurniturePlacedEvent
+FurniturePlacedEvent  [Game, data, event]
+  created by 1 · read by 1 · filtered by 0 · removed by 0 · destroyed by 1
+
+GameplayFeature:
+  #3    creates                PlaceFurnitureByRequestSystem  (FurnitureFeature)
+  #10   reads                  UnlockAchievementSystem  (GameplayFeature)
+
+LateFeature:
+  #1    destroys               DestroyEventsSystem  (LateFeature)  — via created with Event + FurniturePlacedEvent; Ready by MarkEventsReadySystem
+```
+
+`who-creates` and `who-reads` give every site, with the system's place in the features. A `*` marks an inferred edge:
+```text
+$ entitas-graph who-creates Furniture
+Furniture — created by 2 (1 direct, 1 inferred)
+  FurnitureFactory  [Flag]  [type]
+      creates via Flag  Assets/Infrastructure.cs:32
+  PlaceFurnitureByRequestSystem  [Flag*]  FurnitureFeature #2, GameplayFeature order 3
+      creates via Flag (FurnitureFactory.CreateFurniture)  Assets/Infrastructure.cs:32
+```
+
+`path` gives the shortest data-flow chain between two systems or components:
+```text
+$ entitas-graph path RequestPlacementSystem UnlockAchievementSystem
+RequestPlacementSystem → UnlockAchievementSystem: 4 hops
+  RequestPlacementSystem --creates--> PlaceFurnitureRequest  [EXTRACTED] via Add  Assets/Systems/FurnitureSystems.cs:17
+  PlaceFurnitureRequest --read by--> PlaceFurnitureByRequestSystem  [EXTRACTED] via Get  Assets/Systems/FurnitureSystems.cs:38
+  PlaceFurnitureByRequestSystem --creates--> FurniturePlacedEvent  [EXTRACTED] via Add  Assets/Systems/FurnitureSystems.cs:39
+  FurniturePlacedEvent --read by--> UnlockAchievementSystem  [EXTRACTED] via AllOf  Assets/Systems/EventSystems.cs:15
+```
+
+`systems-of` lists what a feature runs, in order, with nested features expanded:
+```text
+$ entitas-graph systems-of GameplayFeature
+GameplayFeature (root) — 11 systems
+    1. MarkEventsReadySystem  [Execute]
+    2. FurnitureFeature (feature)
+         1. RequestPlacementSystem  [Execute]
+         2. PlaceFurnitureByRequestSystem  [Execute]
+         3. CountFurnitureSystem  [Execute]
+    …
+```
+
+| Command | Answers |
+| --- | --- |
+| `build` | Builds the graph and writes `graph.json`, `GRAPH_REPORT.md` and `graph.html`. |
+| `who-creates <Component>` / `who-reads <Component>` | Every site that creates it, or reads, reacts to or filters on it. |
+| `lifecycle <Component>` | Create → read → remove/destroy, per root feature in execution order. |
+| `systems-of <Feature>` | The systems a feature runs, in order. |
+| `explain <Name>` | One node and every connection it has. |
+| `path <A> <B>` | The shortest data-flow chain from A to B. |
+| `query <words…>` | Nodes matching the words, ranked, with a summary of their connections. |
+| `report` | Prints `GRAPH_REPORT.md`. |
+
+Names may drop the `Component` suffix. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
+
+| Option | Effect |
+| --- | --- |
+| `-r`, `--root <dir>` | Unity project root (default: current directory). |
+| `-p`, `--project <csproj>` | The project declaring the contexts (default: found under the root). |
+| `-o`, `--out <dir>` | Output folder (default: `entitas-graph-out` in the root — add it to `.gitignore`). |
+| `--request-suffix <s>`, `--event-suffix <s>` | How requests and events are recognised (default: `Request`, `Event`). |
+| `--limit <n>` | Results for `query` (default: 20). |
+| `--no-html` | Skip `graph.html`. |
+
+### What it writes
+- **`graph.json`**: node-link JSON in the shape Graphify uses (`nodes`, `links` with `source`, `target`, `relation`, `confidence`, `source_file`, `source_location`), plus Entitas fields: `via` (`Add`, `AllOf`, `Flag`…), `context`, `through`, `order` for a feature's systems, `placements` for a system's position under each root. `graph` holds the schema version, the commit it was built at and the conventions used.
+- **`GRAPH_REPORT.md`**: counts, root features, the most connected components, then the findings:
+  - components nobody reads;
+  - components read but never created;
+  - requests without a handler;
+  - requests nobody destroys or removes;
+  - events without a consumer;
+  - events destroyed by hand;
+  - `[Watched]` components nobody reacts to;
+  - state flags set on existing entities and never cleared;
+  - systems, or generated features such as `GameEventSystems`, that no feature registers;
+  - `Destroy()` calls the tool could not trace to a group.
+
+  These are leads, not errors. A component read but never created may be added from data, from a prefab's component list for example, which the tool cannot see.
+- **`graph.html`**: the graph in a browser, offline. Search a node, see its neighbours one or two steps out, filter by kind and relation; the side panel lists who creates, reads and destroys it. It inlines [vis-network](https://visjs.github.io/vis-network/) 9.1.9 (Apache-2.0 or MIT; its licence ships next to the tool).
+
+**For AI coding assistants:** answering "who uses this component?" with grep misses everything that goes through generated code. Point your assistant at `entitas-graph who-reads X`, `lifecycle X` or `graph.json` instead.
+
+Out of scope: dependency injection, scenes, prefabs and other assets. The graph covers code in the assembly that declares the contexts.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

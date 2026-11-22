@@ -11,6 +11,32 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Added
+- **`entitas-graph`: a graph of who creates, reads, filters, removes and destroys each
+  component**, and which features run which systems in what order. ECS systems never call
+  each other, so call graphs and text-based code graphs show them as unrelated; this one is
+  built from the compiler's view of the project, through the same project loader and
+  generator engine as `entitas-gen`. A chained `CreateEntity.Event().AddX()`, a
+  `GameMatcher.X` inside `AllOf`, `isX = false` and a factory that adds components on the
+  system's behalf are all resolved by symbol, in either output mode. Accesses made through
+  query interfaces, factories and helpers are credited to the calling system as INFERRED,
+  naming the code they went through; a generic destroy system is credited with the entities
+  it destroys from what they are made of (`Event` + `Ready`). Root features are discovered,
+  never named, and every system gets its position under each one.
+
+  Commands: `build`, `who-creates`, `who-reads`, `lifecycle`, `path`, `systems-of`,
+  `explain`, `query`, `report`. `build` writes `graph.json` (node-link, close to
+  Graphify's format), `GRAPH_REPORT.md` (components nobody reads, read but never created,
+  requests without a handler, events without a consumer, flags never cleared, unregistered
+  systems…) and `graph.html`, an offline viewer with vis-network inlined. Requests and
+  events are recognised by name suffix (`--request-suffix`, `--event-suffix`). It ships in
+  the package's `Tools~/` next to `entitas-gen`.
+
+  On a production project (1906 files plus ~900 generated, 772 components, 747 systems,
+  88 features) a build takes 2.2–2.8 s. The tree-sitter graph that missed both producers and
+  all 7 consumers of an event component now finds them: 2 creators, 7 readers, all in the
+  achievements feature, and the generic system that destroys it.
+
 ## [0.5.0] - 2026-11-22
 
 ### Added
