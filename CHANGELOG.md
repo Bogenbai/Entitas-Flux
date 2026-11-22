@@ -11,6 +11,72 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Added
+- **Generated code as ordinary files:**
+  `[assembly: EntitasGeneration(Output = GenerationOutput.Files, OutputPath = "Assets/Code/Generated")]`.
+  The generated API becomes real `.cs` files, so IDE navigation and any tool that reads
+  source (code graphs, linters, search) see it — a tree-sitter graph of a production project
+  showed a component with 2 producers and 7 consumers as having none, because only generated
+  code connects them. It is the same code from the same generator: a file is exactly what the
+  source generator would emit plus one marker line, which a test proves byte for byte on the
+  whole snapshot (and on a 920-file production project). The source generator stands down in
+  this mode, so nothing is defined twice. The default stays the source generator; a project
+  that does not set `Output` sees no difference.
+
+  Files are written one per component per context, at the paths the generator has always
+  used. Only files whose content changed are rewritten (line endings do not count), files of
+  a renamed or deleted component are deleted with their `.meta`, folders left empty go too,
+  and nothing without the Entitas-Flux marker is ever touched. New files get a `.meta` whose
+  GUID is derived from the path, so two branches generating the same component do not
+  conflict. `OutputPath` defaults to a `Generated` folder next to the file declaring the
+  contexts, which is always inside the right assembly.
+- **Unity editor tooling for it:** *Tools → Entitas → Generate*, *Check Generated Files* and
+  *Generate Automatically* (on by default). Automatic generation runs in the background and
+  watches `Assets/` for saves, so a component saved from the IDE is usually regenerated
+  before Unity has focus again and the refresh that follows compiles once. Generation reads
+  source, so it works while the project does not compile. Batchmode entry points:
+  `EntitasCodeGeneration.GenerateFromCommandLine` and `CheckFromCommandLine`.
+- ***Tools → Entitas → Rename Component…*** — preview and apply a component rename from Unity,
+  through the same engine as the `[RenameTo]` quick fix.
+- **`entitas-gen` and `entitas-rename` ship inside the package** (`Tools~/`, which Unity does
+  not import) and run on the .NET runtime Unity ships. Before, both existed only as projects
+  in this repository: using them meant cloning it and `dotnet run`.
+- **`entitas-gen --check`** exits 1 when generated files are out of date — for CI.
+- **`ENT0004`** — in file mode, the compiler reports generated files that no longer match the
+  components (missing, outdated, no longer generated), e.g. after editing a component in an
+  IDE with Unity closed. **`ENT0005`** — generated files left in an assembly that generates
+  with the source generator: it stands down and says so instead of producing hundreds of
+  `CS0102`.
+
+### Changed
+- **The source generator is 35–45% cheaper per keystroke.** Discovery snapshotted every type
+  in the assembly; it now snapshots only components and attributed types — the only ones
+  that can yield anything. Measured A/B on a 1933-file project (median of 15 edits):
+  **153–166 → 102–106 ms** for an edit outside components, **141–150 → 79–84 ms** for an
+  edit in a component file. Generated output is unchanged (the snapshot did not move).
+- **`entitas-gen` rewritten for the file mode.** It finds the projects that declare contexts
+  by itself, syncs instead of wiping its output folder (the old `entitas-gen <csproj> <dir>`
+  form still works, without the wipe), parses and discovers in parallel and is tuned for cold
+  starts: **2.3 s → 0.7 s** on the same project.
+- Both CLIs run on any .NET 6 or newer (`RollForward=LatestMajor`); a machine with only
+  .NET 8 or 10 used to get "You must install or update .NET".
+- The project loader behind both CLIs resolves asmdef references (`ProjectReference` →
+  `Library/ScriptAssemblies`) and honours the project's `LangVersion`, so a component field
+  typed from another asmdef is named the way the compiler names it.
+
+### Fixed
+- **Renaming a component left the views implementing its event listener broken.** The
+  rename followed `IAnyHealthListener` → `IAnyHpListener` but not the `OnAnyHealth` methods
+  implementing it, so every listener stopped compiling (`CS0535`, or `CS0539` for explicit
+  implementations), in the IDE quick fix and in `entitas-rename` alike.
+- **The editor assemblies did not load in a fresh project.** `Entitas.Unity.Editor` and
+  `Entitas.VisualDebugging.Unity.Editor` reference `DesperateDevs.Unity.Editor`, which was
+  never shipped, so Unity skipped both ("Unable to resolve reference") — no Entitas menu, no
+  entity inspector. Projects only worked when they still carried a copy from the original
+  Entitas distribution. It now ships in `Assets/Entitas/DesperateDevs/Editor`
+  (`Editor/DesperateDevs` in the package), where such a copy already lives, so it is
+  overwritten rather than duplicated.
+
 ## [0.4.1] - 2026-09-10
 
 ### Changed

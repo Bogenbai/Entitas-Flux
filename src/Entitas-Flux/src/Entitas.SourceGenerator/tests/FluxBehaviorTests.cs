@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using FluentAssertions;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Entitas.SourceGenerator.Tests
@@ -17,6 +15,10 @@ namespace Entitas.SourceGenerator.Tests
     /// characters; these tests compile the output into a real assembly, load it, and
     /// exercise the API the way a game would. That is the only way to catch a feature
     /// that generates perfectly and then does nothing at runtime.
+    ///
+    /// Every test runs twice: with the source generator, and with the code on disk as
+    /// generated files (Output = GenerationOutput.Files) and the source generator standing
+    /// down. Both must behave identically.
     /// </summary>
     public class FluxBehaviorTests
     {
@@ -26,11 +28,11 @@ namespace Entitas.SourceGenerator.Tests
 
         // -- atomic entity API -------------------------------------------------
 
-        [Fact]
-        public void Atomic_api_exposes_the_single_value_directly()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Atomic_api_exposes_the_single_value_directly(Output output)
         {
             dynamic entity = CreateEntity(
-                nameof(Atomic_api_exposes_the_single_value_directly),
+                nameof(Atomic_api_exposes_the_single_value_directly), output,
                 Attributes + GameContext + Atomic + @"
 public sealed class CurrentHealthComponent : Entitas.IComponent { public int Value; }
 ");
@@ -43,11 +45,11 @@ public sealed class CurrentHealthComponent : Entitas.IComponent { public int Val
             ((bool)entity.hasCurrentHealth).Should().BeTrue();
         }
 
-        [Fact]
-        public void Atomic_replace_adds_the_component_when_it_is_missing()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Atomic_replace_adds_the_component_when_it_is_missing(Output output)
         {
             dynamic entity = CreateEntity(
-                nameof(Atomic_replace_adds_the_component_when_it_is_missing),
+                nameof(Atomic_replace_adds_the_component_when_it_is_missing), output,
                 Attributes + GameContext + Atomic + @"
 public sealed class CurrentHealthComponent : Entitas.IComponent { public int Value; }
 ");
@@ -62,11 +64,11 @@ public sealed class CurrentHealthComponent : Entitas.IComponent { public int Val
 
         // -- safe removal ------------------------------------------------------
 
-        [Fact]
-        public void Safe_remove_removes_the_component_and_is_a_no_op_when_it_is_absent()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Safe_remove_removes_the_component_and_is_a_no_op_when_it_is_absent(Output output)
         {
             dynamic entity = CreateEntity(
-                nameof(Safe_remove_removes_the_component_and_is_a_no_op_when_it_is_absent),
+                nameof(Safe_remove_removes_the_component_and_is_a_no_op_when_it_is_absent), output,
                 Attributes + GameContext + @"
 public sealed class HealthComponent : Entitas.IComponent { public int value; }
 ");
@@ -86,11 +88,11 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
 
         // -- [Watched] ---------------------------------------------------------
 
-        [Fact]
-        public void Watched_marks_the_entity_on_replace_and_the_generated_cleanup_clears_it()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Watched_marks_the_entity_on_replace_and_the_generated_cleanup_clears_it(Output output)
         {
             var assembly = Build(
-                nameof(Watched_marks_the_entity_on_replace_and_the_generated_cleanup_clears_it),
+                nameof(Watched_marks_the_entity_on_replace_and_the_generated_cleanup_clears_it), output,
                 Attributes + GameContext + Atomic + @"
 [Watched]
 public sealed class CurrentHealthComponent : Entitas.IComponent { public int Value; }
@@ -111,14 +113,14 @@ public sealed class CurrentHealthComponent : Entitas.IComponent { public int Val
             ((bool)entity.isCurrentHealthChanged).Should().BeFalse("the cleanup systems drop the marker");
         }
 
-        [Fact]
-        public void Watched_works_with_the_plain_entity_api_too()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Watched_works_with_the_plain_entity_api_too(Output output)
         {
             // [Watched] was wired into the atomic entity API only, so with the DEFAULT
             // plain API the marker component and the cleanup systems were generated and
             // nothing ever set the flag — the feature silently did nothing.
             dynamic entity = CreateEntity(
-                nameof(Watched_works_with_the_plain_entity_api_too),
+                nameof(Watched_works_with_the_plain_entity_api_too), output,
                 Attributes + GameContext + @"
 [Watched]
 public sealed class HealthComponent : Entitas.IComponent { public int value; }
@@ -131,15 +133,15 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
             ((bool)entity.isHealthChanged).Should().BeTrue("Replace marks the entity");
         }
 
-        [Fact]
-        public void Watched_works_for_a_component_declared_in_a_namespace()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Watched_works_for_a_component_declared_in_a_namespace(Output output)
         {
             // The marker class is named from the flattened component name, but the data
             // model used to name it from the short one: every generated reference to the
             // marker pointed at a type that did not exist, and [Watched] inside a
             // namespace did not compile at all unless IgnoreNamespaces was on.
             dynamic entity = CreateEntity(
-                nameof(Watched_works_for_a_component_declared_in_a_namespace),
+                nameof(Watched_works_for_a_component_declared_in_a_namespace), output,
                 Attributes + GameContext + @"
 namespace My.Game {
     [Watched]
@@ -154,11 +156,11 @@ namespace My.Game {
 
         // -- debug hooks -------------------------------------------------------
 
-        [Fact]
-        public void Debug_hooks_report_the_mutation_that_happened()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Debug_hooks_report_the_mutation_that_happened(Output output)
         {
             var assembly = Build(
-                nameof(Debug_hooks_report_the_mutation_that_happened),
+                nameof(Debug_hooks_report_the_mutation_that_happened), output,
                 Attributes + GameContext +
                 "[assembly: EntitasGeneration(DebugHooks = true)]\n" + @"
 public sealed class HealthComponent : Entitas.IComponent { public int value; }
@@ -191,8 +193,8 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
             }
         }
 
-        [Fact]
-        public void Debug_hooks_are_absent_unless_enabled()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Debug_hooks_are_absent_unless_enabled(Output output)
         {
             var calls = 0;
             Entitas.EntitasDebugHooks.OnAdd = (_, _, _) => calls++;
@@ -200,7 +202,7 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
             try
             {
                 dynamic entity = CreateEntity(
-                    nameof(Debug_hooks_are_absent_unless_enabled),
+                    nameof(Debug_hooks_are_absent_unless_enabled), output,
                     Attributes + GameContext + @"
 public sealed class HealthComponent : Entitas.IComponent { public int value; }
 ");
@@ -216,11 +218,11 @@ public sealed class HealthComponent : Entitas.IComponent { public int value; }
 
         // -- groups and collectors through the generated API -------------------
 
-        [Fact]
-        public void Groups_and_collectors_follow_component_changes()
+        [Theory, MemberData(nameof(OutputModes.Both), MemberType = typeof(OutputModes))]
+        public void Groups_and_collectors_follow_component_changes(Output output)
         {
             var assembly = Build(
-                nameof(Groups_and_collectors_follow_component_changes),
+                nameof(Groups_and_collectors_follow_component_changes), output,
                 Attributes + GameContext + @"
 public sealed class HealthComponent : Entitas.IComponent { public int value; }
 public sealed class DeadComponent : Entitas.IComponent { }
@@ -265,48 +267,15 @@ public sealed class DeadComponent : Entitas.IComponent { }
 
         // -- harness -----------------------------------------------------------
 
-        static dynamic CreateEntity(string assemblyName, string source)
+        static dynamic CreateEntity(string assemblyName, Output output, string source)
         {
-            var assembly = Build(assemblyName, source);
+            var assembly = Build(assemblyName, output, source);
             dynamic contexts = Activator.CreateInstance(assembly.GetType("Contexts")!)!;
             return contexts.game.CreateEntity();
         }
 
-        /// <summary>Generates, compiles and loads the result so it can actually be run.</summary>
-        static Assembly Build(string assemblyName, string source)
-        {
-            var compilation = CSharpCompilation.Create(
-                assemblyName,
-                new[] { CSharpSyntaxTree.ParseText(source, path: "Components.cs") },
-                References(),
-                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-            CSharpGeneratorDriver
-                .Create(new EntitasIncrementalGenerator())
-                .RunGeneratorsAndUpdateCompilation(compilation, out var output, out _);
-
-            using var stream = new MemoryStream();
-            var result = output.Emit(stream);
-
-            result.Success.Should().BeTrue(string.Join("\n", result.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.ToString())));
-
-            return Assembly.Load(stream.ToArray());
-        }
-
-        static IEnumerable<MetadataReference> References()
-        {
-            var tpa = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!;
-            foreach (var path in tpa.Split(Path.PathSeparator))
-            {
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                    yield return MetadataReference.CreateFromFile(path);
-            }
-
-            yield return MetadataReference.CreateFromFile(typeof(Entitas.IComponent).Assembly.Location);
-            yield return MetadataReference.CreateFromFile(
-                typeof(Entitas.CodeGeneration.Attributes.ContextAttribute).Assembly.Location);
-        }
+        /// <summary>Generates, compiles and loads the result so it can actually be run — in either output mode.</summary>
+        static Assembly Build(string assemblyName, Output output, string source) =>
+            OutputModes.Load(OutputModes.Build(assemblyName, source, output));
     }
 }

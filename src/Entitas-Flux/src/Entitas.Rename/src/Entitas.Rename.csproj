@@ -14,6 +14,22 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>entitas-rename</AssemblyName>
     <RootNamespace>Entitas.Rename</RootNamespace>
+    <!--
+      Runs on whatever .NET is there, 6 or newer: the Unity editor ships .NET 6 and runs
+      the copy bundled in the package with it, while a terminal may only have .NET 8 or 10,
+      where a plain net6.0 app refuses to start ("You must install or update .NET").
+    -->
+    <RollForward>LatestMajor</RollForward>
+    <!-- Launched as `dotnet entitas-*.dll`; a native launcher would tie the package to one OS. -->
+    <UseAppHost>false</UseAppHost>
+    <!--
+      Every run is a cold start (the editor launches a fresh process per regeneration), so
+      tune for start-up: quick-JIT methods with loops, skip tiered PGO's instrumentation,
+      and a non-concurrent GC. Measured on a 1933-file project: 0.95 s -> 0.75 s.
+    -->
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <TieredPGO>false</TieredPGO>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>entitas-rename</ToolCommandName>
     <PackageId>Entitas.Rename</PackageId>
@@ -27,6 +43,9 @@
   <!-- Shared with entitas-gen so both see the exact same Unity project model. -->
   <ItemGroup>
     <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\ProjectLoader.cs" Link="ProjectLoader.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\GeneratedFileWriter.cs" Link="GeneratedFileWriter.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\GenerationHost.cs" Link="GenerationHost.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\UnityProtocol.cs" Link="UnityProtocol.cs" />
   </ItemGroup>
 
   <ItemGroup>

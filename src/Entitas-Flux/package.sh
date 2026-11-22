@@ -32,7 +32,15 @@ if [[ -d "$ARTIFACTS/../DesperateDevs" ]]; then
   cp "$ARTIFACTS"/../DesperateDevs/*.dll "$PACKAGE/Runtime/DesperateDevs/"
 fi
 cp "$ARTIFACTS"/Editor/*.dll "$PACKAGE/Editor/"
+# The editor assemblies' third-party dependency, editor-only like them.
+if [[ -d "$ARTIFACTS/../DesperateDevs/Editor" ]]; then
+  mkdir -p "$PACKAGE/Editor/DesperateDevs"
+  cp "$ARTIFACTS"/../DesperateDevs/Editor/*.dll "$PACKAGE/Editor/DesperateDevs/"
+fi
 cp "$ARTIFACTS"/Analyzers/*.dll "$PACKAGE/Analyzers/"
+# entitas-gen / entitas-rename, run by the editor. Unity ignores folders ending in "~", so
+# they get no .meta and are never imported.
+cp -R "$ARTIFACTS/Tools~" "$PACKAGE/Tools~"
 cp "$SCRIPT_DIR/../../README.md" "$PACKAGE/README.md"
 # Unity's Package Manager shows CHANGELOG.md as a tab on the package page.
 cp "$SCRIPT_DIR/../../CHANGELOG.md" "$PACKAGE/CHANGELOG.md"
@@ -131,7 +139,8 @@ def write(path, content):
         f.write(content)
 
 for root, dirs, files in os.walk(package):
-    dirs.sort()
+    # Folders ending in "~" (Tools~) are invisible to Unity: no .meta inside or for them.
+    dirs[:] = sorted(d for d in dirs if not d.endswith("~"))
     for directory in dirs:
         full = os.path.join(root, directory)
         relative = os.path.relpath(full, package)
@@ -147,7 +156,7 @@ for root, dirs, files in os.walk(package):
 
         if name.endswith(".dll"):
             is_analyzer = folder == "Analyzers"
-            is_editor = folder == "Editor"
+            is_editor = folder == "Editor" or folder.startswith("Editor/")
             write(full, PLUGIN.format(
                 guid=guid(relative),
                 labels=ANALYZER_LABEL if is_analyzer else "",

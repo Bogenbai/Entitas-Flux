@@ -51,7 +51,7 @@ namespace Entitas.SourceGenerator.Tests
                 "the snapshot is committed; regenerate it with ENTITAS_UPDATE_SNAPSHOT=1");
 
             var expected = Directory.EnumerateFiles(SnapshotDir, "*.cs", SearchOption.TopDirectoryOnly)
-                .ToDictionary(Path.GetFileName, File.ReadAllText, StringComparer.Ordinal);
+                .ToDictionary(path => Path.GetFileName(path)!, File.ReadAllText, StringComparer.Ordinal);
 
             generated.Keys.Should().BeEquivalentTo(expected.Keys,
                 "the set of generated files must match the snapshot");
@@ -63,6 +63,51 @@ namespace Entitas.SourceGenerator.Tests
             }
         }
 
+        /// <summary>
+        /// The same snapshot, through the file mode: what the writer puts on disk must be the
+        /// source generator's output byte for byte, plus the marker line — and once those
+        /// files are in the assembly, generating again must produce them unchanged (discovery
+        /// must not read its own output back) while the source generator adds nothing.
+        /// </summary>
+        [Fact]
+        public void FileModeOutputMatchesTheCommittedSnapshot()
+        {
+            var compilation = FixturesCompilation(AssemblyAttributes + FilesOutput);
+            var sources = EntitasGenerators.Generate(GenerationInput.From(compilation)).Sources;
+
+            var expected = Directory.EnumerateFiles(SnapshotDir, "*.cs", SearchOption.TopDirectoryOnly)
+                .ToDictionary(path => Path.GetFileName(path)!, File.ReadAllText, StringComparer.Ordinal);
+
+            var hintNames = new HashSet<string>();
+            var written = sources.ToDictionary(
+                source => EntitasIncrementalGenerator.BuildHintName(source.FileName, hintNames),
+                GeneratedFiles.FileText,
+                StringComparer.Ordinal);
+
+            written.Keys.Should().BeEquivalentTo(expected.Keys, "file mode writes one file per source the generator adds");
+            foreach (var file in written.OrderBy(f => f.Key, StringComparer.Ordinal))
+            {
+                GeneratedFiles.IsGenerated(file.Value).Should().BeTrue();
+                Normalize(GeneratedFiles.WithoutMarker(file.Value)).Should().Be(Normalize(expected[file.Key]),
+                    $"{file.Key} on disk must be exactly what the source generator emits");
+            }
+
+            // Fixpoint: with the files in the assembly, generation reproduces them exactly.
+            var withFiles = compilation.AddSyntaxTrees(sources.Select(source =>
+                CSharpSyntaxTree.ParseText(GeneratedFiles.FileText(source), path: "Generated/" + source.FileName)));
+
+            EntitasGenerators.Generate(GenerationInput.From(withFiles)).Sources
+                .Select(source => (source.FileName, source.Content))
+                .Should().Equal(sources.Select(source => (source.FileName, source.Content)));
+
+            var run = CSharpGeneratorDriver.Create(new EntitasIncrementalGenerator()).RunGenerators(withFiles).GetRunResult();
+            run.GeneratedTrees.Should().BeEmpty("the source generator stands down in file mode");
+            run.Diagnostics.Should().BeEmpty("the files are current");
+        }
+
+        const string FilesOutput =
+            "[assembly: Entitas.CodeGeneration.Attributes.EntitasGeneration(Output = Entitas.CodeGeneration.Attributes.GenerationOutput.Files)]\n";
+
         static void WriteSnapshot(IReadOnlyDictionary<string, string> generated)
         {
             if (Directory.Exists(SnapshotDir))
@@ -73,13 +118,16 @@ namespace Entitas.SourceGenerator.Tests
                 File.WriteAllText(Path.Combine(SnapshotDir, file.Key), file.Value);
         }
 
-        static Dictionary<string, string> RunGenerator()
-        {
-            var compilation = CSharpCompilation.Create(
+        static CSharpCompilation FixturesCompilation(string assemblyAttributes) =>
+            CSharpCompilation.Create(
                 "TestFixturesAsm",
-                InputTrees(),
+                InputTrees(assemblyAttributes),
                 References(),
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        static Dictionary<string, string> RunGenerator()
+        {
+            var compilation = FixturesCompilation(AssemblyAttributes);
 
             var result = CSharpGeneratorDriver
                 .Create(new EntitasIncrementalGenerator())
@@ -95,7 +143,7 @@ namespace Entitas.SourceGenerator.Tests
         /// <summary>Line endings only — the content itself is compared as written.</summary>
         static string Normalize(string source) => source.Replace("\r\n", "\n").TrimEnd() + "\n";
 
-        static IReadOnlyList<SyntaxTree> InputTrees()
+        static IReadOnlyList<SyntaxTree> InputTrees(string assemblyAttributes)
         {
             var fixturesDir = Path.Combine(RepoRoot(), "Tests", "TestFixtures", "Fixtures");
             var trees = Directory.EnumerateFiles(fixturesDir, "*.cs", SearchOption.AllDirectories)
@@ -103,7 +151,8 @@ namespace Entitas.SourceGenerator.Tests
                 .Select(file => CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file))
                 .ToList();
 
-            trees.Add(CSharpSyntaxTree.ParseText(AssemblyAttributes));
+            // A path, so the default output folder ("Generated" beside it) can be worked out.
+            trees.Add(CSharpSyntaxTree.ParseText(assemblyAttributes, path: "EntitasGeneration.cs"));
             return trees;
         }
 

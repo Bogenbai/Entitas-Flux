@@ -20,6 +20,17 @@ namespace Entitas.CodeGeneration.Attributes
     public enum VisualDebuggingStyle { EntityGameObjects = 0, SingleGameObject = 1 }
 
     /// <summary>
+    /// Where the generated ECS API lives.
+    /// <see cref="SourceGenerator"/> (the default) generates it inside the compiler on every
+    /// build; nothing is written to disk. <see cref="Files"/> writes it to ordinary .cs files
+    /// under <see cref="EntitasGenerationAttribute.OutputPath"/> — regenerated from the Unity
+    /// editor (Tools > Entitas > Generate, or automatically when a component changes) or
+    /// with the <c>entitas-gen</c> CLI — and the source generator stands down so nothing is
+    /// defined twice. Both produce the same code.
+    /// </summary>
+    public enum GenerationOutput { SourceGenerator = 0, Files = 1 }
+
+    /// <summary>
     /// Assembly-level configuration for the Entitas-Flux source generator. Place a
     /// single instance on the assembly that owns the components to customize
     /// generation without rebuilding the framework. Read by the generator via
@@ -40,6 +51,21 @@ namespace Entitas.CodeGeneration.Attributes
         public bool DebugHooks { get; set; } = false;
 
         public VisualDebuggingStyle VisualDebugging { get; set; } = VisualDebuggingStyle.EntityGameObjects;
+
+        /// <summary>
+        /// <see cref="GenerationOutput.Files"/> writes the generated code to .cs files instead
+        /// of generating it inside the compiler. See <see cref="GenerationOutput"/>.
+        /// </summary>
+        public GenerationOutput Output { get; set; } = GenerationOutput.SourceGenerator;
+
+        /// <summary>
+        /// Folder for <see cref="GenerationOutput.Files"/>, relative to the Unity project root
+        /// (e.g. <c>"Assets/Code/Generated"</c>). It must belong to this assembly — inside the
+        /// same asmdef folder — or the files would compile into another one. When empty, a
+        /// <c>Generated</c> folder next to the file declaring the first
+        /// <c>[assembly: ContextDefinition]</c> is used, which always does.
+        /// </summary>
+        public string OutputPath { get; set; } = "";
     }
 
     /// <summary>

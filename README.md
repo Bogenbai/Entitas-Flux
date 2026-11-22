@@ -23,8 +23,9 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
   - [Component indices are not stable](#component-indices-are-not-stable)
   - [Diagnostics](#diagnostics)
 - [Configuring generation](#configuring-generation--entitasgenerationcs)
+- [Generated code as files](#generated-code-as-files--output--generationoutputfiles)
 - [Debugging a mutation](#debugging-a-mutation--debughooks)
-- [Renaming a component](#renaming-a-component--renameto)
+- [Renaming a component](#renaming-a-component)
 - [License](#license)
 
 ## Installation
@@ -53,6 +54,8 @@ Entitas.VisualDebugging.Unity.dll
 // Assets/Entitas/DesperateDevs:
 DesperateDevs.*.dll               ← third-party assemblies Entitas is built against
 Sherlog.dll
+// Assets/Entitas/DesperateDevs/Editor:
+DesperateDevs.Unity.Editor.dll    ← the editor assemblies below need it
 // Assets/Entitas/Entitas/Editor:
 Entitas.Migration.dll
 Entitas.Migration.Unity.Editor.dll
@@ -61,6 +64,8 @@ Entitas.VisualDebugging.Unity.Editor.dll
 // Assets/Entitas/Entitas/Analyzers:
 Entitas.SourceGenerator.dll      ← the Roslyn source generator
 Entitas.CodeFixes.dll            ← IDE quick fixes, e.g. [RenameTo]
+// Assets/Entitas/Entitas/Tools~:
+entitas-gen.dll, entitas-rename.dll, …  ← run by the editor; Unity ignores "~" folders
 ```
 
 **The analyzer DLLs are special.** Select **both** `Entitas.SourceGenerator.dll` and `Entitas.CodeFixes.dll` in Unity, and in the Inspector: add the asset label **`RoslynAnalyzer`**, and uncheck **all** platforms under "Select platforms for plugin" (Any Platform off, Editor off). Apply. This is what makes Unity feed them to the compiler instead of trying to load them as managed plugins.
@@ -126,12 +131,12 @@ if (hasBoxCollider2D)
     RemoveComponent(GameComponentsLookup.BoxCollider2D);
 ```
 ### Renaming components
-Generated code isn't on disk anymore, so renaming a component used to mean fixing every `entity.isCanAttack` and `GameMatcher.CanAttack` by hand. Mark it instead, and let the IDE do all of it:
+One component name fans out into `entity.isCanAttack`, `GameMatcher.CanAttack`, `AddCanAttack`… Renaming the class in the IDE leaves all of those behind, so rename the component instead — from the IDE, from Unity or from a terminal, and every derived identifier and usage follows:
 ```cs
 [RenameTo("AbleToAttack")]
 [Game] public class CanAttack : IComponent { }
 ```
-`Alt+Enter` on the attribute → *"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"*. See [Renaming a component](#renaming-a-component--renameto).
+`Alt+Enter` on the attribute → *"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"*, or *Tools → Entitas → Rename Component…* in Unity. See [Renaming a component](#renaming-a-component).
 
 ### Defines
 `ENTITAS_DISABLE_REACTIVITY` - partially disables Entitas' default reactivity. Gives small performance boost.
@@ -143,13 +148,13 @@ Generated code isn't on disk anymore, so renaming a component used to mean fixin
 Entitas-Flux generates the whole ECS API — contexts, entities, matchers, component accessors, events, and the cleanup/watched systems — at **compile time** with a Roslyn [incremental source generator](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview). It replaced the old Jenny pipeline, so:
 
 - **No separate generation step.** The generator runs inside the C# compiler on every build.
-- **No committed `Generated/` folders.** The generated code lives in the compiler's output, not on disk.
+- **No committed `Generated/` folders** by default. The generated code lives in the compiler's output, not on disk — unless you [ask for files](#generated-code-as-files--output--generationoutputfiles).
 - **Components are discovered from the compilation** — any class implementing `IComponent`, plus its context/`[Watched]`/`[Unique]`/etc. attributes. No external config files.
 - **IDE-native.** Rider/Visual Studio see the generated API immediately; Cmd/Ctrl-click navigates straight into it.
 - **Incremental.** Generation is keyed on the components, their attributes and your generation config — nothing else. Editing a method body or a comment re-runs nothing.
 - **Loud when it breaks.** Failures are reported where you can see them instead of leaving a hole in the API for you to find via a hundred errors in your own code — see [Diagnostics](#diagnostics).
 
-> Want the generated files on disk anyway (e.g. to read them, diff them, or step through with a breakpoint)? The repo ships an `entitas-gen` CLI that writes the same output to real `.cs` files from your `Assembly-CSharp.csproj`. It's optional — the analyzer is the default path.
+> Want the generated code on disk as ordinary files — for navigation, external code-analysis tools, diffs or breakpoints? Set `Output = GenerationOutput.Files`: see [Generated code as files](#generated-code-as-files--output--generationoutputfiles). Same code, same generator.
 
 ### Where components live
 
@@ -184,7 +189,9 @@ component's type or name and resolve it at load time. A save written before addi
 | --- | --- | --- |
 | `ENT0002` | Warning | This assembly declares components but no context, so **nothing is generated for them**. Quick fix: *Declare the "Game" context for this assembly*. |
 | `ENT0003` | Warning | This component is in a different assembly than the contexts, so **nothing is generated for it** — see [Where components live](#where-components-live). No quick fix: declaring a context here would generate a second, parallel set of contexts instead of helping. |
-| `ENT0001` | Warning | A component is marked `[RenameTo("…")]` and the rename has not been applied yet — see [Renaming a component](#renaming-a-component--renameto). |
+| `ENT0001` | Warning | A component is marked `[RenameTo("…")]` and the rename has not been applied yet — see [Renaming a component](#renaming-a-component). |
+| `ENT0004` | Warning | `Output = GenerationOutput.Files`, and the generated files no longer match the components (missing, outdated, or no longer generated). Regenerate: *Tools → Entitas → Generate*, or `entitas-gen`. |
+| `ENT0005` | Warning | Files written by the file mode are still in an assembly that generates with the source generator. The generator stands down until they are gone — otherwise every type would be defined twice. *Tools → Entitas → Generate* deletes them. |
 | `ENT0100` | Error | A generator threw; it names itself and the reason. The API it owns will be missing. |
 | `ENT0101` | Error | Entitas could not build its data model from the assembly. Nothing was generated. |
 
@@ -212,6 +219,9 @@ Declares a context; repeat it for each one. The **first** declared context is th
 | `EntityApi` | `EntityApiStyle.Plain` | `Atomic` gives single-field components the simplified `entity.CurrentHealth` accessor (see [Atomic components](#atomic-components)). `Plain` keeps `entity.currentHealth.Value`. One or the other — never both. |
 | `IgnoreNamespaces` | `false` | Drops the namespace from generated component names: `My.Game.Health` → `Health` instead of `MyGameHealth`. |
 | `DebugHooks` | `false` | Emits runtime debug hooks on every `Add`/`Replace` so you can breakpoint a specific mutation — see [Debugging a mutation](#debugging-a-mutation--debughooks). |
+| `VisualDebugging` | `VisualDebuggingStyle.EntityGameObjects` | `SingleGameObject` debugs every context from one `Entitas Debug` GameObject instead of a GameObject per entity. |
+| `Output` | `GenerationOutput.SourceGenerator` | `Files` writes the generated code to `.cs` files instead of generating it inside the compiler — see [Generated code as files](#generated-code-as-files--output--generationoutputfiles). |
+| `OutputPath` | `""` | Where `Files` writes, relative to the Unity project root (e.g. `"Assets/Code/Generated"`). Empty: a `Generated` folder next to the file declaring the first context. |
 
 ### Disabling built-in generators — `[DisableEntitasGenerator("X")]`
 Repeatable. Removes any built-in generator whose class short-name matches `"X"` case-insensitively **or starts with** it (prefix match):
@@ -220,6 +230,64 @@ Repeatable. Removes any built-in generator whose class short-name matches `"X"` 
 [assembly: DisableEntitasGenerator("ContextObserver")]  // just ContextObserverGenerator
 ```
 > `[Event]` listener components are synthesized during discovery, so only disable `Event` generators in assemblies that don't use `[Event]`.
+
+## Generated code as files — `Output = GenerationOutput.Files`
+By default the generated API exists only inside the compiler. That is fast and needs no setup, but nothing outside the compiler can see it: an IDE's *Find Usages* on `AddHealth` or `GameMatcher.Health` struggles, tools that read source files (code graphs, linters, search) see none of it — a tree-sitter graph of a production project showed a component with 2 producers and 7 consumers as having none, because the link between them lives only in generated code. Ask for files instead:
+
+```cs
+[assembly: EntitasGeneration(Output = GenerationOutput.Files)]
+// or choose the folder (relative to the Unity project root):
+[assembly: EntitasGeneration(Output = GenerationOutput.Files, OutputPath = "Assets/Code/Generated")]
+```
+
+The generated code is then ordinary `.cs` files in your project, and the source generator stands down so nothing is defined twice. It is **the same code** — the same generator writes it; a file is what the source generator would have emitted plus one marker line — so switching is invisible to the rest of your code.
+
+- **One file per component per context**, at the same paths the generator has always used: `Game/Components/GameHealthComponent.cs`, `Game/GameEntity.cs`, `Events/Interfaces/IAnyCoinsListener.cs`…
+- **Only what changed is rewritten.** An unchanged component costs Unity no reimport and no recompile; line endings converted by a git checkout do not count as a change.
+- **Nothing is left behind.** Rename or delete a component, or move `OutputPath`, and its files go too, with their `.meta` and any folder left empty.
+- **Nothing that is not ours is touched.** Only files starting with the Entitas-Flux marker are ever overwritten or deleted.
+- **Stable `.meta` files.** A new file's GUID is derived from its path, so two people generating the same component on two branches do not conflict.
+- **Commit the files.** They are what the project compiles from now; CI builds and fresh clones need them.
+- `OutputPath` must lie inside the folder of the assembly that declares the contexts (the same asmdef), or the files would compile into another assembly. Leaving it empty always satisfies this.
+
+### In Unity
+| Menu | What it does |
+| --- | --- |
+| *Tools → Entitas → Generate* | Brings the files up to date now. |
+| *Tools → Entitas → Generate Automatically* | On by default: regenerates by itself when a file declaring components (or the config) changes. |
+| *Tools → Entitas → Check Generated Files* | Reports what is out of date without writing. |
+
+Automatic generation runs in the background — the editor never waits for it. It notices a component saved from your IDE immediately, typically before you switch back to Unity, so the refresh that follows compiles the component and its generated code **together, once**. On a ~2000-file project a run takes about 0.7 s; files that declare no component never trigger one.
+
+Generation reads source, not compiled assemblies, so it works while the project does not compile — which is exactly when you need it (you just added a component and nothing uses its API yet, or you just renamed one).
+
+The work is done by `entitas-gen`, which ships inside the package (`Tools~/`) and runs on the .NET runtime Unity itself ships — nothing to install.
+
+### From a terminal or CI
+Run from the Unity project root (it reads the `.csproj` files Unity's IDE packages write):
+```bash
+dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-gen.dll           # UPM install
+dotnet Assets/Entitas/Entitas/Tools~/entitas-gen.dll                                    # manual install
+dotnet Assets/Entitas/Entitas/Tools~/entitas-gen.dll --check                            # CI: exit 1 when files are stale
+```
+| Option | Effect |
+| --- | --- |
+| `-r`, `--root <dir>` | Unity project root (default: current directory). |
+| `-p`, `--project <csproj>` | Generate for this project only. Default: every project that declares a context. |
+| `--check` | Write nothing; exit 1 when a generated file is missing, outdated or no longer generated. |
+| `-v`, `--verbose` | List every file written or deleted, and where the time went. |
+
+Any .NET 6 or newer runs it. Inside Unity, batchmode works too:
+```bash
+Unity -batchmode -projectPath . -executeMethod Entitas.Unity.Editor.Generation.EntitasCodeGeneration.GenerateFromCommandLine -quit
+Unity -batchmode -projectPath . -executeMethod Entitas.Unity.Editor.Generation.EntitasCodeGeneration.CheckFromCommandLine -quit
+```
+(Unity refuses to run `-executeMethod` on a project that does not compile unless you add `-ignoreCompilerErrors`; `entitas-gen` has no such restriction.)
+
+### Going back
+Remove `Output = GenerationOutput.Files` and run *Tools → Entitas → Generate* once (automatic generation does it for you): the generated files are deleted and the source generator takes over. Until they are gone it reports `ENT0005` instead of defining every type a second time.
+
+> **Do not edit generated files** — the next generation overwrites them. That includes renaming a generated member such as `AddHealth` in the IDE: the file is rewritten from the component's name, the old name comes back, and every usage you renamed breaks. Rename the component instead — see below.
 
 ## Debugging a mutation — DebugHooks
 Previously you'd open the generated `ReplaceX()` method, add `if (id == 123)`, and drop a breakpoint. With compile-time generation there's no file to edit, so enable hooks instead:
@@ -242,40 +310,44 @@ EntitasDebugHooks.OnReplace = (entity, index, value) =>
 - `EntitasDebugHooks` lives in the runtime (not generated code), so the IDE always resolves it — no fiddling with partial methods.
 - A `null` handler costs a single null-check. **Turn `DebugHooks` off for release builds.**
 
-## Renaming a component — `[RenameTo]`
-One component name fans out into a lot of generated API: `GameMatcher.CanAttack`, `entity.isCanAttack`, `AddCanAttack`, `ReplaceCanAttack`, `SafeRemoveCanAttack`, `CanAttackChanged`, `ICanAttackListener`… With Jenny you could rename those in the generated files and let the IDE propagate it. Now that generation happens inside the compiler, those symbols live in read-only documents — the IDE renames the class and leaves every usage broken.
+## Renaming a component
+One component name fans out into a lot of generated API: `GameMatcher.CanAttack`, `entity.isCanAttack`, `AddCanAttack`, `ReplaceCanAttack`, `SafeRemoveCanAttack`, `CanAttackChanged`, `IAnyCanAttackListener` and the views implementing its `OnAnyCanAttack`… An IDE rename of the class (Shift+F6, F2) changes the class and leaves all of those behind — in either output mode, since the generated names come from the component's name. So rename the **component**, with one of the three fronts below. They share one engine, so they agree on the result:
 
-So mark the component instead:
-```cs
-using Entitas.CodeGeneration.Attributes;
-
-[RenameTo("AbleToAttack")]
-[Game] public class CanAttack : IComponent { }
-```
-Then `Alt+Enter` on the attribute → **"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"**. The component, every identifier derived from it, all their usages, and the attribute itself are dealt with in one step:
 ```cs
 // before                                    // after
 attacker.isCanAttack = true;                 attacker.isAbleToAttack = true;
 GameMatcher.CanAttack                        GameMatcher.AbleToAttack
 entity.hasCanAttackChanged                   entity.hasAbleToAttackChanged
+public void OnAnyCanAttack(…)                public void OnAnyAbleToAttack(…)
 ```
 
-A few things worth knowing:
+### In the IDE — `[RenameTo]`
+1. Mark the component:
+   ```cs
+   using Entitas.CodeGeneration.Attributes;
 
-- **The attribute is inert.** Generation ignores it completely, so the project keeps compiling between marking a component and applying the rename. Mark five components today, rename them tomorrow.
-- **Other assemblies are covered.** Usages in your test asmdef or an Editor assembly are rewritten too — anything that references the assembly declaring the component.
-- **Same-named members are safe.** A `monster.Health` on some unrelated class of yours is left alone: every usage is resolved through the compiler, not matched by text.
-- **One component at a time.** There is deliberately no *Fix All*: each rename is planned against the current state of the code, so applying several at once would use stale positions.
-- **After updating the DLLs, restart the IDE.** It keeps analyzer assemblies loaded in-process; until it restarts you may get the old ones (the quick fix silently disappears from `Alt+Enter`).
+   [RenameTo("AbleToAttack")]
+   [Game] public class CanAttack : IComponent { }
+   ```
+2. `Alt+Enter` on the attribute → **"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"**. The class, every derived identifier, every usage in every assembly that references this one, and the attribute itself are dealt with in one step.
+3. With `Output = GenerationOutput.Files`, the generated files are rewritten too, so the project compiles straight away; when Unity next gets focus, automatic generation moves them to their new names (`GameCanAttackComponent.cs` → `GameAbleToAttackComponent.cs`). Without Unity open, run `entitas-gen`.
+4. Rename the component's file yourself if you want it to follow (`CanAttack.cs`, with its `.meta`). The two fronts below do that for you.
 
-### From the terminal
-The same rename runs headless — for CI, for bulk work, or when the IDE isn't cooperating. It reads your `Assembly-CSharp.csproj`, so run it from the Unity project root:
+### In Unity — *Tools → Entitas → Rename Component…*
+Type the component (`CanAttack`, `CanAttackComponent` or `My.Game.CanAttack`) and the new name. **Preview** lists the identifier map and every usage; **Rename** applies it, moves the component's `.cs` with its `.meta` (via `git mv` when tracked, so the asset GUID and history survive), regenerates the files in file mode, and refreshes.
+
+### From a terminal
+Run from the Unity project root:
 ```bash
-# dry run: prints the identifier map, every usage, and the file move
-dotnet run --project src/Entitas-Flux/src/Entitas.Rename/src -- CanAttack AbleToAttack -r <unity-project>
-
-# the same with -a applies it
+# dry run: the identifier map, every usage, and the file move
+dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-rename.dll CanAttack AbleToAttack
 ```
+```bash
+# the same with -a applies it (and regenerates the files in file mode)
+dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-rename.dll CanAttack AbleToAttack -a
+```
+With a manual install the tool is at `Assets/Entitas/Entitas/Tools~/entitas-rename.dll`. Any .NET 6 or newer runs it.
+
 | Option | Effect |
 | --- | --- |
 | `-a`, `--apply` | Write the changes (without it, nothing is written). |
@@ -284,9 +356,12 @@ dotnet run --project src/Entitas-Flux/src/Entitas.Rename/src -- CanAttack AbleTo
 | `-s`, `--include-strings` | Also rewrite occurrences in string literals and comments. |
 | `-k`, `--keep-file-name` | Don't rename the component's `.cs` file. |
 
-Unlike the quick fix, the CLI also renames the component's file (`CanAttack.cs` → `AbleToAttack.cs`) together with its `.cs.meta`, via `git mv` when the file is tracked, so the Unity asset GUID survives.
-
-> The CLI sees your project exactly as `Assembly-CSharp.csproj` describes it. If Unity hasn't regenerated it lately, files missing from it are invisible to the rename — it will tell you when the csproj looks stale, and *Edit → Preferences → External Tools → Regenerate project files* fixes it.
+### Worth knowing
+- **The attribute is inert.** Generation ignores it, so the project keeps compiling between marking a component and applying the rename. Mark five components today, rename them tomorrow.
+- **Same-named members are safe.** A `monster.Health` on some unrelated class of yours is left alone: every usage is resolved through the compiler, not matched by text.
+- **One component at a time.** There is deliberately no *Fix All*: each rename is planned against the current state of the code, so applying several at once would use stale positions.
+- **After updating the DLLs, restart the IDE.** It keeps analyzer assemblies loaded in-process; until it restarts you may get the old ones (the quick fix silently disappears from `Alt+Enter`).
+- The terminal and Unity fronts see the project as the `.csproj` files describe it. Unity's menu re-syncs them first; from a terminal, if a component seems missing, let Unity regenerate them (*Preferences → External Tools → Regenerate project files*).
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

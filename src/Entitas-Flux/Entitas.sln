@@ -58,6 +58,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Entitas.CodeFixes", "src\En
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Entitas.CodeFixes.Tests", "src\Entitas.CodeFixes\tests\Entitas.CodeFixes.Tests.csproj", "{20612579-596C-4658-9E26-F7F8156B189A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Entitas.SourceGenerator.Cli.Tests", "src\Entitas.SourceGenerator.Cli\tests\Entitas.SourceGenerator.Cli.Tests.csproj", "{804B2102-6474-499F-A5D3-345EAC41F6A7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -272,6 +274,18 @@ Global
 		{20612579-596C-4658-9E26-F7F8156B189A}.Release|x64.Build.0 = Release|Any CPU
 		{20612579-596C-4658-9E26-F7F8156B189A}.Release|x86.ActiveCfg = Release|Any CPU
 		{20612579-596C-4658-9E26-F7F8156B189A}.Release|x86.Build.0 = Release|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Debug|x64.Build.0 = Debug|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Debug|x86.Build.0 = Debug|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Release|x64.ActiveCfg = Release|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Release|x64.Build.0 = Release|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Release|x86.ActiveCfg = Release|Any CPU
+		{804B2102-6474-499F-A5D3-345EAC41F6A7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -299,5 +313,6 @@ Global
 		{D3762D05-9988-E980-0C0E-C53BFCF49E1C} = {7247D72D-2276-2576-48CC-F8EAEE7E1A95}
 		{E0C9ADE5-1076-4029-8792-B91871B42111} = {D3762D05-9988-E980-0C0E-C53BFCF49E1C}
 		{20612579-596C-4658-9E26-F7F8156B189A} = {7247D72D-2276-2576-48CC-F8EAEE7E1A95}
+		{804B2102-6474-499F-A5D3-345EAC41F6A7} = {40540F3E-4988-0FEF-1E68-097CF3B2A36E}
 	EndGlobalSection
 EndGlobal
