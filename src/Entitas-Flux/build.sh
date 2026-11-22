@@ -76,15 +76,15 @@ Entitas.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 Entitas.VisualDebugging.Unity.Editor.dll|Assets/Entitas/Entitas/Editor
 EOF
 
-# The command-line tools the Unity editor runs out of process: entitas-gen (Tools >
-# Entitas > Generate, and regeneration when a component changes) and entitas-rename
-# (Tools > Entitas > Rename Component...). Framework-dependent and OS-independent — the
-# editor starts them with the .NET runtime Unity itself ships. They go in a folder whose
-# name ends in "~", which Unity never imports, so the Roslyn assemblies they carry cannot
-# clash with anything in the project.
+# The command-line tools: entitas-gen (Tools > Entitas > Generate, and regeneration when a
+# component changes) and entitas-rename (Tools > Entitas > Rename Component...), which the
+# Unity editor runs out of process, and entitas-graph, run from a terminal.
+# Framework-dependent and OS-independent — the editor starts them with the .NET runtime
+# Unity itself ships. They go in a folder whose name ends in "~", which Unity never
+# imports, so the Roslyn assemblies they carry cannot clash with anything in the project.
 TOOLS_DIR="$ARTIFACTS_DIR/Assets/Entitas/Entitas/Tools~"
 mkdir -p "$TOOLS_DIR"
-for tool in entitas-gen entitas-rename; do
+for tool in entitas-gen entitas-rename entitas-graph; do
   for ext in dll deps.json runtimeconfig.json; do
     src="$TMP_OUT/$tool.$ext"
     if [[ -f "$src" ]]; then
@@ -98,6 +98,8 @@ done
 for dll in Entitas.SourceGenerator.dll Microsoft.CodeAnalysis.dll Microsoft.CodeAnalysis.CSharp.dll; do
   cp -f "$TMP_OUT/$dll" "$TOOLS_DIR/"
 done
+# entitas-graph embeds vis-network (dual Apache-2.0/MIT) into the graph.html it writes.
+cp -f "$SCRIPT_DIR/src/Entitas.Graph/src/Html/"LICENSE-vis-network-*.txt "$TOOLS_DIR/"
 
 # optional: remove temp build folder
 rm -rf "$TMP_OUT"

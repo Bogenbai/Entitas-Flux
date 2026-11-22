@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECS graph</title>
+<style>
+  :root { --bg:#f7f7f8; --panel:#ffffff; --text:#1d1d1f; --muted:#6e6e73; --border:#d9d9de; --accent:#2f6fde; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151517; --panel:#1f1f22; --text:#ececf0; --muted:#9a9aa2; --border:#34343a; --accent:#6d9cf0; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--panel); }
+  header h1 { font-size:14px; margin:0 8px 0 0; }
+  header input[type=search] { width:240px; padding:5px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); }
+  header label { color:var(--muted); white-space:nowrap; cursor:pointer; }
+  header .group { display:flex; gap:10px; align-items:center; }
+  header button, header select { padding:4px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); cursor:pointer; }
+  main { flex:1; display:flex; min-height:0; }
+  #network { flex:1; min-width:0; }
+  aside { width:380px; max-width:45vw; overflow:auto; border-left:1px solid var(--border); background:var(--panel); padding:12px 14px; }
+  aside h2 { font-size:15px; margin:0 0 4px; }
+  aside .meta { color:var(--muted); margin-bottom:10px; word-break:break-all; }
+  aside h3 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:14px 0 4px; }
+  aside ul { list-style:none; padding:0; margin:0; }
+  aside li { padding:2px 0; }
+  aside a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  aside .via { color:var(--muted); font-size:12px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .hint { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">ECS graph</h1>
+  <input type="search" id="search" list="labels" placeholder="Find a component, system, feature…">
+  <datalist id="labels"></datalist>
+  <div class="group" id="kinds"></div>
+  <div class="group" id="relations"></div>
+  <div class="group">
+    <select id="scope" title="What to show">
+      <option value="all">Everything visible</option>
+      <option value="1" selected>Selection + neighbours</option>
+      <option value="2">Selection + 2 steps</option>
+    </select>
+    <button id="fit">Fit</button>
+  </div>
+</header>
+<main>
+  <div id="network"></div>
+  <aside id="panel"><p class="hint">Search for a node, or click one. Dashed edges are inferred — through a query, factory or the components an entity is created with.</p></aside>
+</main>
+<script>/*__VIS__*/</script>
+<script>/*__DATA__*/</script>
+<script>
+(function () {
+  const KIND = {
+    component: { color: '#3b82f6', shape: 'dot', label: 'components' },
+    system:    { color: '#16a34a', shape: 'box', label: 'systems' },
+    feature:   { color: '#475569', shape: 'diamond', label: 'features' },
+    type:      { color: '#9ca3af', shape: 'triangle', label: 'other types' }
+  };
+  const ROLE = { event: '#f59e0b', request: '#a855f7' };
+  const REL = {
+    creates: '#16a34a', reads: '#3b82f6', filters: '#64748b', removes: '#ef4444',
+    destroys: '#b91c1c', reacts: '#f59e0b', contains: '#94a3b8'
+  };
+  const PASSIVE = { creates:'created by', reads:'read by', filters:'filtered by', removes:'removed by', destroys:'destroyed by', reacts:'reacted to by', contains:'registered by' };
+
+  document.getElementById('title').textContent = 'ECS graph — ' + (GRAPH.project || '');
+  const byId = new Map(GRAPH.nodes.map(n => [n.id, n]));
+  const out = new Map(), inc = new Map();
+  GRAPH.edges.forEach((e, i) => {
+    e.id = i;
+    (out.get(e.from) || out.set(e.from, []).get(e.from)).push(e);
+    (inc.get(e.to) || inc.set(e.to, []).get(e.to)).push(e);
+  });
+
+  const shownKinds = new Set(['component', 'system', 'feature']);
+  const shownRelations = new Set(Object.keys(REL).filter(r => r !== 'contains'));
+  let selected = null;
+
+  function toggles(containerId, entries, set, onChange) {
+    const container = document.getElementById(containerId);
+    entries.forEach(([key, label, color]) => {
+      const l = document.createElement('label');
+      l.innerHTML = '<input type="checkbox"' + (set.has(key) ? ' checked' : '') + '> <span class="swatch" style="background:' + color + '"></span>' + label;
+      l.querySelector('input').addEventListener('change', ev => { ev.target.checked ? set.add(key) : set.delete(key); onChange(); });
+      container.appendChild(l);
+    });
+  }
+  toggles('kinds', Object.entries(KIND).map(([k, v]) => [k, v.label, v.color]), shownKinds, render);
+  toggles('relations', Object.keys(REL).map(r => [r, r, REL[r]]), shownRelations, render);
+
+  const labels = document.getElementById('labels');
+  GRAPH.nodes.slice().sort((a, b) => a.label.localeCompare(b.label)).forEach(n => {
+    const o = document.createElement('option'); o.value = n.label; labels.appendChild(o);
+  });
+
+  const nodes = new vis.DataSet(), edges = new vis.DataSet();
+  const network = new vis.Network(document.getElementById('network'), { nodes, edges }, {
+    nodes: { font: { size: 13, color: getComputedStyle(document.body).color }, borderWidth: 1 },
+    edges: { arrows: { to: { enabled: true, scaleFactor: 0.5 } }, smooth: false, width: 1.2 },
+    physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -60, springLength: 110 }, stabilization: { iterations: 200 } },
+    interaction: { hover: true, tooltipDelay: 150 },
+    layout: { improvedLayout: false }
+  });
+  network.on('stabilizationIterationsDone', () => network.setOptions({ physics: false }));
+
+  function visibleIds() {
+    const scope = document.getElementById('scope').value;
+    const kindOk = id => byId.has(id) && shownKinds.has(byId.get(id).kind);
+    if (scope === 'all' || !selected) {
+      return new Set(GRAPH.nodes.filter(n => shownKinds.has(n.kind)).map(n => n.id));
+    }
+    const depth = parseInt(scope, 10);
+    const seen = new Set([selected]);
+    let frontier = [selected];
+    for (let d = 0; d < depth; d++) {
+      const next = [];
+      frontier.forEach(id => {
+        (out.get(id) || []).concat(inc.get(id) || []).forEach(e => {
+          if (!shownRelations.has(e.relation)) return;
+          const other = e.from === id ? e.to : e.from;
+          if (kindOk(other) && !seen.has(other)) { seen.add(other); next.push(other); }
+        });
+      });
+      frontier = next;
+    }
+    return seen;
+  }
+
+  function render() {
+    const ids = visibleIds();
+    nodes.clear(); edges.clear();
+    const degree = id => (out.get(id) || []).length + (inc.get(id) || []).length;
+    nodes.add([...ids].map(id => {
+      const n = byId.get(id), k = KIND[n.kind];
+      const color = n.kind === 'component' && n.role ? ROLE[n.role] : k.color;
+      return {
+        id, label: n.label, shape: k.shape, size: 8 + Math.min(18, Math.sqrt(degree(id)) * 2),
+        color: { background: color, border: id === selected ? '#111' : color },
+        borderWidth: id === selected ? 3 : 1,
+        font: k.shape === 'box' ? { color: '#fff' } : undefined,
+        title: n.kind + (n.file ? '\n' + n.file + (n.line ? ':' + n.line : '') : '')
+      };
+    }));
+    edges.add(GRAPH.edges.filter(e => shownRelations.has(e.relation) && ids.has(e.from) && ids.has(e.to)).map(e => ({
+      id: e.id, from: e.from, to: e.to, color: { color: REL[e.relation], opacity: e.confidence === 'INFERRED' ? 0.55 : 0.9 },
+      dashes: e.confidence === 'INFERRED', title: e.relation + ' via ' + e.via + (e.through ? ' (' + e.through + ')' : '') + (e.file ? '\n' + e.file + ':' + e.line : '')
+    })));
+    network.setOptions({ physics: true });
+    network.stabilize(150);
+  }
+
+  function select(id) {
+    if (!byId.has(id)) return;
+    selected = id;
+    render();
+    network.selectNodes([id]);
+    network.focus(id, { scale: 1.1, animation: { duration: 400 } });
+    showPanel(byId.get(id));
+  }
+
+  function link(id) {
+    const n = byId.get(id);
+    return '<a data-id="' + encodeURIComponent(id) + '">' + escapeHtml(n ? n.label : id) + '</a>';
+  }
+
+  function showPanel(n) {
+    const panel = document.getElementById('panel');
+    let html = '<h2>' + escapeHtml(n.label) + '</h2><div class="meta">' + n.kind + (n.generated ? ', generated' : '') +
+      (n.file ? '<br>' + escapeHtml(n.file) + (n.line ? ':' + n.line : '') : '') + (n.info ? '<br>' + escapeHtml(n.info) : '') + '</div>';
+    // One line per connected node, however many ways it is connected (AllOf and Get, say).
+    const section = (title, list, other) => {
+      if (!list.length) return '';
+      const byNode = new Map();
+      list.forEach(e => (byNode.get(other(e)) || byNode.set(other(e), []).get(other(e))).push(e));
+      const rows = [...byNode.entries()].sort((a, b) => (byId.get(a[0]) || {}).label > (byId.get(b[0]) || {}).label ? 1 : -1);
+      return '<h3>' + title + ' (' + rows.length + ')</h3><ul>' + rows.slice(0, 200).map(([id, edgesOfNode]) => {
+        const vias = [...new Set(edgesOfNode.map(e => e.via))].join(', ');
+        const through = [...new Set(edgesOfNode.map(e => e.through).filter(Boolean))].join('; ');
+        const inferred = edgesOfNode.every(e => e.confidence === 'INFERRED');
+        return '<li>' + link(id) + ' <span class="via">' + vias + (through ? ' — ' + escapeHtml(through) : '') + (inferred ? ' · inferred' : '') + '</span></li>';
+      }).join('') + '</ul>';
+    };
+    const group = (list, key) => list.reduce((m, e) => (m[e[key]] = m[e[key]] || []).push(e) && m, {});
+    const outgoing = group(out.get(n.id) || [], 'relation'), incoming = group(inc.get(n.id) || [], 'relation');
+    Object.keys(outgoing).sort().forEach(r => html += section(r, outgoing[r], e => e.to));
+    Object.keys(incoming).sort().forEach(r => html += section(PASSIVE[r] || r, incoming[r], e => e.from));
+    panel.innerHTML = html;
+    panel.querySelectorAll('a[data-id]').forEach(a => a.addEventListener('click', () => select(decodeURIComponent(a.dataset.id))));
+  }
+
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c])); }
+
+  network.on('click', p => { if (p.nodes.length) select(p.nodes[0]); });
+  document.getElementById('scope').addEventListener('change', render);
+  document.getElementById('fit').addEventListener('click', () => network.fit({ animation: true }));
+  document.getElementById('search').addEventListener('change', ev => {
+    const q = ev.target.value.trim().toLowerCase();
+    const hit = GRAPH.nodes.find(n => n.label.toLowerCase() === q) || GRAPH.nodes.find(n => n.label.toLowerCase().includes(q));
+    if (hit) select(hit.id);
+  });
+
+  // Open on something readable: the busiest event (a whole create → read → destroy story),
+  // else the busiest component that is not a hub everything touches (an Id, a position).
+  const degree = n => (inc.get(n.id) || []).length;
+  const components = GRAPH.nodes.filter(n => n.kind === 'component').sort((a, b) => degree(b) - degree(a));
+  const start = components.find(n => n.role === 'event') || components.find(n => degree(n) <= 40) || components[0];
+  if (start) select(start.id); else render();
+})();
+</script>
+</body>
+</html>

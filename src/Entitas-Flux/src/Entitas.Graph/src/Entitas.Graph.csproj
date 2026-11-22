@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    entitas-graph: a graph of an Entitas project built from Roslyn semantics — which systems
+    create, read, filter, remove and destroy which components, which features register them
+    and in what order. Uses the same project loader and generator engine as entitas-gen and
+    entitas-rename, so the generated API it resolves is exactly the one the project compiles.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>entitas-graph</AssemblyName>
+    <RootNamespace>Entitas.Graph</RootNamespace>
+    <!-- Same runtime story as entitas-gen: any .NET 6+, started as `dotnet entitas-graph.dll`, tuned for cold starts. -->
+    <RollForward>LatestMajor</RollForward>
+    <UseAppHost>false</UseAppHost>
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <TieredPGO>false</TieredPGO>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Entitas.SourceGenerator\src\Entitas.SourceGenerator.csproj" />
+  </ItemGroup>
+
+  <!-- Shared with entitas-gen and entitas-rename: one project model for all three tools. -->
+  <ItemGroup>
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\ProjectLoader.cs" Link="Shared\ProjectLoader.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\GeneratedFileWriter.cs" Link="Shared\GeneratedFileWriter.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\GenerationHost.cs" Link="Shared\GenerationHost.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\UnityProtocol.cs" Link="Shared\UnityProtocol.cs" />
+  </ItemGroup>
+
+  <!--
+    vis-network 9.1.9 (https://visjs.github.io/vis-network/, dual Apache-2.0/MIT, licence banner
+    kept in the file) is embedded so graph.html works offline. Its licence texts sit next to it.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Html\vis-network.min.js" LogicalName="vis-network.min.js" />
+    <EmbeddedResource Include="Html\graph.html" LogicalName="graph.html" />
+    <None Include="Html\LICENSE-vis-network-MIT.txt" />
+    <None Include="Html\LICENSE-vis-network-APACHE-2.0.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
+  </ItemGroup>
+
+</Project>
