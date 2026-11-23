@@ -24,14 +24,15 @@ mkdir -p "$PACKAGE/Runtime" "$PACKAGE/Editor" "$PACKAGE/Analyzers"
 
 cp "$ARTIFACTS"/*.dll "$PACKAGE/Runtime/"
 
-# Third-party assemblies Entitas is built against; they live in their own folder so a
-# project that already has them from the original Entitas distribution overwrites its
-# copies instead of ending up with duplicate assemblies.
-if [[ -d "$ARTIFACTS/../DesperateDevs" ]]; then
-  mkdir -p "$PACKAGE/Runtime/DesperateDevs"
-  cp "$ARTIFACTS"/../DesperateDevs/*.dll "$PACKAGE/Runtime/DesperateDevs/"
-fi
+# Third-party assemblies Entitas is built against. Sherlog sits in its own folder in the
+# archive (where the original Entitas distribution keeps it); in the package it stays in
+# Runtime/DesperateDevs, so its path, and with it its guid, does not change.
+mkdir -p "$PACKAGE/Runtime/DesperateDevs"
+cp "$ARTIFACTS"/../DesperateDevs/*.dll "$ARTIFACTS"/../Sherlog/*.dll "$PACKAGE/Runtime/DesperateDevs/"
 cp "$ARTIFACTS"/Editor/*.dll "$PACKAGE/Editor/"
+# The hierarchy icons and the preferences header, found by their asset labels — which is
+# why they come with their own .meta (unity_meta.py only swaps in the package's guid).
+cp -R "$ARTIFACTS/Editor/Images" "$PACKAGE/Editor/Images"
 # The editor assemblies' third-party dependency, editor-only like them.
 if [[ -d "$ARTIFACTS/../DesperateDevs/Editor" ]]; then
   mkdir -p "$PACKAGE/Editor/DesperateDevs"
@@ -64,109 +65,10 @@ cat > "$PACKAGE/package.json" <<EOF
 }
 EOF
 
-# Every asset needs a .meta, and its guid must stay STABLE across releases — a changed
-# guid makes Unity treat the file as a brand new asset and breaks references to it.
-# Deriving the guid from the asset's path in the package keeps it reproducible.
-python3 - "$PACKAGE" <<'PY'
-import hashlib, os, sys
-
-package = sys.argv[1]
-
-def guid(relative_path):
-    return hashlib.md5(("com.bogenbai.entitas-flux/" + relative_path).encode()).hexdigest()
-
-FOLDER = """fileFormatVersion: 2
-guid: {guid}
-folderAsset: yes
-DefaultImporter:
-  externalObjects: {{}}
-  userData:
-  assetBundleName:
-  assetBundleVariant:
-"""
-
-TEXT = """fileFormatVersion: 2
-guid: {guid}
-TextScriptImporter:
-  externalObjects: {{}}
-  userData:
-  assetBundleName:
-  assetBundleVariant:
-"""
-
-# Managed plugin. `any`/`editor` decide which platforms the DLL is enabled for;
-# analyzers are enabled nowhere and carry the RoslynAnalyzer label instead, which is
-# what makes Unity hand them to the compiler rather than load them as plugins.
-PLUGIN = """fileFormatVersion: 2
-guid: {guid}
-{labels}PluginImporter:
-  externalObjects: {{}}
-  serializedVersion: 2
-  iconMap: {{}}
-  executionOrder: {{}}
-  defineConstraints: []
-  isPreloaded: 0
-  isOverridable: 0
-  isExplicitlyReferenced: 0
-  validateReferences: 1
-  platformData:
-  - first:
-      Any:
-    second:
-      enabled: {any}
-      settings: {{}}
-  - first:
-      Editor: Editor
-    second:
-      enabled: {editor}
-      settings:
-        DefaultValueInitialized: true
-  - first:
-      Windows Store Apps: WindowsStoreApps
-    second:
-      enabled: 0
-      settings:
-        CPU: AnyCPU
-  userData:
-  assetBundleName:
-  assetBundleVariant:
-"""
-
-ANALYZER_LABEL = "labels:\n- RoslynAnalyzer\n"
-
-def write(path, content):
-    with open(path + ".meta", "w") as f:
-        f.write(content)
-
-for root, dirs, files in os.walk(package):
-    # Folders ending in "~" (Tools~) are invisible to Unity: no .meta inside or for them.
-    dirs[:] = sorted(d for d in dirs if not d.endswith("~"))
-    for directory in dirs:
-        full = os.path.join(root, directory)
-        relative = os.path.relpath(full, package)
-        write(full, FOLDER.format(guid=guid(relative)))
-
-    for name in sorted(files):
-        if name.endswith(".meta"):
-            continue
-
-        full = os.path.join(root, name)
-        relative = os.path.relpath(full, package)
-        folder = os.path.dirname(relative)
-
-        if name.endswith(".dll"):
-            is_analyzer = folder == "Analyzers"
-            is_editor = folder == "Editor" or folder.startswith("Editor/")
-            write(full, PLUGIN.format(
-                guid=guid(relative),
-                labels=ANALYZER_LABEL if is_analyzer else "",
-                any=0 if (is_analyzer or is_editor) else 1,
-                editor=1 if is_editor else 0))
-        else:
-            write(full, TEXT.format(guid=guid(relative)))
-
-print("package assembled at", package)
-PY
+# Every asset needs a .meta, with a guid derived from its path so it stays the same from
+# one release to the next (see unity_meta.py).
+python3 "$SCRIPT_DIR/unity_meta.py" package "$PACKAGE"
+echo "package assembled at $PACKAGE"
 
 echo
 echo "Contents:"
