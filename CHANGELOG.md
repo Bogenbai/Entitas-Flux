@@ -11,6 +11,26 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Added
+- **`entitas-graph mcp`: the graph's commands as tools of an MCP server**, for assistants
+  and subagents without a shell. A Claude Code agent whose `tools:` lists Read, Grep and
+  Glob could not run `./entitas-graph`, so it searched by hand; listing
+  `mcp__entitas-graph__*` gives it `who_creates`, `who_reads`, `lifecycle`, `systems_of`,
+  `explain`, `path`, `query`, `flow`, `report` and `diff` without giving it Bash. The answers
+  are the command line's word for word, under the same ~2000-token cap. The server keeps the
+  graph in memory between calls and rebuilds it when the sources change.
+- **`install` registers the server** in the project's `.mcp.json`, next to the project's own
+  servers (`--no-mcp` leaves the file alone). Claude Code asks once to approve it. Claude Code
+  finds `.mcp.json` from any folder below it but starts the server in the folder it was
+  started in, where neither a relative command nor `${CLAUDE_PROJECT_DIR}` reaches the
+  wrapper, so the command asks git for the repository root. Checked with Claude Code 2.1.316
+  (`claude mcp list`), started in the root and two folders down.
+
+### Changed
+- The install block says what to do for a subagent without Bash: list the server's tools
+  in its `tools:`, or put the answer in its prompt. Run `./entitas-graph install` once after
+  updating; `build` says so until then.
+
 ## [0.6.1] - 2026-11-24
 
 ### Fixed
