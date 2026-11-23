@@ -47,7 +47,8 @@ namespace Entitas.Graph.Setup
 
         /// <param name="targets">Instruction files from --target; empty for the default (see <see cref="DefaultTargets"/>).</param>
         /// <param name="toolPath">Where entitas-graph.dll lives — injectable so tests do not depend on where they run.</param>
-        public static SetupResult Install(string unityRoot, IReadOnlyList<string> targets, bool gitignore, string toolPath)
+        /// <param name="claudeHook">Also add the Claude Code hook that keeps assistants out of graph.json (<see cref="ClaudeHook"/>).</param>
+        public static SetupResult Install(string unityRoot, IReadOnlyList<string> targets, bool gitignore, string toolPath, bool claudeHook = true)
         {
             var unity = RequireUnityRoot(unityRoot);
             var gitRoot = FindGitRoot(unity);
@@ -82,6 +83,11 @@ namespace Entitas.Graph.Setup
                 wrappers.Add((file, existing, text));
             }
 
+            // The Claude Code hook, merged into the project's shared settings next to its own hooks.
+            var settings = Path.Combine(repository, ".claude", "settings.json");
+            var settingsExisting = claudeHook ? TextFile.Read(settings) : null;
+            var settingsUpdated = claudeHook ? Apply(settings, () => ClaudeHook.Install(settingsExisting?.Text)) : null;
+
             foreach (var (file, existing, updated) in plan)
                 result.Files.Add(Write(file, existing, updated));
             foreach (var (file, existing, updated) in wrappers)
@@ -89,6 +95,12 @@ namespace Entitas.Graph.Setup
                 result.Files.Add(Write(file, existing, updated));
                 if (Path.GetFileName(file) == Wrappers.ShName && !MakeExecutable(file))
                     result.Notes.Add($"could not mark {file} executable — run chmod +x on it, or call it as sh {Wrappers.ShName}.");
+            }
+            if (settingsUpdated != null)
+            {
+                var change = Write(settings, settingsExisting, settingsUpdated);
+                result.Files.Add(new FileChange(change.Path, change.Outcome,
+                    change.Outcome == FileOutcome.Unchanged ? "already keeps Claude out of graph.json" : "+ hook: keeps Claude out of graph.json"));
             }
 
             if (!InstructionBlock.IsUnder(toolPath, repository))
@@ -135,6 +147,23 @@ namespace Entitas.Graph.Setup
                 else
                 {
                     result.Files.Add(Write(file, existing, updated));
+                }
+            }
+
+            var settings = Path.Combine(repository, ".claude", "settings.json");
+            var settingsText = TextFile.Read(settings);
+            if (settingsText != null)
+            {
+                var without = Apply(settings, () => ClaudeHook.Uninstall(settingsText.Text));
+                if (without == null) { }
+                else if (without.Length == 0)
+                {
+                    File.Delete(settings);
+                    result.Files.Add(new FileChange(settings, FileOutcome.Deleted, "nothing else was in it"));
+                }
+                else
+                {
+                    result.Files.Add(Write(settings, settingsText, without));
                 }
             }
 
@@ -218,6 +247,10 @@ namespace Entitas.Graph.Setup
                 var existing = TextFile.Read(file);
                 if (existing != null && Wrappers.IsOurs(existing.Text) && existing.Text != text) outdated.Add(file);
             }
+
+            var settings = TextFile.Read(Path.Combine(repository, ".claude", "settings.json"));
+            if (settings != null && ClaudeHook.Has(settings.Text) && !ClaudeHook.IsCurrent(settings.Text))
+                outdated.Add(Path.Combine(repository, ".claude", "settings.json"));
 
             return outdated;
         }

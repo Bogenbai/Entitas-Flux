@@ -172,7 +172,10 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   with every update — plus `entitas-graph-out/` in `.gitignore`. It also writes two short
   commands next to that file, `./entitas-graph` (sh) and `entitas-graph.cmd` (cmd and
   PowerShell), which find the tool and the Unity root themselves, so the block names
-  `./entitas-graph who-reads <Component>`, and a package update needs no new `install`. The block also tells the
+  `./entitas-graph who-reads <Component>`, and a package update needs no new `install`. For
+  Claude Code it adds a hook to `.claude/settings.json`, next to the project's own, that stops
+  any read of `graph.json` or `graph.html` and says what to ask the graph instead
+  (`--no-claude-hook` skips it). The block also tells the
   assistant to open the files an answer names before changing code, since links through calls
   and frames are inferred and DI, scenes and prefabs are not in the graph. Re-running replaces the
   block and leaves the rest of the file alone, and `build` says when the block was written by

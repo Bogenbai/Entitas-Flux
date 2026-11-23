@@ -100,7 +100,7 @@ In ECS, systems never call each other. One adds a request, another picks it up a
 ./entitas-graph diff --ref master               # what this branch changed in the data flow
 ```
 - **An offline `graph.html`**: search, filter, and click through the systems around any component.
-- **Built for AI assistants.** One `install` tells Claude, Codex and the like to ask the graph instead of grepping. On a ~1900-file production game they answered data-flow questions with about a third fewer tokens, and the graph pointed at an ordering bug that text search had missed.
+- **Built for AI assistants.** One `install` tells Claude, Codex and the like to ask the graph instead of grepping, and a Claude Code hook keeps them out of the multi-megabyte `graph.json`. On a ~1900-file production game they answered data-flow questions with about a third fewer tokens, and the graph pointed at an ordering bug that text search had missed.
 - **Fast:** about 3 seconds for ~750 systems, rebuilt by itself when the code changes.
 
 → [ECS graph](https://github.com/Bogenbai/Entitas-Flux/wiki/ECS-Graph) · [Commands](https://github.com/Bogenbai/Entitas-Flux/wiki/ECS-Graph-Commands) · [For AI assistants](https://github.com/Bogenbai/Entitas-Flux/wiki/ECS-Graph-for-AI-Assistants)

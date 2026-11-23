@@ -195,6 +195,88 @@ namespace Entitas.Graph.Tests
             process.ExitCode.Should().Be(0, $"{file} {string.Join(" ", args)} succeeds");
         }
 
+        const string ProjectSettings = "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/.claude/scripts/session.sh\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Edit|Write\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"echo 'BLOCKED: no edits in Assets/Plugins/.' >&2; exit 2\"\n          }\n        ]\n      }\n    ]\n  }\n}\n";
+
+        string Settings => Path.Combine(_repo, ".claude", "settings.json");
+
+        [Fact]
+        public void Install_adds_the_Claude_hook_next_to_the_projects_own_and_uninstall_takes_only_it_out()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Settings)!);
+            File.WriteAllText(Settings, ProjectSettings);
+
+            Install().Files.Should().Contain(f => f.Path == Settings && f.Outcome == FileOutcome.Updated);
+            var text = File.ReadAllText(Settings);
+            text.Should().Contain("\"matcher\": \"Edit|Write\"").And.Contain("session.sh", "the project's own hooks stay");
+            text.Should().Contain("\"matcher\": \"Read|Grep|Glob|Bash\"").And.Contain("\"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/entitas-graph --claude-hook\"");
+            text.Should().EndWith("}\n");
+
+            Install().Files.Should().Contain(f => f.Path == Settings && f.Outcome == FileOutcome.Unchanged);
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty();
+
+            AssistantSetup.Uninstall(_unity, None).Files.Should().Contain(f => f.Path == Settings && f.Outcome == FileOutcome.Updated);
+            File.ReadAllText(Settings).Should().Be(ProjectSettings, "the file is back as the project wrote it");
+        }
+
+        [Fact]
+        public void Without_settings_install_creates_them_uninstall_deletes_them_and_an_opt_out_leaves_them_alone()
+        {
+            AssistantSetup.Install(_unity, None, gitignore: false, _tool, claudeHook: false);
+            File.Exists(Settings).Should().BeFalse();
+
+            Install();
+            File.ReadAllText(Settings).Should().Contain("--claude-hook");
+
+            AssistantSetup.Uninstall(_unity, None).Files.Should().Contain(f => f.Path == Settings && f.Outcome == FileOutcome.Deleted);
+            File.Exists(Settings).Should().BeFalse();
+        }
+
+        [Fact]
+        public void Settings_that_are_not_JSON_stop_install_before_it_writes_anything()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Settings)!);
+            File.WriteAllText(Settings, "{ \"hooks\": ");
+
+            var install = () => Install();
+
+            install.Should().Throw<InvalidOperationException>().WithMessage("*settings.json*");
+            File.Exists(RepoFile("CLAUDE.md")).Should().BeFalse();
+            File.Exists(RepoFile("entitas-graph")).Should().BeFalse();
+        }
+
+        [Fact]
+        public void The_hook_stops_reads_of_graph_json_and_lets_everything_else_through()
+        {
+            if (OperatingSystem.IsWindows()) return; // Claude Code runs hooks through bash
+
+            Install();
+            (int Code, string Error) Hook(string call)
+            {
+                var start = new System.Diagnostics.ProcessStartInfo(RepoFile("entitas-graph")) { RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+                start.ArgumentList.Add("--claude-hook");
+                using var process = System.Diagnostics.Process.Start(start)!;
+                process.StandardInput.Write(call);
+                process.StandardInput.Close();
+                var error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                return (process.ExitCode, error);
+            }
+            string Call(string tool, string input) => $"{{\"session_id\":\"s\",\"cwd\":\"{_repo}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"{tool}\",\"tool_input\":{input}}}";
+            var output = $"{_repo}/src/game/entitas-graph-out";
+
+            var read = Hook(Call("Read", $"{{\"file_path\":\"{output}/graph.json\"}}"));
+            read.Code.Should().Be(2, "exit 2 blocks the call and hands stderr to Claude");
+            read.Error.Should().Contain("./entitas-graph who-reads <Component>");
+            Hook(Call("Bash", "{\"command\":\"cat src/game/entitas-graph-out/graph.json | head\"}")).Code.Should().Be(2);
+            Hook(Call("Bash", "{\"command\":\"wc -c src/game/entitas-graph-out/graph.html\"}")).Code.Should().Be(2);
+            Hook(Call("Grep", $"{{\"pattern\":\"Health\",\"path\":\"{output}\"}}")).Code.Should().Be(2, "a search there goes through graph.json");
+
+            Hook(Call("Read", $"{{\"file_path\":\"{output}/GRAPH_REPORT.md\"}}")).Code.Should().Be(0, "the report is meant to be read");
+            Hook(Call("Bash", "{\"command\":\"./entitas-graph diff src/game/entitas-graph-out/graph.json old.json\"}")).Code.Should().Be(0, "the tool reads it itself");
+            Hook(Call("Bash", "{\"command\":\"git status\"}")).Code.Should().Be(0);
+            Hook(Call("Read", $"{{\"file_path\":\"{_repo}/src/game/Assets/Code/Health.cs\"}}")).Code.Should().Be(0);
+        }
+
         [Fact]
         public void A_file_named_like_a_wrapper_that_install_did_not_write_stops_it_before_writing_anything()
         {

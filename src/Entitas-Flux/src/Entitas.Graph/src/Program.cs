@@ -119,7 +119,8 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  diff --commit <commit>      What one commit changed: its first parent against it.");
             Console.Error.WriteLine("  install                     Tell the project's AI assistant to use these commands: a block in CLAUDE.md");
             Console.Error.WriteLine("                              (and AGENTS.md, if present) in the git root, the short commands entitas-graph and\n" +
-                                    "                              entitas-graph.cmd next to it, and entitas-graph-out/ in .gitignore.");
+                                    "                              entitas-graph.cmd next to it, a Claude Code hook in .claude/settings.json that keeps\n" +
+                                    "                              assistants out of graph.json, and entitas-graph-out/ in .gitignore.");
             Console.Error.WriteLine("  uninstall                   Remove that block and those commands again.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  -r, --root <dir>            Unity project root (default: $ENTITAS_GRAPH_ROOT, set by the wrappers, else the current directory).");
@@ -138,6 +139,7 @@ namespace Entitas.Graph
             Console.Error.WriteLine("      --commit <commit>       For diff: the commit's first parent against the commit.");
             Console.Error.WriteLine("      --target <file>         Instruction file for install/uninstall instead of the default (repeatable).");
             Console.Error.WriteLine("      --no-gitignore          install: leave .gitignore alone.");
+            Console.Error.WriteLine("      --no-claude-hook        install: leave .claude/settings.json alone (no hook keeping Claude out of graph.json).");
             Console.Error.WriteLine();
             Console.Error.WriteLine("Queries reuse graph.json and rebuild it first when a source file is newer. An answer over");
             Console.Error.WriteLine("the budget starts with a summary by feature and says how much it left out.");
@@ -160,7 +162,7 @@ namespace Entitas.Graph
             var tool = ToolPath();
 
             var result = options.Command == "install"
-                ? AssistantSetup.Install(options.Root, options.Targets, options.Gitignore, tool)
+                ? AssistantSetup.Install(options.Root, options.Targets, options.Gitignore, tool, options.ClaudeHook)
                 : AssistantSetup.Uninstall(options.Root, options.Targets);
 
             var cwd = Directory.GetCurrentDirectory();
@@ -428,6 +430,7 @@ namespace Entitas.Graph
             public string? Commit;
             public readonly List<string> Targets = new List<string>();
             public bool Gitignore = true;
+            public bool ClaudeHook = true;
 
             public string Out => OutOverride ?? Path.Combine(Root, "entitas-graph-out");
 
@@ -502,6 +505,9 @@ namespace Entitas.Graph
                             break;
                         case "--no-gitignore":
                             options.Gitignore = false;
+                            break;
+                        case "--no-claude-hook":
+                            options.ClaudeHook = false;
                             break;
                         case "-h": case "--help":
                             return null;
