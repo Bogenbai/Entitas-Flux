@@ -14,6 +14,7 @@
   -->
   <ItemGroup>
     <Compile Include="..\src\Generation\GenerationScheduler.cs" Link="GenerationScheduler.cs" />
+    <Compile Include="..\src\Generation\GenerationSettings.cs" Link="GenerationSettings.cs" />
   </ItemGroup>
 
   <ItemGroup>
