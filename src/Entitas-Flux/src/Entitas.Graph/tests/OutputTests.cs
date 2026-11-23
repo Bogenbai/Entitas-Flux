@@ -1,7 +1,10 @@
 using System;
 using System.Linq;
+using Entitas.Graph.Analysis;
 using Entitas.Graph.Output;
 using FluentAssertions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Entitas.Graph.Tests
@@ -159,6 +162,26 @@ namespace Entitas.Graph.Tests
             start.Should().BeGreaterThan(0, $"the report has a '{title}' section");
             var end = report.IndexOf("\n### ", start + 4, StringComparison.Ordinal);
             return end < 0 ? report.Substring(start) : report.Substring(start, end - start);
+        }
+
+        [Fact]
+        public void The_graph_does_not_depend_on_the_order_the_sources_come_in()
+        {
+            // The trees are walked in parallel and the csproj lists files in whatever order Unity
+            // writes it; neither may change graph.json. Reversing the compilation's trees shows it
+            // on a small fixture, where a race between threads rarely does.
+            static string Json(Compilation compilation)
+            {
+                var graph = GraphBuilder.Build(compilation, FixtureProject.Root, new GraphOptions());
+                graph.Metadata.BuildMilliseconds = 0;
+                return graph.ToJson();
+            }
+
+            var compilation = FixtureProject.Compile();
+            var reversed = CSharpCompilation.Create("Fixture", compilation.SyntaxTrees.Reverse(), FixtureProject.References(),
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            Json(reversed).Should().Be(Json(compilation));
         }
 
         [Fact]

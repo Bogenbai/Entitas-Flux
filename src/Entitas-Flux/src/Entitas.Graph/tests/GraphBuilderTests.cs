@@ -137,7 +137,7 @@ namespace Entitas.Graph.Tests
         public void Features_register_systems_in_order_and_roots_are_found_without_names()
         {
             Edges("FurnitureFeature", Relation.Contains, "PlaceFurnitureByRequestSystem").Should().ContainSingle(e => e.Order == 2);
-            Graph.Nodes.Where(n => n.Root).Select(n => n.Label).Should().BeEquivalentTo("GameplayFeature", "LateFeature", "CrateFeature");
+            Graph.Nodes.Where(n => n.Root).Select(n => n.Label).Should().BeEquivalentTo("GameplayFeature", "LateFeature", "CrateFeature", "DebugFeature");
 
             var placement = Graph.Nodes.Single(n => n.Label == "PlaceFurnitureByRequestSystem").Placements.Single();
             Label(placement.Root).Should().Be("GameplayFeature");

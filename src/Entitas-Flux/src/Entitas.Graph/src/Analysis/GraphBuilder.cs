@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using Entitas.SourceGenerator;
 using Entitas.SourceGenerator.CodeGeneration;
 using Microsoft.CodeAnalysis;
@@ -40,15 +40,17 @@ namespace Entitas.Graph.Analysis
             var stopwatch = Stopwatch.StartNew();
             var context = Prepare(compilation, projectRoot, options);
 
-            var results = new ConcurrentBag<TreeResult>();
-            context.Full.SyntaxTrees.AsParallel().ForAll(tree =>
-            {
-                var result = new TreeWalker(context, tree).Walk();
-                if (result != null)
-                    results.Add(result);
-            });
+            // Walked in parallel, but each result keeps its tree's place, in path order: everything
+            // downstream (registration order, the `through` texts of inferred edges, which of
+            // several equal sites an edge keeps) follows the order accesses arrive in. Collecting
+            // them as they finished made two builds of the same code write different graph.json
+            // files; following the csproj's order would tie them to however Unity lists the files.
+            var trees = context.Full.SyntaxTrees.OrderBy(t => t.FilePath, StringComparer.Ordinal).ToArray();
+            var walked = new TreeResult?[trees.Length];
+            Parallel.For(0, trees.Length, i => walked[i] = new TreeWalker(context, trees[i]).Walk());
+            var results = walked.Where(r => r != null).Select(r => r!).ToList();
 
-            var graph = Assemble(context, results.ToList());
+            var graph = Assemble(context, results);
             graph.Metadata.BuildMilliseconds = stopwatch.ElapsedMilliseconds;
             graph.Metadata.SourceFiles = compilation.SyntaxTrees.Count();
             graph.Metadata.Project = compilation.AssemblyName ?? string.Empty;
@@ -56,6 +58,7 @@ namespace Entitas.Graph.Analysis
             graph.Metadata.EventSuffix = options.EventSuffix;
             graph.Metadata.UnresolvedDestroys.AddRange(context.UnresolvedDestroys
                 .Distinct()
+                .OrderBy(u => u.File, StringComparer.Ordinal).ThenBy(u => u.Line).ThenBy(u => u.Accessor, StringComparer.Ordinal)
                 .Select(u => new UnresolvedDestroy { Source = u.Accessor, File = u.File, Line = u.Line }));
             graph.Sort();
             return graph;

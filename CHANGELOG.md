@@ -46,8 +46,10 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   and `FurniturePlacedEvent`), a word in the name counts for more than one in the namespace,
   and words like "how" are skipped. Nodes with more than 40 neighbours over edges written in
   their own code (an `Id`, a position) are marked as hubs and not walked through; a factory's
-  inferred edges never make one. When the subgraph does not fit the budget, each node keeps
-  only its strongest links, so what fits stays connected.
+  inferred edges never make one. A system named after an event that is already a seed gets
+  no seed of its own (it is one step out anyway), so `query hire worker` seeds the request
+  and the system that handle hiring, where the flow starts. When the subgraph does not fit the
+  budget, each node keeps only its strongest links, so what fits stays connected.
 
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
@@ -65,15 +67,19 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   carries data (reacts or reads before filters). In the report, a flag set in the loop that
   marks its entity for a generic destroyer (`isDestructed = true`) counts as destroyed with
   it, also through a helper called with the loop variable, and flags a setter keeps out of
-  its own group with `NoneOf` get their own section ("set once on purpose?"). `graph.html`
-  draws data flow — reads, filters and reactions point from the component into the system —
-  with a legend.
+  its own group with `NoneOf` get their own section ("set once on purpose?"), as do flags set
+  only on entities that carry a transient component (one with `[Cleanup]`, or one a system
+  takes off every holder, like `JustCreated`), with the reason. `graph.html` draws data
+  flow — reads, filters and reactions point from the component into the system — with a
+  legend, and frames a found node with its neighbours. The same code always writes the same
+  `graph.json`: the sources are walked in parallel but assembled in path order.
 
   `install` tells the project's AI assistant to use all this instead of grepping: a short
   block in `CLAUDE.md` in the repository root (and `AGENTS.md` when present) naming the tool
   by a path relative to that file — by glob for a UPM install, whose folder name changes
   with every update — plus `entitas-graph-out/` in `.gitignore`. Re-running replaces the
-  block and leaves the rest of the file alone; `uninstall` takes it out.
+  block and leaves the rest of the file alone, and `build` says when the block was written by
+  another version; `uninstall` takes it out.
 
   Tested on a production project (1906 files plus ~900 generated, 772 components, 747
   systems, 88 features): a build takes 2.2–2.8 s; fresh AI agents answering six ECS questions
