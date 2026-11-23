@@ -11,7 +11,7 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
-## [0.6.1] - 2026-11-23
+## [0.6.1] - 2026-11-24
 
 ### Fixed
 - **The Claude Code hook stopped commands that only named `graph.json`.** It matched the
