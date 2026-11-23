@@ -39,7 +39,7 @@ namespace Entitas.Graph.Setup
                 "This is an Entitas project. To find who creates, reads, filters, removes or destroys a component, what a feature",
                 "runs and in what order, or how data gets from one system to another, run entitas-graph from this file's folder instead of searching the code:",
                 "",
-                $"    {sh} who-reads <Component>        (Windows cmd or PowerShell: {cmd})",
+                $"    {sh} who-reads <Component>        (Windows cmd or PowerShell: {cmd}; --help lists every command and option)",
                 "",
                 "Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;",
                 "explain <Name>; query \"<words>\" (the connected subgraph around the matching nodes);",

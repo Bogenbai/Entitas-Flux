@@ -44,7 +44,7 @@ namespace Entitas.Graph.Tests
             result.Files.Should().Contain(f => f.Path == RepoFile("CLAUDE.md") && f.Outcome == FileOutcome.Created);
             var text = File.ReadAllText(RepoFile("CLAUDE.md"));
             text.Should().StartWith(InstructionBlock.Begin + "\n").And.EndWith(InstructionBlock.End + "\n");
-            text.Should().Contain("    ./entitas-graph who-reads <Component>        (Windows cmd or PowerShell: .\\entitas-graph.cmd)\n");
+            text.Should().Contain("    ./entitas-graph who-reads <Component>        (Windows cmd or PowerShell: .\\entitas-graph.cmd; --help lists every command and option)\n");
             text.Should().NotContain("dotnet ").And.NotContain(" -r ", "the wrappers find the tool and the Unity root");
             text.Should().Contain("`src/game/entitas-graph-out/GRAPH_REPORT.md`");
             File.Exists(Path.Combine(_unity, "CLAUDE.md")).Should().BeFalse();
@@ -65,6 +65,7 @@ namespace Entitas.Graph.Tests
             foreach (var command in new[] { "who-creates", "who-reads", "lifecycle", "systems-of", "path", "explain", "query \"<words>\"", "diff --commit", "diff --ref", "report" })
                 block.Should().Contain(command);
             block.Should().Contain("~2000 tokens").And.Contain("Never read graph.json");
+            block.Should().Contain("--help lists every command and option", "options such as --budget and --depth are not listed in the block");
             block.Should().Contain("Before changing code, open the files an answer names", "the graph is where to look, not a reason to skip the code");
         }
 
@@ -93,7 +94,7 @@ namespace Entitas.Graph.Tests
         {
             var block = InstructionBlock.Build(_unity, _unity, _tool, _repo);
 
-            block.Should().Contain("    ../../entitas-graph who-reads <Component>        (Windows cmd or PowerShell: ..\\..\\entitas-graph.cmd)\n");
+            block.Should().Contain("    ../../entitas-graph who-reads <Component>        (Windows cmd or PowerShell: ..\\..\\entitas-graph.cmd; --help lists every command and option)\n");
             block.Should().Contain("`entitas-graph-out/GRAPH_REPORT.md`");
         }
 
@@ -117,7 +118,7 @@ namespace Entitas.Graph.Tests
 
             Install(target);
 
-            File.ReadAllText(target).Should().Contain("    ../entitas-graph who-reads <Component>        (Windows cmd or PowerShell: ..\\entitas-graph.cmd)\n");
+            File.ReadAllText(target).Should().Contain("    ../entitas-graph who-reads <Component>        (Windows cmd or PowerShell: ..\\entitas-graph.cmd; --help lists every command and option)\n");
             File.Exists(RepoFile("CLAUDE.md")).Should().BeFalse();
             File.Exists(RepoFile("entitas-graph")).Should().BeTrue("the wrappers stay in the repository root");
         }
