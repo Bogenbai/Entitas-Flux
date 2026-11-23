@@ -48,8 +48,22 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   their own code (an `Id`, a position) are marked as hubs and not walked through; a factory's
   inferred edges never make one. A system named after an event that is already a seed gets
   no seed of its own (it is one step out anyway), so `query hire worker` seeds the request
-  and the system that handle hiring, where the flow starts. When the subgraph does not fit the
-  budget, each node keeps only its strongest links, so what fits stays connected.
+  and the system that handle hiring, where the flow starts. Between names that match equally
+  well, a system ranks by what its own code writes (then what its groups collect): `query
+  order paid` seeds `PayForOrdersByRequestSystem (creates OrderIsPaidEvent, Paid)`, though
+  its name never says "paid". When the subgraph does not fit the budget, each node keeps only
+  its strongest links, so what fits stays connected.
+
+  `flow <Component|System>` answers "what happens after it" in one call: requests and events
+  to their readers, a `[Watched]` change to the systems reacting to it, components no entity
+  keeps — `--depth` system hops (default 4), each step labelled with where its system runs
+  and whether it sees the data the same frame or the next. Frames come from feature order
+  alone: cleanup systems run after every execute system, a reader waits for `Ready` when the
+  events convention adds it, and where order cannot tell, the step says "frame unknown"
+  rather than guess. Every hand-off says where it ends (destroyed, removed, cleared). On a
+  2000-file project `flow CommitCartRequest` is ~1 900 tokens and includes the second-order
+  branches (request → handler → event → statistics) that assistants following events one hop
+  at a time had missed.
 
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
