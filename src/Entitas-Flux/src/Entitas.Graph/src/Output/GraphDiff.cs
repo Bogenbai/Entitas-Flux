@@ -256,12 +256,14 @@ namespace Entitas.Graph.Output
         /// The changes as text, capped at <paramref name="budget"/> tokens like every other answer:
         /// counts first, then per component the edges it gained and lost (most changes first),
         /// then systems added, removed and moved, then findings. A cut answer adds the names of
-        /// everything changed right after the counts, so nothing is invisible.
+        /// everything changed right after the counts, so nothing is invisible. <paramref name="note"/>
+        /// follows the two sides' names when how they were chosen needs saying (a merge's first parent).
         /// </summary>
-        public string Render(string oldLabel, string newLabel, int budget = GraphQueries.DefaultBudget)
+        public string Render(string oldLabel, string newLabel, int budget = GraphQueries.DefaultBudget, string? note = null)
         {
             var capped = budget > 0;
             var head = new List<string> { $"old: {oldLabel}{Commit(_old)}", $"new: {newLabel}{Commit(_new)}" };
+            if (note != null) head.Add(note);
             var renderer = new GraphQueries(_new, budget);
             if (IsEmpty)
             {

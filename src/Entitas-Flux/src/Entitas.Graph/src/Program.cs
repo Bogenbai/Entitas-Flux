@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Entitas.Graph.Analysis;
 using Entitas.Graph.Output;
 using Entitas.Graph.Setup;
@@ -109,7 +110,10 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  query <words…>              The connected subgraph around the nodes the words match best.");
             Console.Error.WriteLine("  report                      Print GRAPH_REPORT.md (findings).");
             Console.Error.WriteLine("  diff <old> [<new>]          What changed in the data flow between two graph.json (new: the current project).");
-            Console.Error.WriteLine("  diff --ref <git-ref>        The same, against the project at a branch or commit.");
+            Console.Error.WriteLine("  diff --ref <old> [--ref <new>]");
+            Console.Error.WriteLine("                              The same, the project at a branch or commit against the working tree,");
+            Console.Error.WriteLine("                              or against the project at a second one.");
+            Console.Error.WriteLine("  diff --commit <commit>      What one commit changed: its first parent against it.");
             Console.Error.WriteLine("  install                     Tell the project's AI assistant to use these commands: a block in CLAUDE.md");
             Console.Error.WriteLine("                              (and AGENTS.md, if present) in the git root; entitas-graph-out/ in .gitignore.");
             Console.Error.WriteLine("  uninstall                   Remove that block again.");
@@ -123,7 +127,9 @@ namespace Entitas.Graph
             Console.Error.WriteLine("      --limit <n>             Seed nodes for query (default: 5).");
             Console.Error.WriteLine("      --depth <n>             Steps query walks from the seeds (1-4, default: 2).");
             Console.Error.WriteLine("      --no-html               Skip graph.html on build.");
-            Console.Error.WriteLine("      --ref <git-ref>         For diff: build the old graph at this commit (git archive; the checkout is not touched).");
+            Console.Error.WriteLine("      --ref <git-ref>         For diff: build a side at this commit (git archive; the checkout is not touched).");
+            Console.Error.WriteLine("                              Once: old, against the working tree. Twice: old, then new.");
+            Console.Error.WriteLine("      --commit <commit>       For diff: the commit's first parent against the commit.");
             Console.Error.WriteLine("      --target <file>         Instruction file for install/uninstall instead of the default (repeatable).");
             Console.Error.WriteLine("      --no-gitignore          install: leave .gitignore alone.");
             Console.Error.WriteLine();
@@ -225,48 +231,79 @@ namespace Entitas.Graph
 
         static string Diff(Options options)
         {
-            EcsGraph old, current;
-            string oldLabel, currentLabel = "working tree";
-            if (options.Ref != null)
+            DiffRequest request;
+            try
             {
-                if (options.Positional.Count > 0)
-                    throw new UsageException("diff takes --ref <git-ref> or graph files, not both");
-                current = LoadOrBuild(options);
-                old = BuildAtRef(options, options.Ref);
-                oldLabel = options.Ref;
+                request = DiffRequest.From(options.Refs, options.Commit, options.Positional);
             }
-            else
+            catch (DiffUsageException ex)
             {
-                oldLabel = options.Arg(0);
-                old = Load(oldLabel);
-                if (options.Positional.Count > 1)
-                {
-                    currentLabel = options.Arg(1);
-                    current = Load(currentLabel);
-                }
-                else
-                {
-                    current = LoadOrBuild(options);
-                }
+                throw new UsageException(ex.Message);
             }
 
-            return GraphDiff.Compare(old, current).Render(oldLabel, currentLabel, options.Budget);
+            if (request.Commit != null)
+                request = request.WithParents(RefSnapshot.Parents(options.Root, request.Commit).Parents);
+
+            // Saved graphs first, so a mistyped path fails before anything is built.
+            var sides = new[] { request.Old, request.New };
+            var graphs = sides.Where(s => s.Source == DiffSource.GraphFile).ToDictionary(s => s, s => Load(s.Value));
+            if (sides.Contains(DiffSide.WorkingTree))
+                graphs[DiffSide.WorkingTree] = LoadOrBuild(options);
+            foreach (var built in BuildAtRefs(options, sides.Where(s => s.Source == DiffSource.GitRef).ToList()))
+                graphs[built.Key] = built.Value;
+
+            return GraphDiff.Compare(graphs[request.Old], graphs[request.New])
+                .Render(request.Old.Label, request.New.Label, options.Budget, request.Note);
         }
 
         static EcsGraph Load(string path) =>
             File.Exists(path) ? EcsGraph.FromJson(File.ReadAllText(path)) : throw new UsageException($"graph not found: {Path.GetFullPath(path)}");
 
-        /// <summary>The graph of the project as it is at a commit, built from a temporary snapshot of its sources.</summary>
-        static EcsGraph BuildAtRef(Options options, string gitRef)
+        /// <summary>
+        /// The graphs of the project at one or two git refs. Each ref gets its own snapshot and
+        /// compilation, and today's csproj is mapped onto each commit separately — so a file
+        /// added between the two refs is compiled on one side only, as it should be. References
+        /// and defines come from today's csproj for both sides (see <see cref="RefSnapshot"/>).
+        ///
+        /// Two refs are built in parallel: the builds share nothing but read-only inputs (the
+        /// csproj, the reference DLLs), and the generator's [ThreadStatic] flags are set by each
+        /// build on its own thread before use. Git, extraction and the single-threaded stretches
+        /// of one build overlap with the other's parallel ones.
+        /// </summary>
+        static Dictionary<DiffSide, EcsGraph> BuildAtRefs(Options options, IReadOnlyList<DiffSide> sides)
         {
+            var graphs = new Dictionary<DiffSide, EcsGraph>();
+            if (sides.Count == 0) return graphs;
+
             var stopwatch = Stopwatch.StartNew();
             var csproj = FindProject(options);
-            using var snapshot = RefSnapshot.Extract(options.Root, ProjectLoader.ParseProject(csproj), gitRef);
+            var project = ProjectLoader.ParseProject(csproj);
+            if (sides.Count == 1)
+            {
+                graphs[sides[0]] = BuildAtRef(options, csproj, project, sides[0]);
+                return graphs;
+            }
+
+            var builds = sides.Select(side => Task.Run(() => BuildAtRef(options, csproj, project, side))).ToArray();
+            // WhenAll waits for both, so neither snapshot outlives the command, and rethrows the
+            // first failure as itself instead of an AggregateException.
+            Task.WhenAll(builds).GetAwaiter().GetResult();
+            for (var i = 0; i < sides.Count; i++)
+                graphs[sides[i]] = builds[i].Result;
+            Console.Error.WriteLine($"Both graphs built in parallel in {stopwatch.ElapsedMilliseconds} ms.");
+            return graphs;
+        }
+
+        /// <summary>The graph of the project as it is at a commit, built from a temporary snapshot of its sources.</summary>
+        static EcsGraph BuildAtRef(Options options, string csproj, ProjectLoader.ProjectInfo project, DiffSide side)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            using var snapshot = RefSnapshot.Extract(options.Root, project, side.Value);
             var graph = BuildGraph(csproj, snapshot.Project, snapshot.Root, options);
             graph.Metadata.BuiltAtCommit = snapshot.Commit;
             graph.Metadata.BuildMilliseconds = stopwatch.ElapsedMilliseconds;
             Console.Error.WriteLine(
-                $"Graph at {gitRef} ({snapshot.Commit.Substring(0, Math.Min(10, snapshot.Commit.Length))}) from {snapshot.Project.SourceFiles.Count} files: " +
+                $"Graph at {side.Label} ({snapshot.Commit.Substring(0, Math.Min(10, snapshot.Commit.Length))}) from {snapshot.Project.SourceFiles.Count} files: " +
                 $"{Path.GetFileName(csproj)} lists {snapshot.DroppedFiles} the commit does not have, the commit has {snapshot.AddedFiles} it does not list " +
                 $"(generated, or deleted since) — {graph.Metadata.BuildMilliseconds} ms");
             return graph;
@@ -370,7 +407,8 @@ namespace Entitas.Graph
             public int Depth = GraphQueries.DefaultQueryDepth;
             public int Budget = GraphQueries.DefaultBudget;
             public bool Html = true;
-            public string? Ref;
+            public readonly List<string> Refs = new List<string>();
+            public string? Commit;
             public readonly List<string> Targets = new List<string>();
             public bool Gitignore = true;
 
@@ -426,8 +464,14 @@ namespace Entitas.Graph
                             options.Html = false;
                             break;
                         case "--ref":
+                            // Repeatable: diff checks there are at most two (old, then new).
                             if (++i >= args.Length) return null;
-                            options.Ref = args[i];
+                            options.Refs.Add(args[i]);
+                            break;
+                        case "--commit":
+                            if (++i >= args.Length) return null;
+                            if (options.Commit != null) throw new UsageException("--commit takes one commit");
+                            options.Commit = args[i];
                             break;
                         case "--target":
                             if (++i >= args.Length) return null;

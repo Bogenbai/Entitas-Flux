@@ -19,10 +19,12 @@ namespace Entitas.Graph
     /// for asmdef dependencies) and defines are the current csproj's, read where they are —
     /// Library/ is not versioned, so there is no other copy of them. A package or asmdef
     /// reference added or removed since the ref is therefore compiled against as it is today.
+    /// That holds for both sides of <c>diff --ref A --ref B</c> as well: each snapshot maps
+    /// today's csproj onto its own commit, and both compile with today's references and defines.
     /// </summary>
     public sealed class RefSnapshot : IDisposable
     {
-        readonly string _directory;
+        readonly TempDirectory _directory;
 
         public string Ref { get; }
         public string Commit { get; }
@@ -38,7 +40,7 @@ namespace Entitas.Graph
         /// <summary>Files the current csproj lists that the ref does not have.</summary>
         public int DroppedFiles { get; }
 
-        RefSnapshot(string directory, string gitRef, string commit, string root, ProjectLoader.ProjectInfo project, int added, int dropped)
+        RefSnapshot(TempDirectory directory, string gitRef, string commit, string root, ProjectLoader.ProjectInfo project, int added, int dropped)
         {
             _directory = directory;
             Ref = gitRef;
@@ -47,8 +49,28 @@ namespace Entitas.Graph
             Project = project;
             AddedFiles = added;
             DroppedFiles = dropped;
-            // A Ctrl+C during the build would otherwise leave a copy of every source behind.
-            Console.CancelKeyPress += OnCancel;
+        }
+
+        /// <summary>
+        /// The commit <paramref name="gitRef"/> names and its parents, first parent first (none
+        /// for a root commit) — what <c>diff --commit</c> needs to pick the old side.
+        /// </summary>
+        public static (string Commit, IReadOnlyList<string> Parents) Parents(string unityRoot, string gitRef)
+        {
+            unityRoot = Path.GetFullPath(unityRoot);
+            var commit = ResolveCommit(unityRoot, gitRef);
+            // "<commit> <first parent> <second parent>…" on one line.
+            var ids = Git(unityRoot, "rev-list", "--parents", "-n", "1", commit)
+                .Split(new[] { ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+            return (commit, ids.Skip(1).ToList());
+        }
+
+        static string ResolveCommit(string unityRoot, string gitRef)
+        {
+            var commit = Git(unityRoot, "rev-parse", "--verify", "--quiet", gitRef + "^{commit}").Trim();
+            if (commit.Length == 0)
+                throw new InvalidOperationException($"'{gitRef}' is not a commit in the repository of {unityRoot}");
+            return commit;
         }
 
         public static RefSnapshot Extract(string unityRoot, ProjectLoader.ProjectInfo current, string gitRef)
@@ -60,15 +82,12 @@ namespace Entitas.Graph
             var location = Git(unityRoot, "rev-parse", "--show-toplevel", "--show-prefix").Split('\n');
             var repository = location[0].Trim();
             var prefix = location.Length > 1 ? location[1].Trim() : string.Empty;
-            var commit = Git(unityRoot, "rev-parse", "--verify", "--quiet", gitRef + "^{commit}").Trim();
-            if (commit.Length == 0)
-                throw new InvalidOperationException($"'{gitRef}' is not a commit in the repository of {unityRoot}");
+            var commit = ResolveCommit(unityRoot, gitRef);
 
-            var directory = Path.Combine(Path.GetTempPath(), $"entitas-graph-{commit.Substring(0, Math.Min(10, commit.Length))}-{Path.GetRandomFileName()}");
-            Directory.CreateDirectory(directory);
+            var directory = new TempDirectory(Path.Combine(Path.GetTempPath(), $"entitas-graph-{commit.Substring(0, Math.Min(10, commit.Length))}-{Path.GetRandomFileName()}"));
             try
             {
-                var root = Path.Combine(directory, "project");
+                var root = Path.Combine(directory.Location, "project");
                 ExtractSources(repository, commit, prefix, root);
 
                 var atRef = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
@@ -104,7 +123,7 @@ namespace Entitas.Graph
             }
             catch
             {
-                Delete(directory);
+                directory.Dispose();
                 throw;
             }
         }
@@ -221,27 +240,56 @@ namespace Entitas.Graph
 
         static string Name(string folder) => folder.Substring(folder.LastIndexOf('/') + 1);
 
-        void OnCancel(object? sender, ConsoleCancelEventArgs e) => Delete(_directory);
+        public void Dispose() => _directory.Dispose();
 
-        public void Dispose()
+        /// <summary>
+        /// A temporary directory deleted on Dispose and on Ctrl+C, which ends the process
+        /// without running finally blocks — a copy of every source would be left behind. The
+        /// handler is registered before anything is extracted, since extracting is a good part
+        /// of the time a snapshot takes. With two snapshots (<c>--ref A --ref B</c>) each
+        /// registers its own handler, and Ctrl+C runs them all.
+        /// </summary>
+        sealed class TempDirectory : IDisposable
         {
-            Console.CancelKeyPress -= OnCancel;
-            Delete(_directory);
-        }
+            public string Location { get; }
 
-        static void Delete(string directory)
-        {
-            try
+            public TempDirectory(string location)
             {
-                if (Directory.Exists(directory))
-                    Directory.Delete(directory, recursive: true);
+                Location = location;
+                Console.CancelKeyPress += OnCancel;
+                Directory.CreateDirectory(location);
             }
-            catch (IOException)
+
+            // The build may still be writing into the directory on another thread; a second
+            // attempt catches a file created between the listing and the delete.
+            void OnCancel(object? sender, ConsoleCancelEventArgs e)
             {
-                // A temp directory left behind is not worth failing the answer for.
+                if (!Delete(Location)) Delete(Location);
             }
-            catch (UnauthorizedAccessException)
+
+            public void Dispose()
             {
+                Console.CancelKeyPress -= OnCancel;
+                Delete(Location);
+            }
+
+            static bool Delete(string directory)
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, recursive: true);
+                    return true;
+                }
+                catch (IOException)
+                {
+                    // A temp directory left behind is not worth failing the answer for.
+                    return false;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return false;
+                }
             }
         }
     }

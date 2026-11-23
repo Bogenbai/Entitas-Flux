@@ -509,22 +509,27 @@ Selected — read by 4 (4 direct, 0 inferred)
 | `--limit <n>` | Seed nodes for `query` (default: 5). |
 | `--depth <n>` | Steps `query` walks from the seeds (1 to 4, default: 2). |
 | `--no-html` | Skip `graph.html`. |
-| `--ref <git-ref>` | For `diff`: build the old graph from this branch or commit (through `git archive`; the checkout is not touched). |
+| `--ref <git-ref>` | For `diff`: build a side from this branch or commit (through `git archive`; the checkout is not touched). Once: the old side, against the working tree. Twice: old, then new. |
+| `--commit <commit>` | For `diff`: the commit's first parent against the commit. |
 
 ### Comparing two versions — diff
 A code review shows which files changed. It does not show that three systems stopped reading one event and now read another. `diff` shows that: the edges each component gained and lost, the systems added, removed or moved, and the report findings that appeared or went away.
 ```bash
 entitas-graph diff --ref main              # the working tree against a branch or commit
+entitas-graph diff --ref main --ref topic  # one branch or commit against another
+entitas-graph diff --commit 49904c1d       # what one commit changed: its first parent against it
 entitas-graph diff old.json [new.json]     # two saved graphs; new defaults to the current project
 ```
 
-`--ref` builds the old graph from that commit's sources. They are taken with `git archive` into a temporary folder, which is deleted afterwards. Your checkout, index and stashes stay as they are, and nothing is written into the project. The `.csproj` lists today's files, so the tool maps it to the commit. It drops the files the commit does not have yet. It adds the files the commit had and that are gone now, when they sat in or below a folder of the same assembly (no `.asmdef` and no `Editor` folder in between). References and defines come from today's `.csproj` and `Library/`. On a 2000-file project a `diff --ref` takes about 4 s, or 6 s when the current graph has to be rebuilt as well.
+`--ref` builds a graph from that commit's sources. They are taken with `git archive` into a temporary folder, which is deleted afterwards, on Ctrl+C too. Your checkout, index and stashes stay as they are, and nothing is written into the project. The `.csproj` lists today's files, so the tool maps it to the commit. It drops the files the commit does not have yet. It adds the files the commit had and that are gone now, when they sat in or below a folder of the same assembly (no `.asmdef` and no `Editor` folder in between). With two refs it maps the `.csproj` to each commit separately. References and defines come from today's `.csproj` and `Library/`, for both sides. On a 2000-file project a `diff --ref` takes about 4 s, or 6 s when the current graph has to be rebuilt as well. Two refs are built in parallel, in about 5.5 s.
 
-Here a production project is compared with the parent of a commit that made three statistics systems count purchases instead of placements:
+`--commit X` is short for `--ref X^ --ref X`. A single `--ref X^` compares with the working tree, so it shows what X changed only until a later commit touches the same code; `--commit` shows it at any time. A merge commit is compared with its first parent, and the answer says so. A root commit has no parent and is an error.
+
+Here is what one commit in a production project changed — it made three statistics systems count purchases instead of placements:
 ```text
-$ entitas-graph diff --ref 49904c1d^
+$ entitas-graph diff --commit 49904c1d
 old: 49904c1d^ (commit 3afbaa9cc5)
-new: working tree (commit 0e8a4184c4)
+new: 49904c1d (commit 49904c1de3)
 nodes: none added or removed
 edges: reads +3 −8
 6 components changed · 0 registrations moved · findings unchanged
