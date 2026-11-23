@@ -30,6 +30,11 @@ namespace Entitas.Unity.Editor.Generation
     /// Runs are cheap to skip: only files that declare components or the generation config
     /// (or might, judging by their text) trigger one, and entitas-gen rewrites only the
     /// files whose content actually changed.
+    ///
+    /// A component renamed in the IDE (Shift+F6 on the class) leaves its generated files
+    /// declaring the old API — AddHealth, hasHealth, … — that code still uses. entitas-gen
+    /// recognises that and writes nothing until the user decides, in a dialog shown before
+    /// the old files are deleted: update those usages, regenerate without, or not now.
     /// </summary>
     [InitializeOnLoad]
     public static class EntitasCodeGeneration
@@ -37,11 +42,12 @@ namespace Entitas.Unity.Editor.Generation
         const string MenuGenerate = "Tools/Entitas/Generate";
         const string MenuAutomatic = "Tools/Entitas/Generate Automatically";
         const string MenuCheck = "Tools/Entitas/Check Generated Files";
-        const string AutomaticPreference = "Entitas.Generation.Automatic";
 
         static readonly ConcurrentQueue<Action> MainThread = new ConcurrentQueue<Action>();
+        static readonly GenerationSettings Settings = new GenerationSettings(new EditorUserSettingsStore());
         static readonly GenerationScheduler Scheduler = new GenerationScheduler();
         static GenerationState? _state;
+        static GenerationRequest? _backgroundRequest;
         static DateTime _lastCompilationStartedUtc = DateTime.MinValue;
 
         /// <summary>Kept in SessionState: the postprocessor runs after a domain reload, which clears statics.</summary>
@@ -52,6 +58,9 @@ namespace Entitas.Unity.Editor.Generation
         }
 
         const string LastRunKey = "Entitas.Generation.LastRunStartedUtc";
+
+        /// <summary>Renames answered "Not now" in this session: automatic runs do not ask about them again.</summary>
+        const string PostponedRenamesKey = "Entitas.Generation.PostponedRenames";
 
         static EntitasCodeGeneration()
         {
@@ -74,6 +83,28 @@ namespace Entitas.Unity.Editor.Generation
                 if (change == PlayModeStateChange.ExitingEditMode)
                     ResetScheduler();
             };
+
+            // The checkmark is native menu state: it outlives a domain reload, and the validate
+            // function only runs when the menu is drawn, so anything reading it in between got
+            // the last drawn value (unchecked in a fresh editor). Setting it once is not enough:
+            // menus are not built yet while InitializeOnLoad runs, and after an editor assembly
+            // changes (the package DLL replaced) Unity rebuilds them some frames later, which
+            // clears the checkmark again — seen on a real project, where one delayCall was too
+            // early. So keep it in sync for a few seconds after every load.
+            _menuSyncUntil = EditorApplication.timeSinceStartup + MenuSyncSeconds;
+            EditorApplication.update -= KeepMenuInSync;
+            EditorApplication.update += KeepMenuInSync;
+        }
+
+        const double MenuSyncSeconds = 10;
+        static double _menuSyncUntil;
+
+        static void KeepMenuInSync()
+        {
+            if (Menu.GetChecked(MenuAutomatic) != Automatic)
+                SyncAutomaticMenu();
+            if (EditorApplication.timeSinceStartup >= _menuSyncUntil)
+                EditorApplication.update -= KeepMenuInSync;
         }
 
         static string StatePath => Path.Combine(EntitasTools.ScratchDirectory, "state.json");
@@ -100,11 +131,32 @@ namespace Entitas.Unity.Editor.Generation
             }
         }
 
-        /// <summary>Whether components changing regenerates by itself. On by default.</summary>
+        /// <summary>
+        /// Whether components changing regenerates by itself. On by default. Kept per project
+        /// and per user, in UserSettings/EditorUserSettings.asset — not in EditorPrefs, which
+        /// every project on the machine shares (see <see cref="GenerationSettings"/>).
+        /// </summary>
         public static bool Automatic
         {
-            get => EditorPrefs.GetBool(AutomaticPreference, true);
-            set => EditorPrefs.SetBool(AutomaticPreference, value);
+            get => Settings.Automatic;
+            set
+            {
+                Settings.Automatic = value;
+                SyncAutomaticMenu();
+            }
+        }
+
+        static void SyncAutomaticMenu() => Menu.SetChecked(MenuAutomatic, Automatic);
+
+        sealed class EditorUserSettingsStore : IProjectSettingsStore
+        {
+            public string? Get(string key)
+            {
+                var value = EditorUserSettings.GetConfigValue(key);
+                return string.IsNullOrEmpty(value) ? null : value;
+            }
+
+            public void Set(string key, string value) => EditorUserSettings.SetConfigValue(key, value);
         }
 
         // -- menu ---------------------------------------------------------------------
@@ -122,9 +174,10 @@ namespace Entitas.Unity.Editor.Generation
 
             // Synchronous: the main thread is busy, so no refresh can start meanwhile; the
             // refresh afterwards imports everything that changed in one go.
-            var response = Generate(check: false, showProgress: true);
+            var request = BuildRequest(check: false, extraSources: null);
+            var response = Run(request, showProgress: true);
             if (response != null)
-                Apply(response, refresh: true, logUnchanged: true);
+                Apply(ResolveRenames(request, response, automatic: false), refresh: true, logUnchanged: true);
         }
 
         [MenuItem(MenuCheck, false, EntitasMenuItemPriorities.generate + 1)]
@@ -141,7 +194,7 @@ namespace Entitas.Unity.Editor.Generation
         [MenuItem(MenuAutomatic, true)]
         static bool ToggleAutomaticValidate()
         {
-            Menu.SetChecked(MenuAutomatic, Automatic);
+            SyncAutomaticMenu();
             return true;
         }
 
@@ -167,8 +220,11 @@ namespace Entitas.Unity.Editor.Generation
 
         // -- running ----------------------------------------------------------------------
 
+        static GenerationResponse? Generate(bool check, bool showProgress) =>
+            Run(BuildRequest(check, extraSources: null), showProgress);
+
         /// <summary>Runs entitas-gen synchronously; null (and an error in the console) when it could not run.</summary>
-        static GenerationResponse? Generate(bool check, bool showProgress)
+        static GenerationResponse? Run(GenerationRequest request, bool showProgress)
         {
             var tool = EntitasTools.FindTool(EntitasTools.GeneratorName);
             if (tool == null)
@@ -179,11 +235,11 @@ namespace Entitas.Unity.Editor.Generation
                 return null;
             }
 
-            var (requestPath, responsePath) = WriteRequest(BuildRequest(check, extraSources: null));
+            var (requestPath, responsePath) = WriteRequest(request);
             try
             {
                 if (showProgress)
-                    EditorUtility.DisplayProgressBar("Entitas", check ? "Checking generated files…" : "Generating code…", 0.5f);
+                    EditorUtility.DisplayProgressBar("Entitas", request.check ? "Checking generated files…" : "Generating code…", 0.5f);
 
                 LastRunStartedUtc = DateTime.UtcNow;
                 var result = EntitasTools.Run(tool, new[] { "--request", requestPath, "--response", responsePath });
@@ -271,7 +327,8 @@ namespace Entitas.Unity.Editor.Generation
 
             // Files the watcher saw may not be imported yet, so Unity's assembly list does
             // not have them: add them to the assembly their folder belongs to.
-            var (requestPath, responsePath) = WriteRequest(BuildRequest(check: false, extraSources: changed));
+            _backgroundRequest = BuildRequest(check: false, extraSources: changed);
+            var (requestPath, responsePath) = WriteRequest(_backgroundRequest);
             LastRunStartedUtc = DateTime.UtcNow;
 
             var stopwatch = Stopwatch.StartNew();
@@ -314,14 +371,101 @@ namespace Entitas.Unity.Editor.Generation
             var changed = false;
             if (response != null)
             {
+                // Still locked: a rename is decided, and applied, before Unity compiles anything.
+                if (_backgroundRequest != null)
+                    response = ResolveRenames(_backgroundRequest, response, automatic: true);
+
                 // No refresh here: unlocking lets the refresh that waited run, and the
                 // scheduler adds one only when a compilation already went ahead without us.
                 Apply(response, refresh: false, logUnchanged: false);
-                changed = response.assemblies.Any(a => a.written.Count > 0 || a.deleted.Count > 0);
+                changed = response.assemblies.Any(Changed);
+
+                // Code outside the generated folders was rewritten; make sure it is imported
+                // even if nothing else asks for a refresh (deferred until the unlock).
+                if (response.assemblies.Any(a => a.rename.state == "applied"))
+                    AssetDatabase.Refresh();
             }
 
+            _backgroundRequest = null;
             Execute(Scheduler.RunFinished(changed));
         }
+
+        static bool Changed(AssemblyReport assembly) =>
+            assembly.written.Count > 0 || assembly.deleted.Count > 0 || assembly.rename.state == "applied";
+
+        // -- components renamed in the IDE -------------------------------------------------
+
+        /// <summary>
+        /// When entitas-gen held an assembly back because a component looks renamed in the IDE,
+        /// asks what to do and runs it again with the answer. Returns the response to apply.
+        /// </summary>
+        static GenerationResponse ResolveRenames(GenerationRequest request, GenerationResponse response, bool automatic)
+        {
+            if (Application.isBatchMode)
+                return response;
+
+            var postponed = PostponedRenames();
+            request.applyRenames.Clear();
+            request.ignoreRenames.Clear();
+
+            foreach (var assembly in response.assemblies.Where(a => a.rename.state == "pending"))
+            {
+                var rename = assembly.rename;
+                if (automatic && postponed.Contains(rename.key))
+                    continue;
+
+                switch (AskAboutRename(assembly.name, rename))
+                {
+                    case 0:
+                        request.applyRenames.Add(rename.key);
+                        break;
+                    case 2:
+                        request.ignoreRenames.Add(rename.key);
+                        break;
+                    default:
+                        postponed.Add(rename.key);
+                        break;
+                }
+            }
+
+            SessionState.SetString(PostponedRenamesKey, string.Join("\n", postponed));
+            if (request.applyRenames.Count == 0 && request.ignoreRenames.Count == 0)
+                return response;
+
+            return Run(request, showProgress: true) ?? response;
+        }
+
+        /// <summary>0: update usages, 1: not now, 2: regenerate only.</summary>
+        static int AskAboutRename(string assemblyName, RenameReport rename)
+        {
+            var oldName = Bare(rename.oldName);
+            var newName = Bare(rename.newName);
+            var used = rename.identifiers.Select(pair => pair.Split(new[] { " -> " }, StringSplitOptions.None)[0]).ToList();
+            var names = string.Join(", ", used.Take(4)) + (used.Count > 4 ? ", …" : string.Empty);
+            var files = rename.files.Count == 1 ? "1 file" : $"{rename.files.Count} files";
+
+            return EditorUtility.DisplayDialogComplex(
+                "Entitas: component renamed?",
+                $"Component '{oldName}' looks renamed to '{newName}' — update usages of {names}?\n\n" +
+                $"The generated files of {assemblyName} still declare the old API, and {rename.usages} usages in {files} " +
+                "still use it.\n\n" +
+                "Update usages: rewrite them to the new names, then regenerate.\n" +
+                "Regenerate only: delete the old generated API; those usages stop compiling.\n" +
+                "Not now: leave the generated files as they are.",
+                "Update usages",
+                "Not now",
+                "Regenerate only");
+        }
+
+        static string Bare(string className) =>
+            className.EndsWith("Component", StringComparison.Ordinal) && className.Length > "Component".Length
+                ? className.Substring(0, className.Length - "Component".Length)
+                : className;
+
+        static HashSet<string> PostponedRenames() =>
+            new HashSet<string>(
+                SessionState.GetString(PostponedRenamesKey, string.Empty).Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries),
+                StringComparer.Ordinal);
 
         static void DrainMainThreadQueue()
         {
@@ -499,7 +643,9 @@ namespace Entitas.Unity.Editor.Generation
                     state.outputDirectories.Add(assembly.outputDirectory);
                 }
 
-                var assemblyChanged = assembly.written.Count > 0 || assembly.deleted.Count > 0;
+                ok &= LogRename(assembly);
+
+                var assemblyChanged = Changed(assembly);
                 changed |= assemblyChanged;
 
                 if (assembly.stale.Length > 0)
@@ -522,6 +668,41 @@ namespace Entitas.Unity.Editor.Generation
                 AssetDatabase.Refresh();
 
             return ok;
+        }
+
+        /// <summary>False while a rename waits for a decision — nothing was generated for the assembly.</summary>
+        static bool LogRename(AssemblyReport assembly)
+        {
+            var rename = assembly.rename;
+            if (rename.key.Length == 0)
+                return true;
+
+            foreach (var warning in rename.warnings)
+                Debug.LogWarning($"Entitas ({assembly.name}): {warning}");
+
+            var oldName = Bare(rename.oldName);
+            var newName = Bare(rename.newName);
+            switch (rename.state)
+            {
+                case "applied":
+                    Debug.Log($"Entitas ({assembly.name}): '{oldName}' was renamed to '{newName}' — updated {rename.usages} usages " +
+                              $"of its generated API ({string.Join(", ", rename.identifiers.Take(6))}).\n" +
+                              string.Join("\n", rename.files.Select(f => "~ " + f)));
+                    return true;
+                case "ignored":
+                    Debug.LogWarning($"Entitas ({assembly.name}): '{oldName}' was renamed to '{newName}'; regenerated without updating " +
+                                     $"the {rename.usages} usages of its old generated API, which no longer compile.\n" +
+                                     string.Join("\n", rename.files));
+                    return true;
+                case "pending":
+                    Debug.LogWarning(
+                        $"Entitas ({assembly.name}): '{oldName}' looks renamed to '{newName}', and {rename.usages} usages of its old " +
+                        $"generated API remain — nothing was generated for this assembly until you decide. Run {MenuGenerate}" +
+                        (Application.isBatchMode ? " in the editor, or entitas-gen --apply-renames / --ignore-renames." : "."));
+                    return false;
+                default:
+                    return true;
+            }
         }
 
         static string Describe(AssemblyReport assembly)

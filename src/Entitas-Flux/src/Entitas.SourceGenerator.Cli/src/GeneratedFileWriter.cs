@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Entitas.SourceGenerator;
 using Entitas.SourceGenerator.Discovery;
+using Entitas.SourceGenerator.Rename;
 using Microsoft.CodeAnalysis;
 
 namespace Entitas.SourceGenerator.Cli
@@ -33,6 +34,10 @@ namespace Entitas.SourceGenerator.Cli
     /// instead of a merge conflict.</item>
     /// <item>Nothing is written when a generator failed: its files would look orphaned and
     /// be deleted, leaving a hole in the API that only shows up as errors elsewhere.</item>
+    /// <item>Nothing is written either when the files about to be deleted reveal a component
+    /// renamed in the IDE (<see cref="RenameDetector"/>) whose old generated API is still in
+    /// use, until someone decides (<see cref="WriterOptions.Renames"/>): deleting them is
+    /// what breaks those usages, and what makes the old names impossible to resolve.</item>
     /// </list>
     /// </summary>
     public static class GeneratedFileWriter
@@ -120,6 +125,14 @@ namespace Entitas.SourceGenerator.Cli
                 return result;
             }
 
+            if (filesMode && existing.Any(path => !desired.ContainsKey(path)))
+            {
+                stopwatch.Stop();
+                if (!HandleRename(compilation, input, sources, outputDirectory!, existing, options, result))
+                    return result;
+                stopwatch.Start();
+            }
+
             var isUnityProject = Directory.Exists(Path.Combine(projectRoot, "ProjectSettings"));
 
             // Reading what is there is most of a no-change run; do it on every core.
@@ -177,6 +190,77 @@ namespace Entitas.SourceGenerator.Cli
             result.Timings.Add(("sync", stopwatch.ElapsedMilliseconds));
 
             return result;
+        }
+
+        // -- IDE renames ----------------------------------------------------------
+
+        /// <summary>
+        /// Generation is about to delete files: check they are not the API of a component
+        /// renamed in the IDE that code still uses. False when nothing may be written.
+        /// </summary>
+        static bool HandleRename(
+            Compilation compilation,
+            GenerationInput input,
+            IReadOnlyList<GeneratedSource> sources,
+            string outputDirectory,
+            IReadOnlyCollection<string> existing,
+            WriterOptions options,
+            AssemblyResult result)
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var detection = RenameDetector.Detect(compilation, input, sources, outputDirectory, existing);
+            if (detection.Warning != null)
+                result.Warnings.Add(detection.Warning);
+
+            if (detection.Rename is not { } rename)
+            {
+                result.Timings.Add(("rename check", stopwatch.ElapsedMilliseconds));
+                return true;
+            }
+
+            result.Rename = rename;
+            if (options.ReferencingEdits != null)
+                rename.External.AddRange(options.ReferencingEdits(compilation, rename.Plan)
+                    .Where(edits => edits.Files.Count > 0 || edits.Warnings.Count > 0));
+            result.Timings.Add(("rename detection", stopwatch.ElapsedMilliseconds));
+
+            if (rename.UsageCount == 0)
+            {
+                rename.Outcome = RenameOutcome.NothingToUpdate;
+                return true;
+            }
+
+            var handling = options.ApplyRenames?.Contains(rename.Key) == true ? RenameHandling.Apply
+                : options.IgnoreRenames?.Contains(rename.Key) == true ? RenameHandling.Ignore
+                : options.Renames;
+
+            if (handling == RenameHandling.Apply)
+            {
+                try
+                {
+                    rename.EditedFiles.AddRange(RenameDetector.Apply(rename));
+                }
+                catch (Exception exception) when (exception is RenameException || exception is IOException ||
+                                                  exception is UnauthorizedAccessException)
+                {
+                    result.Errors.Add(
+                        $"could not update the usages of {rename.OldClassName}'s generated API: {exception.Message} " +
+                        "Nothing was written.");
+                    return false;
+                }
+
+                rename.Outcome = RenameOutcome.Applied;
+                return true;
+            }
+
+            if (handling == RenameHandling.Ignore)
+            {
+                rename.Outcome = RenameOutcome.Ignored;
+                return true;
+            }
+
+            rename.Outcome = RenameOutcome.Pending;
+            return false;
         }
 
         // -- output folder ------------------------------------------------------
@@ -337,7 +421,7 @@ namespace Entitas.SourceGenerator.Cli
             return new string(buffer, 0, read);
         }
 
-        static string Combine(string directory, string fileName) =>
+        internal static string Combine(string directory, string fileName) =>
             Path.GetFullPath(Path.Combine(directory, fileName.Replace('/', Path.DirectorySeparatorChar)));
 
         static bool IsUnityAsset(string path, string projectRoot) =>
@@ -412,6 +496,39 @@ namespace Entitas.SourceGenerator.Cli
         /// <c>entitas-gen &lt;csproj&gt; &lt;dir&gt;</c> form.
         /// </summary>
         public string? OutputDirectoryOverride;
+
+        /// <summary>
+        /// What to do when the files about to be deleted reveal a component renamed in the IDE
+        /// whose old generated API is still used. <see cref="RenameHandling.Ask"/> (the default)
+        /// reports it in <see cref="AssemblyResult.Rename"/> and writes nothing.
+        /// </summary>
+        public RenameHandling Renames = RenameHandling.Ask;
+
+        /// <summary>
+        /// Renames (<see cref="DetectedRename.Key"/>) someone was shown and said yes to: applied
+        /// whatever <see cref="Renames"/> says. A different rename found instead is not.
+        /// </summary>
+        public ICollection<string>? ApplyRenames;
+
+        /// <summary>Renames someone chose to regenerate without updating the usages of.</summary>
+        public ICollection<string>? IgnoreRenames;
+
+        /// <summary>
+        /// Finds the usages in assemblies that reference the one being generated (Editor
+        /// assemblies, test assemblies) — supplied by the host, which knows the project.
+        /// </summary>
+        public Func<Compilation, RenamePlan, IReadOnlyList<ExternalEdits>>? ReferencingEdits;
+
+        internal WriterOptions With(Func<Compilation, RenamePlan, IReadOnlyList<ExternalEdits>> referencingEdits) =>
+            new WriterOptions
+            {
+                Check = Check,
+                OutputDirectoryOverride = OutputDirectoryOverride,
+                Renames = Renames,
+                ApplyRenames = ApplyRenames,
+                IgnoreRenames = IgnoreRenames,
+                ReferencingEdits = ReferencingEdits ?? referencingEdits
+            };
     }
 
     public enum GenerationMode { NotConfigured, SourceGenerator, Files }
@@ -431,10 +548,13 @@ namespace Entitas.SourceGenerator.Cli
         /// <summary>Set in check mode.</summary>
         public Staleness? Staleness { get; set; }
 
+        /// <summary>A component renamed in the IDE, found in the files this run was about to delete.</summary>
+        public DetectedRename? Rename { get; set; }
+
         /// <summary>Where the time went, for --verbose.</summary>
         public List<(string Phase, long Milliseconds)> Timings { get; } = new List<(string, long)>();
 
-        public bool Changed => Written.Count > 0 || Deleted.Count > 0;
+        public bool Changed => Written.Count > 0 || Deleted.Count > 0 || Rename?.EditedFiles.Count > 0;
 
         public AssemblyResult(string assemblyName)
         {

@@ -1,0 +1,937 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+
+namespace Entitas.Graph.Output
+{
+    /// <summary>A name that matched several nodes; nothing is guessed (exit code 3).</summary>
+    public sealed class AmbiguousNameException : Exception
+    {
+        public IReadOnlyList<GraphNode> Candidates { get; }
+        public AmbiguousNameException(string name, IReadOnlyList<GraphNode> candidates)
+            : base($"'{name}' matches {candidates.Count} nodes") => Candidates = candidates;
+    }
+
+    /// <summary>A name — or a query's words — that matched nothing (exit code 4), with the closest labels.</summary>
+    public sealed class NodeNotFoundException : Exception
+    {
+        public IReadOnlyList<GraphNode> Suggestions { get; }
+        public NodeNotFoundException(string name, IReadOnlyList<GraphNode> suggestions, string? message = null)
+            : base(message ?? $"no node named '{name}'") => Suggestions = suggestions;
+    }
+
+    /// <summary>
+    /// The questions entitas-graph answers. Output is plain text meant to be read by a
+    /// person or an assistant: one line per fact, the code location at the end.
+    ///
+    /// Every answer is capped at a token budget (Graphify's default, 2000), because an
+    /// assistant pays for every line it reads: a component most systems touch would otherwise
+    /// answer with 300 readers. An answer that does not fit starts with a summary by feature or
+    /// root — so the shape of a hub survives the cut — lists what fits, and says how much is
+    /// left out. A budget of 0 prints everything.
+    /// </summary>
+    public sealed partial class GraphQueries
+    {
+        public const int DefaultBudget = 2000;
+
+        /// <summary>The usual estimate for code-like English text.</summary>
+        const int CharsPerToken = 4;
+
+        /// <summary>Sites listed per system in who-creates/who-reads, and items per relation in explain, while capped.</summary>
+        const int SitesPerSource = 3, ItemsPerRelation = 25;
+
+        /// <summary>query: seeds and how many steps the walk goes from them.</summary>
+        public const int DefaultQuerySeeds = 5, DefaultQueryDepth = 2, MaxQueryDepth = 4;
+
+        /// <summary>
+        /// query: a node with more distinct data-flow neighbours than this, over edges written in
+        /// the code, is a hub — reached, never walked through. On a 2000-file project 9 nodes are
+        /// over it (Id, WorldPosition, the Ready and Destructed flags, a factory adding 50
+        /// components), and walking through any of them turns a question about one feature into
+        /// half the project. Inferred edges do not count: with them, 31 nodes were over it,
+        /// among them the very system that places furniture, because its factory call adds 50.
+        /// </summary>
+        public const int DefaultHubThreshold = 40;
+
+        /// <summary>
+        /// query: links per node, tried in turn when the whole subgraph does not fit the budget.
+        /// Six still says what a system does (its request, its event, its own state) and leaves
+        /// room for eight to ten nodes past five seeds on a 2000-file project.
+        /// </summary>
+        static readonly int[] LinksPerNode = { 12, 8, 6 };
+
+        readonly EcsGraph _graph;
+        readonly int _budget;
+        readonly int _hubThreshold;
+
+        public GraphQueries(EcsGraph graph, int budget = DefaultBudget, int hubThreshold = DefaultHubThreshold)
+        {
+            _graph = graph;
+            _budget = Math.Max(0, budget);
+            _hubThreshold = Math.Max(0, hubThreshold);
+        }
+
+        bool Capped => _budget > 0;
+
+        // -- resolving names --------------------------------------------------------------
+
+        public GraphNode Resolve(string name, string? kind = null)
+        {
+            var candidates = _graph.Nodes.Where(n => kind == null || n.Kind == kind).ToList();
+            var trimmed = name.Trim();
+            var bare = WithoutSuffix(trimmed, "Component");
+
+            var exact = candidates.Where(n => n.Id == trimmed || n.FullName == trimmed).ToList();
+            if (exact.Count == 1) return exact[0];
+
+            var byLabel = candidates.Where(n => string.Equals(n.Label, trimmed, StringComparison.OrdinalIgnoreCase) ||
+                                                string.Equals(n.Label, bare, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (byLabel.Count == 1) return byLabel[0];
+            if (byLabel.Count > 1)
+            {
+                // A component and a type sharing a name is common (the component class itself is a type): prefer the ECS meaning.
+                var preferred = byLabel.Where(n => n.Kind != NodeKind.Type).ToList();
+                if (preferred.Count == 1) return preferred[0];
+                throw new AmbiguousNameException(name, byLabel);
+            }
+
+            // The XChanged marker of a [Watched] component is folded into X, so it is no node —
+            // but it is the name an assistant reads in the code (AllOf(GameMatcher.XChanged)), and
+            // "no node named XChanged" sent both assistants of a real test the wrong way.
+            if (kind is null or NodeKind.Component && WatchedOf(bare) is { } watched)
+                return watched;
+
+            var suggestions = candidates
+                .Where(n => n.Label.IndexOf(bare, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            bare.IndexOf(n.Label, StringComparison.OrdinalIgnoreCase) >= 0 && n.Label.Length > 3)
+                .OrderBy(n => Math.Abs(n.Label.Length - bare.Length))
+                .Take(8)
+                .ToList();
+            throw new NodeNotFoundException(name, suggestions);
+        }
+
+        static string WithoutSuffix(string name, string suffix, StringComparison comparison = StringComparison.Ordinal) =>
+            name.EndsWith(suffix, comparison) && name.Length > suffix.Length ? name.Substring(0, name.Length - suffix.Length) : name;
+
+        /// <summary>The [Watched] component whose marker <paramref name="bare"/> names (XChanged, Component suffix already off).</summary>
+        GraphNode? WatchedOf(string bare)
+        {
+            // Labels match without case everywhere else, so the marker does too.
+            var label = WithoutSuffix(bare, "Changed", StringComparison.OrdinalIgnoreCase);
+            if (label.Length == bare.Length)
+                return null;
+            var matches = _graph.Nodes.Where(n => n.Kind == NodeKind.Component && n.Attributes.Contains("Watched") &&
+                                                  string.Equals(n.Label, label, StringComparison.OrdinalIgnoreCase)).ToList();
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
+        static string MarkerName(GraphNode component) => component.Label + "Changed";
+
+        /// <summary>
+        /// The name was X's [Watched] marker rather than X itself. Resolve matches real labels
+        /// first, so a name that ends up at X while reading XChanged can only have come through
+        /// the marker.
+        /// </summary>
+        static bool NamesMarker(string name, GraphNode node) =>
+            node.Kind == NodeKind.Component && node.Attributes.Contains("Watched") &&
+            string.Equals(WithoutSuffix(name.Trim(), "Component"), MarkerName(node), StringComparison.OrdinalIgnoreCase);
+
+        static string MarkerNote(GraphNode component, string shows) =>
+            $"  {MarkerName(component)} is {component.Label}'s [Watched] marker: every add, replace or remove of {component.Label} sets it for one frame. {shows}";
+
+        // -- ECS questions ---------------------------------------------------------------------
+
+        /// <summary>
+        /// Who creates a component. For XChanged, the marker of a [Watched] X: whoever adds or
+        /// removes X, since either sets the marker.
+        /// </summary>
+        public string WhoCreates(string componentName)
+        {
+            var component = Resolve(componentName, NodeKind.Component);
+            if (!NamesMarker(componentName, component))
+                return Users(component, component.Label, "created by", Reactions(component), false, Relation.Creates);
+
+            var note = new[] { MarkerNote(component, $"Listed: who adds or removes {component.Label}.") }.Concat(Reactions(component));
+            return Users(component, MarkerName(component), "set by", note, true, Relation.Creates, Relation.Removes);
+        }
+
+        /// <summary>Who reads a component (reactions and NoneOf included). For XChanged, the reactions to X's changes.</summary>
+        public string WhoReads(string componentName)
+        {
+            var component = Resolve(componentName, NodeKind.Component);
+            return NamesMarker(componentName, component)
+                ? Users(component, MarkerName(component), "reacted to by", new[] { MarkerNote(component, "Listed: the systems reacting to it.") }, true, Relation.Reacts)
+                : Users(component, component.Label, "read by", Reactions(component), false, Relation.Reads, Relation.Reacts, Relation.Filters);
+        }
+
+        /// <param name="generatedLast">
+        /// For a marker: its generated cleanup system reacts to it too, in every root, and listed in
+        /// execution order it came first with a five-placement line, before the reactions that matter.
+        /// </param>
+        string Users(GraphNode component, string label, string verb, IEnumerable<string> notes, bool generatedLast, params string[] relations)
+        {
+            var edges = _graph.Incoming(component.Id).Where(e => relations.Contains(e.Relation)).ToList();
+            var sources = edges.Select(e => e.Source).Distinct().ToList();
+
+            var head = new[] { $"{label} — {verb} {sources.Count} ({Count(edges, Confidence.Extracted)} direct, {Count(edges, Confidence.Inferred)} inferred)" }
+                .Concat(notes)
+                .ToList();
+            var entries = new List<string>();
+            foreach (var group in edges.GroupBy(e => e.Source).OrderBy(g => generatedLast && _graph.Node(g.Key)!.Generated ? 1 : 0).ThenBy(g => SortKey(g.Key), StringComparer.Ordinal))
+            {
+                var node = _graph.Node(group.Key)!;
+                var entry = new StringBuilder();
+                entry.AppendLine($"  {node.Label}  [{Describe(group)}]  {Placement(node)}");
+                var sites = group.OrderBy(e => e.Line).ToList();
+                var shown = Capped ? Math.Min(sites.Count, SitesPerSource) : sites.Count;
+                foreach (var edge in sites.Take(shown))
+                    entry.AppendLine($"      {edge.Relation} via {edge.Via}{Through(edge)}{Condition(edge)}  {Location(edge)}");
+                if (shown < sites.Count)
+                    entry.AppendLine($"      … {sites.Count - shown} more sites");
+                entries.Add(entry.ToString());
+            }
+
+            return Render(head, () => new[] { "  by feature: " + ByFeature(sources) }, entries, "systems and types");
+        }
+
+        /// <summary>
+        /// Everything that happens to a component, per root feature in execution order:
+        /// who creates it, who reads or filters on it, who removes or destroys it.
+        /// </summary>
+        public string Lifecycle(string componentName)
+        {
+            var component = Resolve(componentName, NodeKind.Component);
+            var marker = NamesMarker(componentName, component);
+
+            // The marker's life is X's changes and the reactions to them; X's readers are not its.
+            var edges = _graph.Incoming(component.Id)
+                .Where(e => marker ? e.Relation is Relation.Creates or Relation.Removes or Relation.Reacts : e.Relation != Relation.Contains)
+                .ToList();
+
+            var head = marker
+                ? new List<string>
+                {
+                    $"{MarkerName(component)}  [{string.Join("/", component.Contexts)}, [Watched] marker of {component.Label}]",
+                    $"  set by {Distinct(edges, Relation.Creates, Relation.Removes)} · reacted to by {Distinct(edges, Relation.Reacts)}",
+                    MarkerNote(component, $"Listed: {component.Label}'s creates and removes, and the reactions.")
+                }
+                : new List<string>
+                {
+                    $"{component.Label}{Attributes(component)}",
+                    $"  created by {Distinct(edges, Relation.Creates)} · read by {Distinct(edges, Relation.Reads, Relation.Reacts)} · " +
+                    $"filtered by {Distinct(edges, Relation.Filters)} · removed by {Distinct(edges, Relation.Removes)} · destroyed by {Distinct(edges, Relation.Destroys)}"
+                };
+            if (!marker)
+                head.AddRange(Reactions(component));
+            var entries = new List<string>();
+            var stepsPerRoot = new List<string>();
+
+            var bySource = edges.GroupBy(e => e.Source).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+            var roots = bySource.Keys
+                .SelectMany(id => _graph.Node(id)!.Placements.Select(p => p.Root))
+                .Distinct()
+                .OrderBy(r => r, StringComparer.Ordinal)
+                .ToList();
+
+            foreach (var root in roots)
+            {
+                var steps = bySource
+                    .SelectMany(pair => _graph.Node(pair.Key)!.Placements.Where(p => p.Root == root).Select(p => (Placement: p, Node: _graph.Node(pair.Key)!, Edges: pair.Value)))
+                    .OrderBy(s => s.Placement.Order)
+                    .ToList();
+                stepsPerRoot.Add($"{Label(root)} {steps.Count}");
+                var title = $"\n{Label(root)}:\n";
+                foreach (var step in steps)
+                {
+                    var feature = step.Placement.Chain.Count > 0 ? Label(step.Placement.Chain[step.Placement.Chain.Count - 1]) : string.Empty;
+                    entries.Add(title + $"  #{step.Placement.Order,-4} {Verbs(step.Edges),-22} {step.Node.Label}  ({feature}){Inferred(step.Edges)}\n");
+                    title = string.Empty;
+                }
+            }
+
+            var unplaced = bySource.Keys.Select(id => _graph.Node(id)!).Where(n => n.Placements.Count == 0).OrderBy(n => n.Label).ToList();
+            if (unplaced.Count > 0)
+                stepsPerRoot.Add($"not in any feature {unplaced.Count}");
+            var unplacedTitle = "\nNot in any feature (queries, services, unregistered systems):\n";
+            foreach (var node in unplaced)
+            {
+                entries.Add(unplacedTitle + $"  {Verbs(bySource[node.Id]),-22} {node.Label}  [{node.Kind}]{Inferred(bySource[node.Id])}\n");
+                unplacedTitle = string.Empty;
+            }
+
+            return Render(head, () => new[]
+            {
+                "  steps by root: " + string.Join(", ", stepsPerRoot),
+                "  by feature: " + ByFeature(bySource.Keys)
+            }, entries, "steps");
+        }
+
+        public string SystemsOf(string featureName)
+        {
+            var feature = Resolve(featureName, NodeKind.Feature);
+            var head = new[] { $"{feature.Label}{(feature.Root ? " (root)" : string.Empty)} — {CountSystems(feature.Id, new HashSet<string>())} systems" };
+            var entries = new List<string>();
+            Tree(feature.Id, "  ", new HashSet<string> { feature.Id });
+            return Render(head, Summary, entries, "lines");
+
+            void Tree(string id, string indent, HashSet<string> seen)
+            {
+                foreach (var edge in _graph.Outgoing(id).Where(e => e.Relation == Relation.Contains).OrderBy(e => e.Order))
+                {
+                    var child = _graph.Node(edge.Target)!;
+                    var interfaces = child.Interfaces.Count > 0 ? $"  [{string.Join(", ", child.Interfaces)}]" : string.Empty;
+                    entries.Add($"{indent}{edge.Order,3}. {child.Label}{(child.Kind == NodeKind.Feature ? " (feature)" : interfaces)}\n");
+                    if (child.Kind == NodeKind.Feature && seen.Add(child.Id))
+                        Tree(child.Id, indent + "     ", seen);
+                }
+            }
+
+            IEnumerable<string> Summary()
+            {
+                var children = _graph.Outgoing(feature.Id).Where(e => e.Relation == Relation.Contains).Select(e => _graph.Node(e.Target)!).ToList();
+                var nested = children.Where(c => c.Kind == NodeKind.Feature)
+                    .Select(c => (c.Label, Systems: CountSystems(c.Id, new HashSet<string> { feature.Id })))
+                    .OrderByDescending(c => c.Systems)
+                    .ThenBy(c => c.Label, StringComparer.Ordinal)
+                    .ToList();
+                const int shown = 12;
+                yield return $"  {children.Count(c => c.Kind == NodeKind.System)} systems directly; {nested.Count} nested features, largest: " +
+                             string.Join(", ", nested.Take(shown).Select(c => $"{c.Label} {c.Systems}")) +
+                             (nested.Count > shown ? $", … {nested.Count - shown} more" : string.Empty);
+            }
+        }
+
+        int CountSystems(string id, HashSet<string> seen)
+        {
+            var total = 0;
+            foreach (var edge in _graph.Outgoing(id).Where(e => e.Relation == Relation.Contains))
+            {
+                var child = _graph.Node(edge.Target)!;
+                if (child.Kind == NodeKind.System) total++;
+                else if (seen.Add(child.Id)) total += CountSystems(child.Id, seen);
+            }
+            return total;
+        }
+
+        // -- general questions -----------------------------------------------------------------
+
+        public string Explain(string name)
+        {
+            var node = Resolve(name);
+            var head = new List<string> { $"{node.Label}  [{node.Kind}{(node.Generated ? ", generated" : string.Empty)}{(node.Root ? ", root" : string.Empty)}]" };
+            if (NamesMarker(name, node)) head.Add(MarkerNote(node, $"Shown: {node.Label}."));
+            if (node.FullName != null) head.Add($"  type: {node.FullName}");
+            if (node.SourceFile != null) head.Add($"  source: {node.SourceFile}:{node.Line}");
+            if (node.Kind == NodeKind.Component)
+            {
+                head.Add($"  contexts: {string.Join(", ", node.Contexts)}; {(node.Flag ? "flag" : "data: " + string.Join(", ", node.Fields))}");
+                if (node.Attributes.Count > 0) head.Add($"  attributes: {string.Join(", ", node.Attributes)}");
+                if (RoleLine(node) is { } role) head.Add(role);
+            }
+            if (node.Interfaces.Count > 0) head.Add($"  runs: {string.Join(", ", node.Interfaces)}");
+            foreach (var registration in node.RegisteredIn)
+                head.Add($"  registered: {Label(registration.Feature)} #{registration.Index}");
+            foreach (var placement in node.Placements)
+                head.Add($"  runs under {Label(placement.Root)} at #{placement.Order} via {string.Join(" → ", placement.Chain.Select(Label))}");
+
+            var entries = new List<string>();
+            var counts = new List<string>();
+            AddEdges(entries, counts, node, _graph.Outgoing(node.Id), outgoing: true);
+            AddSharedRequests(entries, counts, node);
+            AddEdges(entries, counts, node, _graph.Incoming(node.Id), outgoing: false);
+            return Render(head, () => new[] { "  connections: " + string.Join(", ", counts) }, entries, "connections");
+        }
+
+        /// <summary>
+        /// Where a component's role comes from: its name (the suffix convention), what happens to
+        /// its entities (who consumes it, what carries it), or both — and which one the commands
+        /// go by when they differ (the name).
+        /// </summary>
+        string? RoleLine(GraphNode node)
+        {
+            if (node.Message == null)
+                return node.Role == null ? null : $"  role: {node.Role} (by name)";
+
+            var why = node.Message == "request"
+                ? "consumed by " + string.Join(", ", node.ConsumedBy.Select(Label)) + (node.ConsumedByRemoval ? ", which takes it off the entity" : string.Empty)
+                : "carried by " + string.Join(", ", node.CarriedBy.Select(Label));
+            return node.Role == null ? $"  role: {node.Message} (by structure: {why})"
+                : node.Role == node.Message ? $"  role: {node.Role} (by name; by structure too: {why})"
+                : $"  role: {node.Role} (by name; by structure a {node.Message}: {why})";
+        }
+
+        /// <summary>
+        /// For a system: who else reads the requests it handles. A request is usually one system's
+        /// input, but not always: on a real project the floating "+coins" text came from a second
+        /// reader of ChangeCurrencyRequest, and an assistant asking what the player sees from the
+        /// handler never found it, because explain listed only the handler's own edges.
+        /// </summary>
+        void AddSharedRequests(List<string> entries, List<string> counts, GraphNode node)
+        {
+            if (node.Kind != NodeKind.System) return;
+
+            var requests = _graph.Outgoing(node.Id)
+                .Where(e => e.Relation == Relation.Reads && e.Confidence == Confidence.Extracted && _graph.Node(e.Target)?.MessageRole == "request")
+                .Select(e => e.Target)
+                .Distinct()
+                .OrderBy(Label, StringComparer.Ordinal)
+                .ToList();
+
+            const int shown = 6;
+            var title = "  its requests are also read by:\n";
+            var total = 0;
+            foreach (var request in requests)
+            {
+                var others = _graph.Incoming(request)
+                    .Where(e => e.Relation is Relation.Reads or Relation.Reacts && e.Source != node.Id && _graph.Node(e.Source) is { Generated: false })
+                    .Select(e => e.Source)
+                    .Distinct()
+                    .OrderBy(SortKey, StringComparer.Ordinal)
+                    .ToList();
+                if (others.Count == 0) continue;
+
+                total += others.Count;
+                var names = others.Take(shown).Select(id => Label(id) + WhereItRuns(id));
+                entries.Add(title + $"    {Label(request)} → {string.Join(", ", names)}{(others.Count > shown ? $", +{others.Count - shown} more" : string.Empty)}\n");
+                title = string.Empty;
+            }
+
+            if (total > 0) counts.Add($"other readers of its requests {total}");
+        }
+
+        /// <summary>A short place for a name in a list: the feature that registers it and its order, or its kind.</summary>
+        string WhereItRuns(string id)
+        {
+            var node = _graph.Node(id)!;
+            var placement = node.Placements.OrderBy(p => p.Root, StringComparer.Ordinal).FirstOrDefault();
+            if (placement == null) return node.Kind == NodeKind.System ? " (unregistered)" : $" [{node.Kind}]";
+            var feature = placement.Chain.Count > 0 ? placement.Chain[placement.Chain.Count - 1] : placement.Root;
+            return $" ({Label(feature)}, {Label(placement.Root)} #{placement.Order})";
+        }
+
+        void AddEdges(List<string> entries, List<string> counts, GraphNode node, IEnumerable<GraphEdge> edges, bool outgoing)
+        {
+            var annotated = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var group in edges.GroupBy(e => e.Relation).OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                var list = group.OrderBy(e => outgoing ? Label(e.Target) : Label(e.Source)).ToList();
+                var relation = outgoing ? group.Key : Passive(group.Key);
+                counts.Add($"{relation} {list.Count}");
+                var title = $"  {relation} ({list.Count}):\n";
+                var shown = Capped ? Math.Min(list.Count, ItemsPerRelation) : list.Count;
+                foreach (var edge in list.Take(shown))
+                {
+                    var other = outgoing ? edge.Target : edge.Source;
+                    // Once per component, on the first write listed: creates come before removes.
+                    var reactions = outgoing && edge.Relation is Relation.Creates or Relation.Removes && annotated.Add(other)
+                        ? ChangeReactions(edge, node.Id)
+                        : string.Empty;
+                    entries.Add(title + $"    {Label(other)}  via {edge.Via}{Through(edge)}{Condition(edge)}  {Location(edge)}{reactions}\n");
+                    title = string.Empty;
+                }
+                if (shown < list.Count)
+                    entries.Add($"    … {list.Count - shown} more {relation}\n");
+            }
+        }
+
+        /// <summary>
+        /// The shortest chain of data flow from A to B: a system that creates a component leads
+        /// to the systems reading it, a component leads to whoever reads it. Unlike a path
+        /// through a shared base type, every hop means something happened.
+        /// </summary>
+        public string Path(string from, string to)
+        {
+            var a = Resolve(from);
+            var b = Resolve(to);
+            var forward = DataFlow(directed: true);
+            var path = Bfs(forward, a.Id, b.Id);
+            var undirected = false;
+            if (path == null)
+            {
+                path = Bfs(DataFlow(directed: false), a.Id, b.Id);
+                undirected = path != null;
+            }
+
+            if (path == null)
+                return $"No data-flow path between {a.Label} and {b.Label}.\n";
+
+            var head = new[] { $"{a.Label} → {b.Label}: {path.Count} hops{(undirected ? " (no forward path; shown ignoring direction)" : string.Empty)}" };
+            var entries = new List<string>();
+            foreach (var (edge, reversed) in path)
+            {
+                var left = reversed ? edge.Target : edge.Source;
+                var right = reversed ? edge.Source : edge.Target;
+                var relation = reversed ? Passive(edge.Relation) : edge.Relation;
+                entries.Add($"  {Label(left)} --{relation}--> {Label(right)}  [{edge.Confidence}] via {edge.Via}{Through(edge)}  {Location(edge)}\n");
+            }
+            return Render(head, Array.Empty<string>, entries, "hops");
+        }
+
+        Dictionary<string, List<(GraphEdge Edge, bool Reversed, string Next)>> DataFlow(bool directed)
+        {
+            var adjacency = new Dictionary<string, List<(GraphEdge, bool, string)>>(StringComparer.Ordinal);
+            void Link(string from, GraphEdge edge, bool reversed, string next)
+            {
+                if (!adjacency.TryGetValue(from, out var list)) adjacency[from] = list = new List<(GraphEdge, bool, string)>();
+                list.Add((edge, reversed, next));
+            }
+
+            foreach (var edge in _graph.Edges)
+            {
+                // Writes flow from the system to the component; reads flow from the component to the system.
+                var forward = edge.Relation is Relation.Creates or Relation.Removes or Relation.Destroys or Relation.Contains;
+                if (forward) Link(edge.Source, edge, false, edge.Target);
+                else Link(edge.Target, edge, true, edge.Source);
+
+                if (!directed)
+                {
+                    if (forward) Link(edge.Target, edge, true, edge.Source);
+                    else Link(edge.Source, edge, false, edge.Target);
+                }
+            }
+
+            return adjacency;
+        }
+
+        static List<(GraphEdge Edge, bool Reversed)>? Bfs(Dictionary<string, List<(GraphEdge Edge, bool Reversed, string Next)>> adjacency, string from, string to)
+        {
+            var previous = new Dictionary<string, (string From, GraphEdge Edge, bool Reversed)>(StringComparer.Ordinal);
+            var queue = new Queue<string>();
+            queue.Enqueue(from);
+            var seen = new HashSet<string>(StringComparer.Ordinal) { from };
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                if (current == to) break;
+                if (!adjacency.TryGetValue(current, out var next)) continue;
+
+                // Two nodes are often joined by several edges: the four systems reacting to
+                // UnpaidChanged also filter NoneOf(Unpaid). The hop is labelled by the one that
+                // carries the data, so the chain reads "reacted to by", not "filtered by".
+                var hops = next
+                    .GroupBy(n => n.Next, StringComparer.Ordinal)
+                    .Select(g => g.OrderBy(n => Carries(n.Edge.Relation)).ThenBy(n => n.Edge.Confidence == Confidence.Extracted ? 0 : 1).First())
+                    .OrderBy(n => n.Edge.Confidence == Confidence.Extracted ? 0 : 1);
+                foreach (var (edge, reversed, node) in hops)
+                {
+                    if (!seen.Add(node)) continue;
+                    previous[node] = (current, edge, reversed);
+                    queue.Enqueue(node);
+                }
+            }
+
+            if (!previous.ContainsKey(to)) return null;
+            var path = new List<(GraphEdge, bool)>();
+            for (var node = to; node != from; node = previous[node].From)
+                path.Add((previous[node].Edge, previous[node].Reversed));
+            path.Reverse();
+            return path;
+        }
+
+        /// <summary>
+        /// How much an edge says about data moving, lowest first. Only edges leaving a node the
+        /// same way compete: from a component, a reaction (the system takes its change) before a
+        /// read before a NoneOf, which only says what the system skips; from a system, a create
+        /// before a remove before a destroy.
+        /// </summary>
+        static int Carries(string relation) => relation switch
+        {
+            Relation.Reacts => 0,
+            Relation.Creates => 0,
+            Relation.Reads => 1,
+            Relation.Removes => 1,
+            Relation.Destroys => 2,
+            Relation.Filters => 3,
+            _ => 4
+        };
+
+        /// <summary>
+        /// The connected piece of the graph a question is about, the way Graphify answers one: the
+        /// nodes the words match best are the seeds, a breadth-first walk over data flow gives the
+        /// rest (<see cref="QuerySubgraph"/> has the rules), and every node is listed with its links
+        /// to the nodes after it — seeds first, then one step out, two steps out. An assistant
+        /// asking "how does furniture placement work" gets the systems, the requests and events
+        /// between them and where each runs, in one call.
+        /// </summary>
+        public string Query(string text, int limit = DefaultQuerySeeds, int depth = DefaultQueryDepth)
+        {
+            var words = text.Trim();
+            depth = Math.Max(1, Math.Min(MaxQueryDepth, depth));
+            var index = QuerySubgraph.Prepare(_graph, words, _hubThreshold);
+            var subgraph = QuerySubgraph.Build(index, limit, depth, int.MaxValue);
+
+            // Like an unknown name: nothing on stdout that could pass for an answer, exit 4, and
+            // what the words come close to.
+            if (subgraph.Seeds.Count == 0)
+                throw new NodeNotFoundException(words, CloseTo(subgraph.Terms), subgraph.Terms.Count == 0
+                    ? $"nothing to search for in \"{words}\" (words need two letters or more)"
+                    : $"no node matches \"{words}\"");
+
+            var head = new[] { QueryHead(subgraph, words) };
+            var entries = QueryEntries(subgraph);
+
+            // Whole when it fits. Otherwise walked again following fewer links per node, the
+            // strongest, until it does — so that the part shown is still one connected piece and
+            // not the first seed's sixty links. Below the last step the budget cuts as usual.
+            foreach (var links in LinksPerNode)
+            {
+                if (!Capped || head.Sum(l => l.Length + Environment.NewLine.Length) + entries.Sum(e => e.Length) <= _budget * CharsPerToken)
+                    break;
+                subgraph = QuerySubgraph.Build(index, limit, depth, links);
+                entries = QueryEntries(subgraph);
+            }
+
+            return Render(head, () => QuerySummary(subgraph), entries, "nodes");
+        }
+
+        static string QueryHead(QuerySubgraph subgraph, string words)
+        {
+            const int alsoShown = 6;
+            var others = subgraph.Matches.Where(m => !m.Seed).ToList();
+            var also = others.Count == 0
+                ? string.Empty
+                : $" (also: {string.Join(", ", others.Take(alsoShown).Select(m => m.Node.Label))}{(others.Count > alsoShown ? $", … {others.Count - alsoShown} more" : string.Empty)})";
+            var matches = subgraph.Matches.Count;
+            return $"query \"{words}\": {matches} {(matches == 1 ? "node matches" : "nodes match")}; seeds: {string.Join(", ", subgraph.Seeds.Select(SeedLabel))}{also}";
+        }
+
+        /// <summary>
+        /// A seed that won its place by what its code writes or collects says so: its name alone
+        /// has fewer of the words than the components beside it, and an assistant reading
+        /// "PayForOrdersByRequestSystem" for "order paid" should see why it is there.
+        /// </summary>
+        static string SeedLabel(SubgraphNode seed) => seed.Witnesses == null ? seed.Node.Label : $"{seed.Node.Label} ({seed.Witnesses})";
+
+        List<string> QueryEntries(QuerySubgraph subgraph)
+        {
+            var entries = new List<string>();
+            var distance = -1;
+            foreach (var node in subgraph.Nodes)
+            {
+                var entry = new StringBuilder();
+                if (node.Distance != distance)
+                {
+                    distance = node.Distance;
+                    entry.Append(distance == 0 ? "\nSeeds:\n" : $"\n{distance} step{(distance == 1 ? string.Empty : "s")} out:\n");
+                }
+
+                entry.AppendLine($"  {node.Node.Label}  [{Traits(node.Node)}]{QueryNote(node)}{DeclaredIn(node.Node)}");
+                var links = node.Links
+                    .OrderBy(l => Array.IndexOf(VerbOrder, l.Relation))
+                    .ThenBy(l => l.Outgoing ? 0 : 1)
+                    .ThenBy(l => l.Other.Position);
+                var annotated = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var link in links)
+                {
+                    // A hub [Watched] component is not walked through, so the systems reacting to
+                    // the change would never show; the line that changes it names them.
+                    var reactions = link.Outgoing && link.Relation is Relation.Creates or Relation.Removes && annotated.Add(link.Other.Node.Id)
+                        ? ChangeReactions(link.Edges[0], node.Node.Id)
+                        : string.Empty;
+                    entry.AppendLine($"    {Verb(link)} {link.Other.Node.Label}  via {Vias(link)}  {ShortLocation(link.Edges[0])}{reactions}");
+                }
+                if (node.LeftOut.Count > 0)
+                    entry.AppendLine($"    … {node.LeftOut.Count} more link{(node.LeftOut.Count == 1 ? string.Empty : "s")}: {LinkCounts(node.LeftOut)} — explain {node.Node.Label}");
+                entries.Add(entry.ToString());
+            }
+            return entries;
+        }
+
+        static IEnumerable<string> QuerySummary(QuerySubgraph subgraph)
+        {
+            const int hubsShown = 8;
+            var capped = subgraph.LinksPerNode == int.MaxValue ? string.Empty : $", at most {subgraph.LinksPerNode} links per node";
+            var hubs = subgraph.Hubs.Select(h => h.Node.Label).ToList();
+            yield return $"  seeds {subgraph.Seeds.Count}; subgraph: {subgraph.Nodes.Count} nodes, {subgraph.LinkCount} edges, depth {subgraph.Depth}{capped}";
+            yield return "  hubs not expanded: " + (hubs.Count == 0
+                ? "none"
+                : string.Join(", ", hubs.Take(hubsShown)) + (hubs.Count > hubsShown ? $", … {hubs.Count - hubsShown} more" : string.Empty));
+        }
+
+        /// <summary>What a node is, as a query lists it: a system's place in the features, a component's contexts and role.</summary>
+        string Traits(GraphNode node) => node.Kind switch
+        {
+            NodeKind.Component => $"component; {ComponentTraits(node)}",
+            NodeKind.Feature when node.Placements.Count == 0 => node.Root ? "feature; root" : "feature; not registered",
+            _ when node.Kind == NodeKind.System || node.Placements.Count > 0 => $"{node.Kind}; {Placement(node)}",
+            _ => node.Kind
+        };
+
+        string QueryNote(SubgraphNode node)
+        {
+            // A feature only seeds when nothing else matches; it has no data flow to list.
+            if (node.Node.Kind == NodeKind.Feature)
+                return $"  (runs {CountSystems(node.Node.Id, new HashSet<string> { node.Node.Id })} systems — use systems-of {node.Node.Label})";
+            if (!node.Hub)
+                return string.Empty;
+            if (node.Node.Kind != NodeKind.Component)
+                return $"  (hub: touches {node.Written} components in its own code — not expanded; use explain)";
+
+            var incoming = _graph.Incoming(node.Node.Id).ToList();
+            var counts = new[]
+                {
+                    ("read by", Distinct(incoming, Relation.Reads, Relation.Reacts, Relation.Filters)),
+                    ("created by", Distinct(incoming, Relation.Creates)),
+                    ("removed by", Distinct(incoming, Relation.Removes)),
+                    ("destroyed by", Distinct(incoming, Relation.Destroys))
+                }
+                .Where(c => c.Item2 > 0)
+                .Select(c => $"{c.Item1} {c.Item2}");
+            return $"  (hub: {string.Join(", ", counts)} — not expanded; use who-reads/lifecycle)";
+        }
+
+        static string Verb(SubgraphLink link) => link.Outgoing ? link.Relation : Passive(link.Relation);
+
+        /// <summary>
+        /// A query's lines name the file without its folders — on a real project the folders were
+        /// half of every answer. A system's or type's header carries the full path, and that file
+        /// is where nearly all of its lines point; anything else is one file-name search away.
+        /// </summary>
+        static string ShortLocation(GraphEdge edge) =>
+            edge.SourceFile == null ? string.Empty : $"{System.IO.Path.GetFileName(edge.SourceFile)}:{edge.Line}";
+
+        static string DeclaredIn(GraphNode node) =>
+            node.SourceFile != null && node.Kind is NodeKind.System or NodeKind.Type
+                ? $"  {node.SourceFile}{(node.Line > 0 ? ":" + node.Line : string.Empty)}"
+                : string.Empty;
+
+        /// <summary>How, with a * on an inferred edge and the code it was inferred through.</summary>
+        static string Vias(SubgraphLink link)
+        {
+            var vias = string.Join(", ", link.Edges.Select(e => e.Via + (e.Confidence == Confidence.Inferred ? "*" : string.Empty)).Distinct());
+            var through = link.Edges.Where(e => e.Through != null).Select(e => e.Through!).Distinct().ToList();
+            return through.Count == 0
+                ? vias
+                : $"{vias} ({string.Join("; ", through.Take(2))}{(through.Count > 2 ? $"; … {through.Count - 2} more" : string.Empty)})";
+        }
+
+        static string LinkCounts(IEnumerable<SubgraphLink> links) =>
+            string.Join(", ", links.GroupBy(Verb).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key} {g.Count()}"));
+
+        /// <summary>
+        /// For words that match nothing: the nodes containing the longest prefix (four letters at
+        /// least) of a word that does match — a typo seldom sits in the first four letters.
+        /// </summary>
+        List<GraphNode> CloseTo(IEnumerable<string> terms)
+        {
+            var found = new List<GraphNode>();
+            foreach (var term in terms)
+                for (var length = term.Length - 1; length >= 4; length--)
+                {
+                    var prefix = term.Substring(0, length);
+                    var hits = _graph.Nodes.Where(n => n.Label.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                    if (hits.Count == 0)
+                        continue;
+                    found.AddRange(hits);
+                    break;
+                }
+
+            return found.Distinct()
+                .OrderByDescending(n => Degree(n.Id))
+                .ThenBy(n => n.Label, StringComparer.Ordinal)
+                .Take(8)
+                .ToList();
+        }
+
+        // -- the budget ---------------------------------------------------------------------------
+
+        /// <summary>
+        /// The answer as it is, when it fits the budget. Otherwise the head, the summary, as many
+        /// whole entries as fit (at least one) and a line saying what was left out. Entries carry
+        /// their own line breaks, so a multi-line entry is never cut in half.
+        /// </summary>
+        internal string Render(IReadOnlyList<string> head, Func<IEnumerable<string>> summary, IReadOnlyList<string> entries, string noun)
+        {
+            var sb = new StringBuilder();
+            foreach (var line in head)
+                sb.AppendLine(line);
+            var full = sb.Length + entries.Sum(e => e.Length);
+            var limit = _budget * CharsPerToken;
+            if (!Capped || full <= limit)
+            {
+                foreach (var entry in entries)
+                    sb.Append(entry);
+                return sb.ToString();
+            }
+
+            foreach (var line in summary())
+                sb.AppendLine(line);
+            var shown = 0;
+            foreach (var entry in entries)
+            {
+                if (shown > 0 && sb.Length + entry.Length > limit) break;
+                sb.Append(entry);
+                shown++;
+            }
+            sb.AppendLine();
+            sb.AppendLine($"… {entries.Count - shown} more {noun} not shown — the answer is capped at ~{_budget} tokens (--budget 0 prints everything).");
+            return sb.ToString();
+        }
+
+        /// <summary>How many of the nodes sit in each feature (the one that registers them), busiest first.</summary>
+        string ByFeature(IEnumerable<string> ids)
+        {
+            var counts = ids.Select(id => _graph.Node(id)!)
+                .SelectMany(n => n.Placements.Count > 0
+                    ? n.Placements.Select(p => Label(p.Chain.Count > 0 ? p.Chain[p.Chain.Count - 1] : p.Root)).Distinct()
+                    : new[] { n.Kind == NodeKind.System ? "(unregistered)" : "(no feature: queries, services…)" })
+                .GroupBy(label => label)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.Ordinal)
+                .ToList();
+            const int shown = 8;
+            return string.Join(", ", counts.Take(shown).Select(g => $"{g.Key} {g.Count()}")) +
+                   (counts.Count > shown ? $", … {counts.Count - shown} more features" : string.Empty);
+        }
+
+        // -- reactions to [Watched] changes -------------------------------------------------------
+
+        /// <summary>Reacting systems named on a line that writes the component; more in a command's head.</summary>
+        const int ReactorsInline = 3, ReactorsInHead = 6;
+
+        /// <summary>
+        /// A [Watched] component's change reaches the systems reading its XChanged marker, but
+        /// nothing connects them to the system making the change: the graph has `removes Unpaid`
+        /// and, elsewhere, `reacts Unpaid`. Both assistants asked "what happens after the cart is
+        /// committed" in a real test stopped at the first. So a write of a [Watched] component
+        /// names who reacts to it, right on its line.
+        /// </summary>
+        string ChangeReactions(GraphEdge write, string writer)
+        {
+            var target = _graph.Node(write.Target);
+            if (target == null)
+                return string.Empty;
+
+            // Not the systems whose group no write of the writer's can ever match (graph.json `unseen_by`).
+            var writes = _graph.Outgoing(writer).Where(e => e.Target == target.Id && e.Relation is Relation.Creates or Relation.Removes).ToList();
+            var unseen = writes.Count == 0 || writes.Any(w => w.UnseenBy.Count == 0)
+                ? new HashSet<string>(StringComparer.Ordinal)
+                : new HashSet<string>(writes[0].UnseenBy.Select(u => u.System).Where(s => writes.All(w => w.UnseenBy.Any(u => u.System == s))), StringComparer.Ordinal);
+            var reacted = ReactedToBy(target, writer, ReactorsInline, unseen);
+            return reacted == null ? string.Empty : $"  → reacted to by {reacted}";
+        }
+
+        /// <summary>The reactions line of a [Watched] component's who-creates, who-reads and lifecycle.</summary>
+        IEnumerable<string> Reactions(GraphNode component)
+        {
+            var reacted = ReactedToBy(component, null, ReactorsInHead);
+            if (reacted != null)
+                yield return $"  reacted to by (through {MarkerName(component)}, on every add, replace or remove): {reacted}";
+        }
+
+        /// <summary>
+        /// "A, B (creates ShopPurchaseEvent), C, +1 more": the systems of the project reacting to
+        /// the component's changes, in execution order, with the requests and events they create
+        /// — the next hand-off, where an assistant goes next. Generated systems (the watched
+        /// cleanup) are left out. Over the cap, reactors that hand something off are kept first.
+        /// </summary>
+        string? ReactedToBy(GraphNode component, string? except, int cap, IReadOnlyCollection<string>? unseen = null)
+        {
+            if (!component.Attributes.Contains("Watched"))
+                return null;
+
+            var reactors = _graph.Incoming(component.Id)
+                .Where(e => e.Relation == Relation.Reacts && e.Source != except && unseen?.Contains(e.Source) != true)
+                .Select(e => e.Source)
+                .Distinct()
+                .Select(id => _graph.Node(id)!)
+                .Where(n => !n.Generated)
+                .OrderBy(n => SortKey(n.Id), StringComparer.Ordinal)
+                .Select(n => (Node: n, HandOffs: HandOffs(n)))
+                .ToList();
+            if (reactors.Count == 0)
+                return null;
+
+            var shown = new HashSet<string>(reactors.OrderBy(r => r.HandOffs.Count > 0 ? 0 : 1).Take(cap).Select(r => r.Node.Id), StringComparer.Ordinal);
+            var names = reactors.Where(r => shown.Contains(r.Node.Id))
+                .Select(r => r.HandOffs.Count == 0 ? r.Node.Label : $"{r.Node.Label} (creates {string.Join(", ", r.HandOffs)})");
+            return string.Join(", ", names) + (reactors.Count > shown.Count ? $", +{reactors.Count - shown.Count} more" : string.Empty);
+        }
+
+        /// <summary>The requests and events a system creates (two at most).</summary>
+        List<string> HandOffs(GraphNode system) => _graph.Outgoing(system.Id)
+            .Where(e => e.Relation == Relation.Creates && _graph.Node(e.Target)?.MessageRole != null)
+            .Select(e => Label(e.Target))
+            .Distinct()
+            .OrderBy(l => l, StringComparer.Ordinal)
+            .Take(2)
+            .ToList();
+
+        // -- formatting helpers ------------------------------------------------------------------
+
+        int Degree(string id) => _graph.Edges.Count(e => e.Source == id || e.Target == id);
+
+        string Label(string id) => _graph.Node(id)?.Label ?? id;
+
+        string Placement(GraphNode node)
+        {
+            if (node.Placements.Count == 0)
+                return node.Kind == NodeKind.System ? "not registered in any feature" : $"[{node.Kind}]";
+
+            return string.Join("; ", node.Placements.Select(p =>
+            {
+                var feature = p.Chain.Count > 0 ? p.Chain[p.Chain.Count - 1] : p.Root;
+                var index = node.RegisteredIn.FirstOrDefault(r => r.Feature == feature)?.Index;
+                return $"{Label(feature)}{(index != null ? " #" + index : string.Empty)}, {Label(p.Root)} order {p.Order}";
+            }));
+        }
+
+        string SortKey(string id)
+        {
+            var node = _graph.Node(id)!;
+            var placement = node.Placements.OrderBy(p => p.Root, StringComparer.Ordinal).FirstOrDefault();
+            return placement == null ? "~" + node.Label : $"{placement.Root}\u0001{placement.Order:D6}";
+        }
+
+        static string Describe(IEnumerable<GraphEdge> edges) =>
+            string.Join(", ", edges.Select(e => e.Via + (e.Confidence == Confidence.Inferred ? "*" : string.Empty)).Distinct());
+
+        static string Verbs(IEnumerable<GraphEdge> edges) =>
+            string.Join("+", edges.Select(e => e.Relation).Distinct().OrderBy(r => Array.IndexOf(VerbOrder, r)));
+
+        static readonly string[] VerbOrder = { Relation.Creates, Relation.Reads, Relation.Reacts, Relation.Filters, Relation.Removes, Relation.Destroys };
+
+        static string Inferred(IEnumerable<GraphEdge> edges)
+        {
+            var inferred = edges.Where(e => e.Confidence == Confidence.Inferred).Select(e => e.Through).Where(t => t != null).Distinct().ToList();
+            return inferred.Count == 0 || edges.Any(e => e.Confidence == Confidence.Extracted)
+                ? string.Empty
+                : $"  — via {string.Join("; ", inferred)}";
+        }
+
+        static string Attributes(GraphNode node) => $"  [{ComponentTraits(node)}]";
+
+        static string ComponentTraits(GraphNode node)
+        {
+            var parts = new List<string> { string.Join("/", node.Contexts), node.Flag ? "flag" : "data" };
+            parts.AddRange(node.Attributes);
+            if (node.MessageRole != null) parts.Add(node.MessageRole);
+            return string.Join(", ", parts);
+        }
+
+        static int Count(IEnumerable<GraphEdge> edges, string confidence) => edges.Where(e => e.Confidence == confidence).Select(e => e.Source).Distinct().Count();
+
+        static int Distinct(IEnumerable<GraphEdge> edges, params string[] relations) =>
+            edges.Where(e => relations.Contains(e.Relation)).Select(e => e.Source).Distinct().Count();
+
+        static string Through(GraphEdge edge) => edge.Through == null ? string.Empty : $" ({edge.Through})";
+
+        /// <summary>" (if amount &lt; 0)" on a write made only under a condition.</summary>
+        static string Condition(GraphEdge edge) => edge.Condition == null ? string.Empty : $" (if {edge.Condition})";
+
+        static string Location(GraphEdge edge) => edge.SourceFile == null ? string.Empty : $"{edge.SourceFile}:{edge.Line}";
+
+        public static string Passive(string relation) => relation switch
+        {
+            Relation.Creates => "created by",
+            Relation.Reads => "read by",
+            Relation.Filters => "filtered by",
+            Relation.Removes => "removed by",
+            Relation.Destroys => "destroyed by",
+            Relation.Reacts => "reacted to by",
+            Relation.Contains => "registered by",
+            _ => relation + " by"
+        };
+    }
+}

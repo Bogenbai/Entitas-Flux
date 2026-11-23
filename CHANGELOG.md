@@ -11,6 +11,227 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Added
+- **`entitas-graph`: a graph of who creates, reads, filters, removes and destroys each
+  component**, and which features run which systems in what order. ECS systems never call
+  each other, so call graphs and text-based code graphs show them as unrelated; this one is
+  built from the compiler's view of the project, through the same project loader and
+  generator engine as `entitas-gen`. A chained `CreateEntity.Event().AddX()`, a
+  `GameMatcher.X` inside `AllOf`, `isX = false` and a factory that adds components on the
+  system's behalf are all resolved by symbol, in either output mode. Accesses made through
+  query interfaces, factories and helpers are credited to the calling system as INFERRED,
+  naming the code they went through; a generic destroy system is credited with the entities
+  it destroys from what they are made of (`Event` + `Ready`). Root features are discovered,
+  never named, and every system gets its position under each one.
+
+  Commands: `build`, `who-creates`, `who-reads`, `lifecycle`, `path`, `systems-of`,
+  `explain`, `query`, `diff`, `report`, `install`. `build` writes `graph.json` (node-link, close to
+  Graphify's format), `GRAPH_REPORT.md` (components nobody reads, read but never created,
+  requests without a handler, events without a consumer, flags never cleared, unregistered
+  systems…) and `graph.html`, an offline viewer with vis-network inlined. Requests and
+  events are recognised by name suffix (`--request-suffix`, `--event-suffix`). It ships in
+  the package's `Tools~/` next to `entitas-gen`.
+
+  Made to be asked by AI assistants as much as by people: every answer is capped at about
+  2000 tokens (`--budget`, `0` for no cap). A component half the code touches would
+  otherwise answer with hundreds of readers (~23 000 tokens). An answer over the cap starts
+  with a summary by feature or root, then says what it left out. `who-reads` of an event costs
+  ~400 tokens where grep and reading the files that mention it costs ~6000. `graph.json`
+  (~1.4 M tokens on that project) is for programs, and the documentation says so.
+
+  `query <words>` answers with the connected piece of the graph, like Graphify's: the
+  best-matching nodes seed a breadth-first walk over data flow (`--depth`, default 2;
+  `--limit` seeds, default 5), each edge listed once, each system with its feature and order.
+  Names are matched word for word by stem (`placement` finds `PlaceFurnitureByRequestSystem`
+  and `FurniturePlacedEvent`), a word in the name counts for more than one in the namespace,
+  and words like "how" are skipped. Nodes with more than 40 neighbours over edges written in
+  their own code (an `Id`, a position) are marked as hubs and not walked through; a factory's
+  inferred edges never make one. A system named after an event that is already a seed gets
+  no seed of its own (it is one step out anyway), so `query hire worker` seeds the request
+  and the system that handle hiring, where the flow starts. Between names that match equally
+  well, a system ranks by what its own code writes (then what its groups collect): `query
+  order paid` seeds `PayForOrdersByRequestSystem (creates OrderIsPaidEvent, Paid)`, though
+  its name never says "paid". When the subgraph does not fit the budget, each node keeps only
+  its strongest links, so what fits stays connected.
+
+  `flow <Component|System>` answers "what happens after it" in one call: requests and events
+  to their readers, a `[Watched]` change to the systems reacting to it, components no entity
+  keeps — `--depth` system hops (default 4), each step labelled with where its system runs
+  and whether it sees the data the same frame or the next. Frames come from feature order
+  alone: cleanup systems run after every execute system, a reader waits for `Ready` when the
+  events convention adds it, and where order cannot tell, the step says "frame unknown"
+  rather than guess. Every hand-off says where it ends (destroyed, removed, cleared). On a
+  2000-file project `flow CommitCartRequest` is ~1 900 tokens and includes the second-order
+  branches (request → handler → event → statistics) that assistants following events one hop
+  at a time had missed.
+
+  A write that happens only under a condition says so — `creates CoinsSpentEvent [event]
+  (if currencyTypeId == Coins && amount < 0)`, `!(…)` for an else, `case X` for a switch — in
+  `flow`, `explain`, `who-creates` and `graph.html`, and `graph.json` links carry it as an
+  optional `condition`. What a system writes through a factory or helper is one `by calling
+  Factory.Method:` line after its own writes, with that call's requests and events followed
+  beneath it: `flow PlaceFurnitureRequest` dropped from ~2 250 to ~1 400 tokens, and an
+  assistant no longer reads the factory as the creator of the system's events. A condition
+  names every enclosing clause, outermost first, cut at the tail past ~70 characters; a
+  private method called only under a condition passes it to its writes (`PayForCart()` under
+  `if (itemCount > 0)` → `if (CanAfford())`); a lambda passed with a `when:`-style bool runs
+  under it; an `if`/`else` pair cancels out. `explain` of a system names who else reads the
+  requests it handles.
+
+  None of it depends on a project's naming. Requests and events are recognised by what
+  happens to their entities as well as by name: a component whose every holder a reader's
+  loop destroys (directly, or by marking it for a sweeper) is a request; one created only with
+  such a consumed marker and read on its own is an event. A request put on an entity that lives
+  on (a cat asked to leave) counts too when its handler's loop takes it off every entity it
+  visits and does other work there (`consumed_by_removal` in `graph.json`); cleanup-phase
+  removers, "done" flags and components that mirror one the loop skips are left out, and
+  requests consumed only under a condition keep needing their suffix, which the report now
+  lists. A `goto` that lands on the `Destroy()` skips nothing; a component only a frame-end
+  sweep destroys (a tick made every frame) is a one-frame signal, not a request. `flow`, `query` and `explain` follow
+  them in projects without `*Request`/`*Event`, and a matching suffix still wins; only the
+  report's four request/event sections stay name-based, since a request nobody handles can't
+  be found by structure. A `when:`-style helper is read from its body (`if (gate) apply(self);`),
+  whatever its parameter is called. A second test project with different names throughout (a
+  space port: `DockingOrder`, `Pulse` + `Armed`, `Doomed`, `Fresh`, `.Apply(…, gate:)`) proves
+  it; on the production project every answer stayed byte-identical, and with suffixes that
+  match nothing `flow CommitCartRequest` still follows the whole chain.
+
+  A helper's writes are credited to a calling system only on branches its arguments can
+  reach: constants (enum members, literals, `const`, `nameof`) are followed through
+  parameters, locals, return values and the fields an object is built with, so a spawner
+  passing `Customer` no longer creates what a factory adds only in `case Worker` — on the
+  production project 88 false inferred edges went and 25 conditions got simpler. Enum
+  members in conditions are written without their type. `flow` leaves out a system reacting
+  to a `[Watched]` change when its group needs a component the changed entity never gets
+  (furniture is never a cat; `graph.json` records it on the write as `unseen_by`), a reaction
+  that never sees a change names its other triggers, and an answer near its budget drops its
+  "also, not followed" lines first. A reader also waits for what the new entity carrying a
+  request is made without: for the system adding it (`next frame (waits for Stamp from
+  StampParcelsSystem #9)`), or `frame unknown (waits for View, added after an await)` when it
+  arrives after an `await`, a coroutine's `yield` or outside the systems — `waits` on the write
+  in `graph.json`. Factories injected through an interface the project implements once are
+  followed, so `unseen_by` sees past them too. A reader that destroys a request only under a
+  condition, when nothing else takes it, says so — `destroys it only once target.hasHueAnimator
+  (HueAnimator is added only after an await)` — and the steps after it lose their `[+N]`;
+  `added_late` in `graph.json` marks components every write of which comes after an `await`.
+  A call through an interface or abstract method now reaches every override, through abstract
+  classes too, so a system binding views is credited with what each view's registrars add
+  (`who-creates HueAnimator` names the view binders; +430 inferred edges on the production
+  project, build time unchanged). What the graph leaves out on purpose, or cannot know from
+  the code, is listed on the [ECS graph](https://github.com/Bogenbai/Entitas-Flux/wiki/ECS-Graph#what-it-does-not-see)
+  wiki page under *What it does not see*.
+
+  A jump nested in another `if` before a write makes the write conditional too:
+  `ForbidViewAttachByRequest` destroys its request only once `!(targetEntity != null &&
+  targetEntity.isLoadingView)`, and `flow` says it waits. A reaction is no longer presented as
+  certain when the call making the `[Watched]` change also takes off a component the reactor
+  needs: it is marked `(the same call may take off CatAnimator, which it needs)` and recorded
+  as `may_miss`, so detaching a view no longer reads as playing confetti. Lateness is decided
+  per call path: `added_late` means every way is late, the new `sometimes_late` that some are
+  (`(HueAnimator can arrive after an await)`), and `waits` counts only the systems that can add
+  the component to that entity — when some add it at once and others late, both are listed
+  (`added_by`, `late_by`) and the frame is unknown.
+
+  `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
+  (`/`, every word must match), filters that double as the legend, back/forward and
+  `#node=…` links, hover to fade what a node is not connected to (from the canvas or the side
+  panel), a side panel with conditions, placements and CLI commands to copy, a project
+  overview (`O`) and keyboard shortcuts (`?`). Every search lays out alike — neighbours in
+  rings around the node — and is framed by measuring the nodes with their labels. In a narrow
+  window the frame leaves room for the legend and the search list stays on screen; long
+  conditions wrap; without a link the page opens on the overview, which says why that node is
+  drawn; a page opened in a background tab draws itself when it is shown. Stacked under the
+  panel, the ring is flattened to the stage so its labels stay readable.
+
+  `diff` shows what changed in the data flow: the edges each component gained and lost,
+  systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
+  what one commit changed (its first parent against it; a merge says so), `diff --ref A
+  --ref B` compares two refs, `diff --ref A` a ref with the working tree, `diff old.json
+  [new.json]` two saved graphs. Each side at a ref is built from `git archive` in a temporary
+  folder, so the checkout is never touched; ~4 s for one ref, ~5.5 s for two (built in
+  parallel) on a 2000-file project. `diff --commit` of a change that moved three statistics
+  systems from one event to another shows exactly those edges, however much changed since.
+
+  `[Watched]` reactions are visible from the system that causes them: `explain` and `query`
+  end each create or remove of a `[Watched]` component with the systems reacting to it and
+  the requests or events they create; `XChanged` names resolve to the component
+  (`who-reads UnpaidChanged` lists the reactions); `path` labels a hop by the edge that
+  carries data (reacts or reads before filters). In the report, a flag set in the loop that
+  marks its entity for a generic destroyer (`isDestructed = true`) counts as destroyed with
+  it, also through a helper called with the loop variable, and flags a setter keeps out of
+  its own group with `NoneOf` get their own section ("set once on purpose?"), as do flags set
+  only on entities that carry a transient component (one with `[Cleanup]`, or one a system
+  takes off every holder, like `JustCreated`), with the reason. `graph.html` draws data
+  flow — reads, filters and reactions point from the component into the system — with a
+  legend, and frames a found node with its neighbours. The same code always writes the same
+  `graph.json`: the sources are walked in parallel but assembled in path order.
+
+  `install` tells the project's AI assistant to use all this instead of grepping: a short
+  block in `CLAUDE.md` in the repository root (and `AGENTS.md` when present) naming the tool
+  by a path relative to that file — by glob for a UPM install, whose folder name changes
+  with every update — plus `entitas-graph-out/` in `.gitignore`. It also writes two short
+  commands next to that file, `./entitas-graph` (sh) and `entitas-graph.cmd` (cmd and
+  PowerShell), which find the tool and the Unity root themselves, so the block names
+  `./entitas-graph who-reads <Component>`, and a package update needs no new `install`. For
+  Claude Code it adds a hook to `.claude/settings.json`, next to the project's own, that stops
+  any read of `graph.json` or `graph.html` and says what to ask the graph instead
+  (`--no-claude-hook` skips it). The block also tells the
+  assistant to open the files an answer names before changing code, since links through calls
+  and frames are inferred and DI, scenes and prefabs are not in the graph. Re-running replaces the
+  block and leaves the rest of the file alone, and `build` says when the block was written by
+  another version; `uninstall` takes it out.
+
+  Tested on a production project (1906 files plus ~900 generated, 772 components, 747
+  systems, 88 features): a build takes 2.2–2.8 s; fresh AI agents answering six ECS questions
+  used ~22% fewer tokens with the graph than with grep (half on a broad search, which also ran
+  5.5× faster) and invented nothing, where grep-only agents once invented a reader. The tree-sitter graph that missed both producers and
+  all 7 consumers of an event component now finds them: 2 creators, 7 readers, all in the
+  achievements feature, and the generic system that destroys it.
+- **Shift+F6 on a component, then regenerate, is a complete rename in file mode.** An IDE
+  rename of the class renames the class and every reference to the type, the generated files
+  included, but not the members the generator derives from its name (`AddHealth`, `hasHealth`,
+  `GameMatcher.Health`, `IAnyHealthListener.OnAnyHealth`, …) — so the next regeneration
+  deleted them from under the code still using them. Now the files about to be deleted give
+  the rename away (they still declare the old API but already reference the new class), and
+  the guess is verified by generating as if the class still had its old name, which must
+  reproduce the generated files on disk exactly. Unity then asks before deleting anything —
+  *"Component 'Health' looks renamed to 'Hp' — update usages of AddHealth, hasHealth, …?"*
+  with *Update usages*, *Regenerate only* and *Not now* — and `entitas-gen` prints the rename
+  and its usages, writes nothing and exits 1 until it is re-run with `--apply-renames` or
+  `--ignore-renames`. The usages are rewritten by the same engine as `[RenameTo]`, in the
+  declaring assembly and in every assembly that references it, before Unity compiles. Nothing
+  is rewritten when the pairing is ambiguous (several components renamed, added or deleted in
+  one generation): generation goes on as before, with a warning. A component deleted while
+  another is added is not a rename, and a rename nothing uses is regenerated without a
+  question. The check only runs when a generation is about to delete files, so adding or
+  editing components costs nothing extra.
+
+### Changed
+- The README is short again: what the framework does, with a picture or a few lines of code per
+  feature. The guides moved to the [wiki](https://github.com/Bogenbai/Entitas-Flux/wiki): installation, code
+  generation and its options, generated files, renaming, debug hooks and the ECS graph.
+- `entitas-rename` (and *Tools → Entitas → Rename Component…*) stops with an explanation when
+  an IDE rename of another component is still waiting for that decision, instead of planning
+  against generated files that are about to change. It no longer looks for usages in
+  `.Player.csproj` twins, which are the same assemblies compiled with player defines.
+
+### Fixed
+- ***Generate Automatically* turned itself off, and its checkmark did not show its state.**
+  The setting lived in EditorPrefs, which on macOS is one store for the whole machine: every
+  running editor works from the copy it read at launch and writes that whole copy back with
+  its next preference, so another editor open on another project could switch it off here.
+  Generation then stopped and the next compile used stale generated files (`ENT0004`,
+  `CS1061`). It is now kept per project and per user, in `UserSettings/EditorUserSettings.asset`
+  (out of version control in Unity's `.gitignore`, so it is not imposed on a team). Unity
+  writes that file when the project is saved or closed; a crash before then falls back to the
+  default, on, which is the safe side. The old machine-wide value is not carried over, since it
+  may belong to any project on the machine: the switch starts on in every project, and a
+  project that had it off needs it turned off once more. The checkmark follows the setting on
+  every change and for a few seconds after every load, because Unity rebuilds its menus some
+  frames after an editor assembly changes and clears it; before, it was set only while the
+  menu was being drawn, so it read unchecked in a fresh editor and anything checking it
+  without opening the menu got a stale answer.
+
 ## [0.5.0] - 2026-11-22
 
 ### Added

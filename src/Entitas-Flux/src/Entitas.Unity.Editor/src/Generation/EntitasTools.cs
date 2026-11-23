@@ -21,6 +21,10 @@ namespace Entitas.Unity.Editor.Generation
         public const string GeneratorName = "entitas-gen";
         public const string RenameName = "entitas-rename";
 
+        // These two stay in EditorPrefs, unlike "Generate Automatically": they are paths on this
+        // machine, meaningless on another, set by hand and never written by the package. Mind
+        // that a ToolsPath then serves every project on the machine, whatever its package version.
+
         /// <summary>EditorPrefs key: a folder holding entitas-gen.dll, overriding the bundled copy.</summary>
         public const string ToolsPathPreference = "Entitas.Generation.ToolsPath";
 
