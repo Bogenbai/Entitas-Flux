@@ -42,16 +42,32 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   `query <words>` answers with the connected piece of the graph, like Graphify's: the
   best-matching nodes seed a breadth-first walk over data flow (`--depth`, default 2;
   `--limit` seeds, default 5), each edge listed once, each system with its feature and order.
-  Nodes with more than 40 neighbours (an `Id`, a position, the `Event` flag) are marked as
-  hubs and not walked through; when the subgraph does not fit the budget, each node keeps
+  Names are matched word for word by stem (`placement` finds `PlaceFurnitureByRequestSystem`
+  and `FurniturePlacedEvent`), a word in the name counts for more than one in the namespace,
+  and words like "how" are skipped. Nodes with more than 40 neighbours over edges written in
+  their own code (an `Id`, a position) are marked as hubs and not walked through; a factory's
+  inferred edges never make one. When the subgraph does not fit the budget, each node keeps
   only its strongest links, so what fits stays connected.
 
-  `diff --ref <branch|commit>` (or `diff old.json [new.json]`) shows what changed in the data
-  flow: the edges each component gained and lost, systems added, removed or moved, findings
-  that appeared or went away. The old side is built from `git archive` in a temporary folder,
-  so the checkout is never touched; ~4 s on a 2000-file project. Against the commit before a
-  change that moved three statistics systems from one event to another, it shows exactly
-  those six edges.
+  `diff` shows what changed in the data flow: the edges each component gained and lost,
+  systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
+  what one commit changed (its first parent against it; a merge says so), `diff --ref A
+  --ref B` compares two refs, `diff --ref A` a ref with the working tree, `diff old.json
+  [new.json]` two saved graphs. Each side at a ref is built from `git archive` in a temporary
+  folder, so the checkout is never touched; ~4 s for one ref, ~5.5 s for two (built in
+  parallel) on a 2000-file project. `diff --commit` of a change that moved three statistics
+  systems from one event to another shows exactly those edges, however much changed since.
+
+  `[Watched]` reactions are visible from the system that causes them: `explain` and `query`
+  end each create or remove of a `[Watched]` component with the systems reacting to it and
+  the requests or events they create; `XChanged` names resolve to the component
+  (`who-reads UnpaidChanged` lists the reactions); `path` labels a hop by the edge that
+  carries data (reacts or reads before filters). In the report, a flag set in the loop that
+  marks its entity for a generic destroyer (`isDestructed = true`) counts as destroyed with
+  it, also through a helper called with the loop variable, and flags a setter keeps out of
+  its own group with `NoneOf` get their own section ("set once on purpose?"). `graph.html`
+  draws data flow — reads, filters and reactions point from the component into the system —
+  with a legend.
 
   `install` tells the project's AI assistant to use all this instead of grepping: a short
   block in `CLAUDE.md` in the repository root (and `AGENTS.md` when present) naming the tool
@@ -59,8 +75,10 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   with every update — plus `entitas-graph-out/` in `.gitignore`. Re-running replaces the
   block and leaves the rest of the file alone; `uninstall` takes it out.
 
-  On a production project (1906 files plus ~900 generated, 772 components, 747 systems,
-  88 features) a build takes 2.2–2.8 s. The tree-sitter graph that missed both producers and
+  Tested on a production project (1906 files plus ~900 generated, 772 components, 747
+  systems, 88 features): a build takes 2.2–2.8 s; fresh AI agents answering six ECS questions
+  used ~22% fewer tokens with the graph than with grep (half on a broad search, which also ran
+  5.5× faster) and invented nothing, where grep-only agents once invented a reader. The tree-sitter graph that missed both producers and
   all 7 consumers of an event component now finds them: 2 creators, 7 readers, all in the
   achievements feature, and the generic system that destroys it.
 

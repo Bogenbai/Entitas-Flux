@@ -434,7 +434,7 @@ RequestPlacementSystem → UnlockAchievementSystem: 4 hops
 `systems-of` lists what a feature runs, in order, with nested features expanded:
 ```text
 $ entitas-graph systems-of GameplayFeature
-GameplayFeature (root) — 11 systems
+GameplayFeature (root) — 20 systems
     1. MarkEventsReadySystem  [Execute]
     2. FurnitureFeature (feature)
          1. RequestPlacementSystem  [Execute]
@@ -446,7 +446,7 @@ GameplayFeature (root) — 11 systems
 `query` answers a question in words with the connected piece of the graph around it, like Graphify's `query`. The nodes whose names match the words best are the seeds (`--limit`, default 5). Names are matched word by word, by stem, so `placement` finds `PlaceFurnitureByRequestSystem` and `FurniturePlacedEvent`, `cat` does not find `Indicator`, and words like `how`, `does` and `on` are skipped. A word in the name counts for more than one in the namespace, which every system of a feature shares. Among names that match equally, the one with the fewest other words wins (`PlaceFurnitureByRequestSystem` before `EndFurniturePlacementOnBuildModeStopSystem`), then the one with more edges written in its own code. From the seeds it walks data flow two steps out (`--depth`, 1 to 4): a component leads to whoever creates, reads or destroys it, a system to the components it touches. Each node lists its links to the nodes after it, so every edge appears once, on the side nearer the seeds. Feature registration is not walked; it shows as the system's place. A hub is a node with more than 40 neighbours over edges written in the code: an `Id`, a position, a factory. It is reached but not walked through, and marked as such. Inferred edges do not count toward a hub, because a system whose factory call adds 50 components is often the very system the question is about. Link lines name the file; a system's header carries its full path.
 ```text
 $ entitas-graph query placed event --limit 1
-query "placed event": 7 nodes match; seeds: FurniturePlacedEvent (also: RequestPlacementSystem, Event, DestroyEventsSystem, PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, MarkEventsReadySystem)
+query "placed event": 9 nodes match; seeds: FurniturePlacedEvent (also: RequestPlacementSystem, Event, DestroyEventsSystem, PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, MarkEventsReadySystem, … 2 more)
 
 Seeds:
   FurniturePlacedEvent  [component; Game, data, event]
@@ -492,6 +492,7 @@ Names may drop the `Component` suffix. The `XChanged` marker of a [`[Watched]`](
 ```text
 $ entitas-graph who-reads Selected --budget 40
 Selected — read by 4 (4 direct, 0 inferred)
+  reacted to by (through SelectedChanged, on every add, replace or remove): HighlightOnSelectedSystem
   by feature: FurnitureFeature 3, (unregistered) 1
   SelectSystem  [NoneOf]  FurnitureFeature #4, GameplayFeature order 5
       filters via NoneOf  Assets/Systems/FurnitureSystems.cs:63
