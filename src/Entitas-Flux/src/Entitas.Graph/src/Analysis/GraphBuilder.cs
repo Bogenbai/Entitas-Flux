@@ -288,12 +288,13 @@ namespace Entitas.Graph.Analysis
 
             // Requests and events by what happens to their entities — loops, conditions and
             // creation sites exist only here, so the conclusion goes into the graph for the queries.
-            var messages = Messages.Classify(context, accesses, destroys, groups);
+            var messages = Messages.Classify(context, accesses, destroys, calls, groups);
             foreach (var node in graph.Nodes)
             {
                 if (node.Kind != NodeKind.Component || !messages.TryGetValue(node.Label, out var message))
                     continue;
                 node.Message = message.Kind;
+                node.ConsumedByRemoval = message.Removed;
                 (message.Kind == Messages.Request ? node.ConsumedBy : node.CarriedBy).AddRange(message.By);
             }
 
@@ -958,6 +959,9 @@ namespace Entitas.Graph.Analysis
         /// <summary>That foreach: writes sharing it land on the same entities.</summary>
         public string? Loop;
 
+        /// <summary>For writes: the outermost foreach the write sits in (TreeWalker.OuterLoop), whatever entity it lands on.</summary>
+        public string? Within;
+
         /// <summary>
         /// For writes in a foreach of the accessor itself (not through a helper): the write runs
         /// on every entity the loop visits — no condition, no jump before it.
@@ -1017,6 +1021,9 @@ namespace Entitas.Graph.Analysis
         public bool EveryEntity;
         public bool Steady;
 
+        /// <summary>As <see cref="Access.Within"/>.</summary>
+        public string? Within;
+
         public string File = string.Empty;
         public int Line;
         public Condition? Condition;
@@ -1035,6 +1042,9 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>The call itself, for the values it passes (<see cref="ConstantArguments.Bind"/>), worked out only where they matter.</summary>
         public InvocationExpressionSyntax? Syntax;
+
+        /// <summary>As <see cref="Access.Within"/>.</summary>
+        public string? Within;
     }
 
     sealed class RegistrationSite

@@ -45,6 +45,15 @@ namespace Entitas.Graph.Output
             foreach (var root in features.Where(f => f.Root).OrderBy(f => f.Label, StringComparer.Ordinal))
                 sb.AppendLine($"- root feature **{root.Label}** runs {systems.Count(s => s.Placements.Any(p => p.Root == root.Id))} systems");
             sb.AppendLine($"- messages: {Messages(components, "request", graph.Metadata.RequestSuffix)}; {Messages(components, "event", graph.Metadata.EventSuffix)}");
+
+            // The gap is on purpose, and only the suffix closes it: said here so that nobody takes
+            // it for a bug to fix by loosening the structure, or turns the suffix off.
+            var byNameOnly = components.Where(c => c.Role == "request" && c.Message != "request").Select(c => $"`{c.Label}`").ToList();
+            if (byNameOnly.Count > 0)
+                sb.AppendLine($"  - {byNameOnly.Count} of the requests are found by name only: no loop handling them also destroys or removes them every time " +
+                              "it runs — they wait for something, are taken off elsewhere, or nobody handles them. The structure leaves those to the " +
+                              "name on purpose (a hint that lives until a window opens looks the same), so keep `--request-suffix`: " +
+                              string.Join(", ", byNameOnly.Take(5)) + (byNameOnly.Count > 5 ? $" and {byNameOnly.Count - 5} more" : string.Empty));
             sb.AppendLine();
 
             sb.AppendLine("## Most connected components");

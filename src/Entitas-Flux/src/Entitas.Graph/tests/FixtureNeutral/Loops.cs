@@ -57,13 +57,30 @@ namespace Harbor
         }
     }
 
-    /// <summary>A root of its own, run after the frame: the sweepers.</summary>
+    /// <summary>A root of its own, run after the frame: the sweepers, then the yard.</summary>
     public sealed class LateLoop : Feature
     {
         public LateLoop(Contexts contexts)
         {
             Add(new SweepPulsesSystem(contexts.port));
             Add(new SweepDoomedSystem(contexts.port));
+            Add(new Yard(contexts));
+        }
+    }
+
+    /// <summary>Work on ships that are already there, asked for or not.</summary>
+    public sealed class Yard : Feature
+    {
+        public Yard(Contexts contexts)
+        {
+            Add(new RepaintHullsSystem(contexts.port));
+            Add(new TowHullsSystem(contexts.signal, contexts.port));
+            Add(new AnswerHailsSystem(contexts.port));
+            Add(new LogSightingsSystem(contexts.port));
+            Add(new HoistColoursSystem(contexts.port));
+            Add(new StrikeColoursSystem(contexts.port));
+            Add(new SurveyHullsSystem(contexts.port));
+            Add(new ReturnSalutesSystem(contexts.port));
         }
     }
 }

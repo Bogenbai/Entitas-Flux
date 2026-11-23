@@ -241,6 +241,20 @@ namespace Entitas.Graph.Analysis
 
         IMethodSymbol? _execute, _cleanup;
 
+        /// <summary>
+        /// Whether <paramref name="method"/> runs at the end of the frame: a system's Cleanup(), or
+        /// any method of a system with a Cleanup() and no Execute(). What a cleanup takes off was
+        /// there for the whole frame, for whoever read it then.
+        /// </summary>
+        public bool RunsInCleanup(IMethodSymbol method)
+        {
+            var type = method.ContainingType;
+            if (_cleanup == null || type.FindImplementationForInterfaceMember(_cleanup) is not IMethodSymbol cleanup)
+                return false;
+            return SymbolEqualityComparer.Default.Equals(cleanup.OriginalDefinition, method.OriginalDefinition) ||
+                   _execute == null || type.FindImplementationForInterfaceMember(_execute) == null;
+        }
+
         /// <summary>The conditions a helper runs its delegate parameter under (Analysis.HelperConditions), worked out once per helper and parameter.</summary>
         public readonly ConcurrentDictionary<(IMethodSymbol Method, string Parameter), IReadOnlyList<(string Parameter, bool Negated)>?> HelperConditions =
             new ConcurrentDictionary<(IMethodSymbol, string), IReadOnlyList<(string, bool)>?>(new MethodParameterComparer());

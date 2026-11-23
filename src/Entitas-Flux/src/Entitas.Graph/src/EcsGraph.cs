@@ -85,13 +85,21 @@ namespace Entitas.Graph
         /// <summary>
         /// "request" or "event" by what happens to the entities holding it, whatever its name
         /// (Analysis.Messages): a request is consumed — every entity holding it is destroyed by
-        /// the loops of systems reading it (<see cref="ConsumedBy"/>); an event rides on an
+        /// the loops of systems reading it, or a handler's loop takes it off every live entity
+        /// (<see cref="ConsumedBy"/>); an event rides on an
         /// entity carrying a consumed marker and is read on its own (<see cref="CarriedBy"/>).
         /// </summary>
         public string? Message;
 
-        /// <summary>For a request by structure: the systems whose loops over it destroy, or mark for destruction, every entity holding it.</summary>
+        /// <summary>
+        /// For a request by structure: the systems whose loops over it destroy, or mark for
+        /// destruction, every entity holding it — or, with <see cref="ConsumedByRemoval"/>, take
+        /// it off every one and do some work there (a request on a live entity).
+        /// </summary>
         public List<string> ConsumedBy = new List<string>();
+
+        /// <summary>The request's consumers remove it; the entity holding it lives on.</summary>
+        public bool ConsumedByRemoval;
 
         /// <summary>For an event by structure: the consumed markers it is created with (Event, Pulse), whose destroyers take it along.</summary>
         public List<string> CarriedBy = new List<string>();
@@ -323,6 +331,7 @@ namespace Entitas.Graph
                         if (n.TransientRemovedBy.Count > 0) WriteStrings(w, "transient_removed_by", n.TransientRemovedBy);
                         if (n.Message != null) w.WriteString("message", n.Message);
                         if (n.ConsumedBy.Count > 0) WriteStrings(w, "consumed_by", n.ConsumedBy);
+                        if (n.ConsumedByRemoval) w.WriteBoolean("consumed_by_removal", true);
                         if (n.CarriedBy.Count > 0) WriteStrings(w, "carried_by", n.CarriedBy);
                     }
                     if (n.Interfaces.Count > 0) WriteStrings(w, "interfaces", n.Interfaces);
@@ -444,6 +453,7 @@ namespace Entitas.Graph
                     Flag = Bool(n, "flag"),
                     Role = Str(n, "role"),
                     Message = Str(n, "message"),
+                    ConsumedByRemoval = Bool(n, "consumed_by_removal"),
                     Root = Bool(n, "root")
                 };
                 node.Contexts.AddRange(Strs(n, "contexts"));

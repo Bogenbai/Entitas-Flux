@@ -43,4 +43,20 @@ namespace Harbor
     [Port, Watched] public sealed class Gauge : IComponent { public int Value; }
 
     [Signal, Unique] public sealed class Clock : IComponent { public int Value; }
+
+    // In the yard. An order put on a ship that is already there is taken off once handled, the
+    // ship lives on; one handled only once the clock runs is a message by name alone.
+    [Port] public sealed class RepaintOrder : IComponent { public int Value; }  // RepaintHullsSystem paints the hull and takes it off
+    [Port] public sealed class Paint : IComponent { public int Value; }
+    [Port] public sealed class TowOrder : IComponent { public int Value; }      // TowHullsSystem destroys it, but not before the clock runs
+
+    // Taken off ships, and no one's request: cleared and nothing else, cleared with only a "done"
+    // flag set, taken down at the end of the frame, struck because Priority went, or set and
+    // taken off by the same system.
+    [Port] public sealed class Hailed : IComponent { }
+    [Port] public sealed class Sighted : IComponent { }
+    [Port] public sealed class Logged : IComponent { }
+    [Port] public sealed class Salute : IComponent { }
+    [Port] public sealed class Colours : IComponent { }
+    [Port] public sealed class SurveyDue : IComponent { }
 }

@@ -12,6 +12,9 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>For a request, the ids of the systems consuming it; for an event, the ids of the markers carrying it.</summary>
         public List<string> By = new List<string>();
+
+        /// <summary>A request its consumers take off a live entity rather than destroy with it.</summary>
+        public bool Removed;
     }
 
     /// <summary>
@@ -42,16 +45,27 @@ namespace Entitas.Graph.Analysis
     ///   request (FloatingTextOrigin on a ChangeCurrencyRequest, collected with the request).
     /// - request-like: consumed and no marker; its consumers are the systems whose loops over a
     ///   group requiring it destroy or mark every entity.
+    /// - request-like by removal: a request put on a live entity (a ship asked to repaint itself)
+    ///   is taken off, not destroyed with it. It is consumed by a loop over a group requiring it
+    ///   that removes it from every entity it visits, unconditionally, and does something else
+    ///   there too — writes another component, or makes or destroys an entity, in the loop or in
+    ///   a method it calls — when someone other than that system sets it. The work is what tells
+    ///   a handler from a loop that only takes a marker off (ForgetFreshSystem, a JustCreated
+    ///   remover); generated [Cleanup] systems never count. What destruction says comes first: a
+    ///   component it consumes is a request or plumbing already. The loop may skip entities with
+    ///   NoneOf (a suspended cat's leave request waits): unlike a sweep's, its entities live on
+    ///   either way, and the request is still the handler's when it gets to it.
     ///
-    /// Not a message, on purpose: a component taken off rather than destroyed with its entity
-    /// (transient, GraphBuilder.TransientComponents); an entity destroyed only sometimes — under a
-    /// condition, after a continue, in a nested loop, behind a guard on anything but its own group
-    /// (`if (!_pathfinding.IsInitialized) return;`: requests wait, or hints live until a window
-    /// opens; the structure cannot tell which) — or from outside a loop over its group (a
-    /// furniture entity sold); a sweep that spares some entities with NoneOf. Nor what a loop
-    /// does by passing the entity to a helper (`Expire(offer)`): InferDestroysFromMarking follows
-    /// that one level, but whether the helper does it to every entity is not known there. A
-    /// request nobody reads is never consumed, so only its name can say what it is.
+    /// Not a message, on purpose: a component taken off by a loop that does nothing else
+    /// (transient, GraphBuilder.TransientComponents); an entity destroyed, or a request removed,
+    /// only sometimes — under a condition, after a continue, in a nested loop, behind a guard on
+    /// anything but its own group (`if (!_pathfinding.IsInitialized) return;`: requests wait, or
+    /// hints live until a window opens; the structure cannot tell which, so their names have to)
+    /// — or from outside a loop over its group (a furniture entity sold); a sweep that spares
+    /// some entities with NoneOf. Nor what a loop does by passing the entity to a helper
+    /// (`Expire(offer)`): InferDestroysFromMarking follows that one level, but whether the helper
+    /// does it to every entity is not known there. A request nobody reads is never consumed, so
+    /// only its name can say what it is.
     /// </summary>
     static class Messages
     {
@@ -77,7 +91,7 @@ namespace Entitas.Graph.Analysis
         }
 
         public static Dictionary<string, MessageInfo> Classify(
-            BuildContext context, List<Access> accesses, List<DestroySite> destroys, Dictionary<ISymbol, GroupShape> groups)
+            BuildContext context, List<Access> accesses, List<DestroySite> destroys, List<CallSite> calls, Dictionary<ISymbol, GroupShape> groups)
         {
             var loops = new SortedDictionary<string, Loop>(StringComparer.Ordinal);
             Loop? LoopOf(string? key, ISymbol? group, TypeInfo system)
@@ -217,7 +231,133 @@ namespace Entitas.Graph.Analysis
                     Kind = Event,
                     By = pair.Value.Select(name => context.ComponentByName(name)!.Id).ToList()
                 };
+
+            // Taken off by its handler: a request, even where its creation looked like an event's.
+            foreach (var pair in ConsumedByRemoval(context, accesses, destroys, calls, groups))
+                if (!consumedBy.ContainsKey(pair.Key))
+                    messages[pair.Key] = new MessageInfo { Kind = Request, By = pair.Value, Removed = true };
             return messages;
+        }
+
+        /// <summary>
+        /// Requests on live entities, by the handler's loop that takes them off: steady, over a
+        /// group requiring the component (no AnyOf or XChanged, whose entities need not hold what
+        /// the loop is looking at), removing it from every entity it visits, never setting it
+        /// again, and doing some work of its own — while someone else sets it. Returns component
+        /// name → those handlers' ids.
+        ///
+        /// Three shapes that pass all that are no handlers, and are left out:
+        /// - a remover in the cleanup phase (<see cref="BuildContext.RunsInCleanup"/>): what it
+        ///   takes off was up for the whole frame, for its readers — a one-frame flag (IntervalUp
+        ///   on a timer, whose cleanup also rewinds the timer), not a request handed to the remover;
+        /// - a "done" flag the group skips with NoneOf is how a loop sees each entity once, no
+        ///   work (JustCreated taken off, CreationProcessed set);
+        /// - a NoneOf naming what the component's setter requires: the component follows that
+        ///   one (an indicator's id attached while the stand is cooking, detached once it stops),
+        ///   so it is state, taken off because something else went. Any other NoneOf only makes a
+        ///   request wait (a suspended cat leaves once it is resumed).
+        /// </summary>
+        static Dictionary<string, List<string>> ConsumedByRemoval(
+            BuildContext context, List<Access> accesses, List<DestroySite> destroys, List<CallSite> calls, Dictionary<ISymbol, GroupShape> groups)
+        {
+            var found = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var removals = accesses
+                .Where(a => a.Relation == Relation.Removes && a.Steady && a.EveryEntity && a.Guard == null && !a.MayClear &&
+                            a.Accessor.Kind == NodeKind.System && !a.Accessor.Generated && IsOwn(a.Component) && a.Loop != null &&
+                            a.Group != null && groups.TryGetValue(a.Group, out var shape) &&
+                            shape.AllOf.Contains(a.Component.Name) && shape.AnyOf.Count == 0 && shape.Changes.Count == 0 &&
+                            a.Method != null && !context.RunsInCleanup(a.Method))
+                .ToList();
+            if (removals.Count == 0)
+                return found;
+
+            // What each of those loops writes, on any entity: in its body, or on its entities in a
+            // helper it passes them to (Access.Loop). The calls in it are followed below, only for
+            // loops that write nothing else themselves.
+            var loops = new HashSet<string>(removals.Select(r => r.Loop!), StringComparer.Ordinal);
+            var written = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var write in accesses.Where(a => a.Relation == Relation.Creates))
+                foreach (var loop in new[] { write.Within, write.Loop }.Distinct())
+                    if (loop != null && loops.Contains(loop))
+                    {
+                        if (!written.TryGetValue(loop, out var names))
+                            written[loop] = names = new HashSet<string>(StringComparer.Ordinal);
+                        names.Add(write.Component.Name);
+                    }
+            var destroying = new HashSet<string>(destroys.SelectMany(d => new[] { d.Within, d.Loop }).OfType<string>().Where(loops.Contains), StringComparer.Ordinal);
+            var calling = calls.Where(c => c.Within != null && loops.Contains(c.Within))
+                .GroupBy(c => c.Within!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Select(c => c.Callee).ToList(), StringComparer.Ordinal);
+
+            var removed = new HashSet<string>(removals.Select(r => r.Component.Name), StringComparer.Ordinal);
+            var setters = accesses.Where(a => a.Relation == Relation.Creates && removed.Contains(a.Component.Name))
+                .GroupBy(a => a.Component.Name, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+            Dictionary<IMethodSymbol, HashSet<string>>? writesByMethod = null;
+            HashSet<IMethodSymbol>? destroyingMethods = null;
+            Dictionary<IMethodSymbol, List<IMethodSymbol>>? calleesByMethod = null;
+
+            // Whether a call made in the loop gets, within the depth Propagate follows, to a write
+            // of something other than the request itself, or to a Destroy().
+            bool CallsWork(IEnumerable<IMethodSymbol> callees, string request)
+            {
+                writesByMethod ??= accesses.Where(a => a.Relation == Relation.Creates && a.Method != null)
+                    .GroupBy<Access, IMethodSymbol>(a => a.Method!, SymbolEqualityComparer.Default)
+                    .ToDictionary<IGrouping<IMethodSymbol, Access>, IMethodSymbol, HashSet<string>>(
+                        g => g.Key, g => g.Select(a => a.Component.Name).ToHashSet(StringComparer.Ordinal), SymbolEqualityComparer.Default);
+                destroyingMethods ??= new HashSet<IMethodSymbol>(destroys.Select(d => d.Method).OfType<IMethodSymbol>(), SymbolEqualityComparer.Default);
+                calleesByMethod ??= calls.GroupBy<CallSite, IMethodSymbol>(c => c.Caller, SymbolEqualityComparer.Default)
+                    .ToDictionary<IGrouping<IMethodSymbol, CallSite>, IMethodSymbol, List<IMethodSymbol>>(
+                        g => g.Key, g => g.Select(c => c.Callee).ToList(), SymbolEqualityComparer.Default);
+
+                var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                var frontier = context.Dispatch(callees).ToList();
+                for (var depth = 0; depth < context.Options.MaxCallDepth && frontier.Count > 0; depth++)
+                {
+                    var next = new List<IMethodSymbol>();
+                    foreach (var method in frontier.Where(visited.Add))
+                    {
+                        if (destroyingMethods.Contains(method) || writesByMethod.TryGetValue(method, out var names) && names.Any(n => n != request))
+                            return true;
+                        if (calleesByMethod.TryGetValue(method, out var further))
+                            next.AddRange(context.Dispatch(further));
+                    }
+                    frontier = next;
+                }
+                return false;
+            }
+
+            foreach (var removal in removals)
+            {
+                var name = removal.Component.Name;
+                var loop = removal.Loop!;
+                var shape = groups[removal.Group!];
+                var writes = written.TryGetValue(loop, out var names) ? names : new HashSet<string>(StringComparer.Ordinal);
+
+                // Set again in the same loop, it stays on some entities; set only by the handler, it
+                // is the handler's own bookkeeping, not something handed to it.
+                if (writes.Contains(name) || !setters.TryGetValue(name, out var sets) || sets.All(s => s.Accessor.Id == removal.Accessor.Id))
+                    continue;
+
+                // Put on while the entity holds what this loop skips, taken off once it does not.
+                if (sets.Any(s => s.Group != null && groups.TryGetValue(s.Group, out var setter) && setter.AllOf.Any(shape.NoneOf.Contains)))
+                    continue;
+
+                // Nothing done but the removal, and the "done" flag the group skips.
+                if (!writes.Any(w => !shape.NoneOf.Contains(w)) && !destroying.Contains(loop) &&
+                    !(calling.TryGetValue(loop, out var callees) && CallsWork(callees, name)))
+                    continue;
+
+                if (!found.TryGetValue(name, out var handlers))
+                    found[name] = handlers = new List<string>();
+                if (!handlers.Contains(removal.Accessor.Id))
+                    handlers.Add(removal.Accessor.Id);
+            }
+
+            foreach (var handlers in found.Values)
+                handlers.Sort(StringComparer.Ordinal);
+            return found;
         }
 
         /// <summary>A component of the project's own, not a generated companion (XChanged, a listener).</summary>

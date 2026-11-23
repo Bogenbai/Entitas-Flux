@@ -153,7 +153,7 @@ namespace Entitas.Graph.Tests
             // followed, each with its own condition, so a caller can tell which branch is its own.
             Lines(output).Should().ContainInOrder(
                 "OpenShopSystem  #21 (ShopFeature) [+0]  Systems/ShopSystems.cs:153",
-                "creates Till  [transient]  ShopSystems.cs:166",
+                "creates Till  [request, transient]  ShopSystems.cs:166",
                 "read+removed by SettleTillSystem  #22 (ShopFeature)  same frame [+0]  ShopSystems.cs:177",
                 "creates CoinsSpentEvent  [event]  (if till.Till < 0)  ShopSystems.cs:184",
                 "read by CountCoinsSystem  #24 (ShopFeature)  next frame (waits for Ready from MarkEventsReadySystem #1) [+1]  ShopSystems.cs:210",
@@ -179,7 +179,7 @@ namespace Entitas.Graph.Tests
             // creates (its line, under it at its own indent), with the call's condition; the event
             // made through the call is still followed, under that line.
             lines.Should().ContainInOrder(
-                "creates Till  [transient]  ShopSystems.cs:166",
+                "creates Till  [request, transient]  ShopSystems.cs:166",
                 "by calling ShopkeeperFactory.Create: creates 3 (ShopOpenedEvent, Event, Shopkeeper)  (if _keepers.count == 0)  Infrastructure.cs:65",
                 "creates ShopOpenedEvent  [event]  Infrastructure.cs:66",
                 "read by GreetCustomersSystem  #23 (ShopFeature)  next frame (waits for Ready) [+1]  ShopSystems.cs:197");

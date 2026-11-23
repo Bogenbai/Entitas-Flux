@@ -149,7 +149,7 @@ namespace Entitas.Graph.Tests
             messages.Should().BeEquivalentTo(new Dictionary<string, string>
             {
                 ["DockingOrder"] = "request", ["RefuelOrder"] = "request", ["SaleOrder"] = "request", ["ScrapFleetOrder"] = "request",
-                ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
+                ["RepaintOrder"] = "request", ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
             });
 
             // Who consumes a request is the reader whose loop destroys it, or marks it Doomed.
@@ -162,6 +162,46 @@ namespace Entitas.Graph.Tests
             // nested in the scrap order's: it lives on otherwise. The plumbing is no message either.
             foreach (var name in new[] { "Ship", "ShipId", "Hull", "Fuel", "Cargo", "Wrecked", "Fresh", "Registered", "Pulse", "Armed", "Doomed", "Clock" })
                 Node(name).MessageRole.Should().BeNull(name + " is no message");
+        }
+
+        [Fact]
+        public void An_order_put_on_a_ship_is_a_request_its_handler_takes_off()
+        {
+            // The panel puts RepaintOrder on a ship that is already there; RepaintHullsSystem
+            // paints the hull and takes the order off every ship it visits. The ship lives on.
+            var repaint = Node("RepaintOrder");
+            repaint.Message.Should().Be("request");
+            repaint.ConsumedBy.Select(Label).Should().Equal("RepaintHullsSystem");
+            repaint.ConsumedByRemoval.Should().BeTrue();
+            Node("DockingOrder").ConsumedByRemoval.Should().BeFalse("its handler destroys it");
+
+            Queries.Explain("RepaintOrder").Should().Contain(
+                "  role: request (by structure: consumed by RepaintHullsSystem, which removes it, not the entity)\n");
+            Graph.ToJson().Should().Contain(
+                "\"message\": \"request\",\n      \"consumed_by\": [\n        \"system:Harbor.RepaintHullsSystem\"\n      ],\n      \"consumed_by_removal\": true");
+        }
+
+        [Fact]
+        public void Taking_a_component_off_is_no_handling_unless_the_loop_does_something_else_for_it()
+        {
+            // ForgetFreshSystem only takes Fresh off; AnswerHailsSystem only clears Hailed;
+            // LogSightingsSystem sets nothing but the Logged its own group skips.
+            Node("Fresh").Message.Should().BeNull("ForgetFreshSystem only unmarks");
+            Node("Hailed").Message.Should().BeNull("AnswerHailsSystem clears it and writes nothing else");
+            Node("Sighted").Message.Should().BeNull("a \"done\" flag the group skips is no work");
+
+            // These two repaint, but are no handlers either: a salute is up for the whole frame and
+            // taken down in Cleanup; Colours is struck because Priority, which HoistColoursSystem
+            // requires, went — it follows Priority.
+            Node("Salute").Message.Should().BeNull("ReturnSalutesSystem runs in Cleanup");
+            Node("Colours").Message.Should().BeNull("StrikeColoursSystem skips what the setter requires");
+
+            // SurveyHullsSystem repaints too, but marks the hulls itself: nobody hands it SurveyDue.
+            Node("SurveyDue").Message.Should().BeNull("only its handler sets it");
+
+            // Destroyed only after `if (!_signal.hasClock) return;`: the order may wait, and the
+            // structure leaves it alone; the name finds it (Suffixes_that_name_…).
+            Node("TowOrder").Message.Should().BeNull("TowHullsSystem destroys it only once the clock runs");
         }
 
         [Fact]
@@ -185,7 +225,7 @@ namespace Entitas.Graph.Tests
             Section(report, "Flags set once on purpose?").Should().Contain(
                 "- `Registered` set by `RegisterShipsSystem` — the setter only sees entities while they have `Fresh`, which `ForgetFreshSystem` removes");
             Section(report, "State flags that are never cleared").Should().Contain("None.");
-            report.Should().Contain("- messages: 0 requests by name (`*Request`), 4 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
+            report.Should().Contain("- messages: 0 requests by name (`*Request`), 5 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
             report.Should().NotContain("JustCreated").And.NotContain("GameCleanupSystems");
             Section(report, "Requests without a handler").Should().Contain("go by name (`--request-suffix`, `--event-suffix`)");
         }
@@ -297,10 +337,17 @@ namespace Entitas.Graph.Tests
             named.Nodes.Where(n => n.Role != null).Select(n => (n.Label, n.Role))
                 .Should().BeEquivalentTo(new[]
                 {
-                    ("DockingOrder", "request"), ("RefuelOrder", "request"), ("SaleOrder", "request"), ("ScrapFleetOrder", "request"), ("ShipDocked", "event")
+                    ("DockingOrder", "request"), ("RefuelOrder", "request"), ("SaleOrder", "request"), ("ScrapFleetOrder", "request"),
+                    ("RepaintOrder", "request"), ("TowOrder", "request"), ("ShipDocked", "event")
                 });
-            named.Nodes.Where(n => n.Role != null).Should().OnlyContain(n => n.Message == n.Role);
             named.Nodes.Single(n => n.Label == "CargoUnloaded").MessageRole.Should().Be("event", "no suffix names it; the structure still does");
+
+            // But for one: TowOrder is destroyed only once the clock runs, which the structure
+            // leaves alone on purpose — the name is what finds it.
+            named.Nodes.Where(n => n.Role != null && n.Message != n.Role).Select(n => n.Label).Should().Equal("TowOrder");
+            named.Nodes.Single(n => n.Label == "TowOrder").MessageRole.Should().Be("request");
+            GraphReport.Build(named).Should().Contain("  - 1 of the requests are found by name only: ")
+                .And.Contain("so keep `--request-suffix`: `TowOrder`\n");
 
             var byName = new GraphQueries(named, budget: 0);
             byName.Flow("DockingOrder").Should().Be(Queries.Flow("DockingOrder"));

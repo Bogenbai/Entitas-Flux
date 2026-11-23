@@ -246,6 +246,7 @@ namespace Entitas.Graph.Analysis
                 TraceEntity(access, entity ?? Receiver(name));
                 access.Origin = _origins.Of(entity ?? Receiver(name));
                 access.Condition = ConditionOf(name);
+                access.Within = OuterLoop(name);
             }
 
             _result.Accesses.Add(access);
@@ -980,6 +981,23 @@ namespace Entitas.Graph.Analysis
         string LoopKey(ForEachStatementSyntax forEach) => $"{_file}:{forEach.SpanStart}";
 
         /// <summary>
+        /// The outermost foreach whose body holds <paramref name="node"/> in its member, whatever
+        /// it walks: a steady loop (<see cref="IsSteady"/>) sits in no other loop, so for anything
+        /// in one this is that loop — what a handler's loop does besides consuming its request
+        /// (<see cref="Messages"/>), on any entity. Lambdas inside the body count: they are how
+        /// fluent helpers take their writes (`entity.With(x =&gt; x.isY = true)`). What the
+        /// foreach walks (`_query.Requests()`) is not its body.
+        /// </summary>
+        string? OuterLoop(SyntaxNode node)
+        {
+            ForEachStatementSyntax? outer = null;
+            for (SyntaxNode? child = node, current = node.Parent; current != null && current is not MemberDeclarationSyntax; child = current, current = current.Parent)
+                if (current is ForEachStatementSyntax forEach && child == forEach.Statement)
+                    outer = forEach;
+            return outer == null ? null : LoopKey(outer);
+        }
+
+        /// <summary>
         /// A write on a helper's parameter (<c>UnapplyShake(shake)</c> called from
         /// <c>foreach (var shake in _shakes)</c>) lands on whatever entity the callers pass. When
         /// every call in the same type passes the variable of one and the same foreach, the write
@@ -1161,7 +1179,8 @@ namespace Entitas.Graph.Analysis
                     Method = EnclosingMethod(invocation),
                     File = _file,
                     Line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
-                    Condition = ConditionOf(invocation)
+                    Condition = ConditionOf(invocation),
+                    Within = OuterLoop(invocation)
                 };
                 if (invocation.Expression is MemberAccessExpressionSyntax target)
                 {
@@ -1207,7 +1226,7 @@ namespace Entitas.Graph.Analysis
 
             var caller = EnclosingMethod(invocation);
             if (caller != null)
-                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation), Syntax = invocation });
+                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation), Syntax = invocation, Within = OuterLoop(invocation) });
             else
                 _result.CalledOutsideMethods.Add(callee);
         }

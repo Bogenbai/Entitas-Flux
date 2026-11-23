@@ -97,5 +97,22 @@ namespace Harbor
         public void OnSellPressed(int shipId) => Make.Blank().AddSaleOrder(shipId);
 
         public void OnScrapFleetPressed() => Make.Blank().isScrapFleetOrder = true;
+
+        // The yard's buttons act on a ship that is already there, but for the tow.
+        public void OnRepaintPressed(PortEntity ship, int colour) => ship.AddRepaintOrder(colour);
+
+        public void OnTowPressed(int shipId) => Make.Blank().AddTowOrder(shipId);
+
+        public void OnHailPressed(PortEntity ship) => ship.isHailed = true;
+
+        public void OnSightPressed(PortEntity ship) => ship.isSighted = true;
+
+        public void OnSalutePressed(PortEntity ship) => ship.isSalute = true;
+    }
+
+    /// <summary>Paints whatever hull it is handed: the yard's work happens in here, not in the yard's loop.</summary>
+    public static class Brushes
+    {
+        public static void Coat(PortEntity hull, int colour) => hull.ReplacePaint(colour);
     }
 }

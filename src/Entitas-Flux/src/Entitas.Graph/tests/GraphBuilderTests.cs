@@ -132,7 +132,13 @@ namespace Entitas.Graph.Tests
             // its name says it is a request. Event (the marker) and Destructed carry and doom, and
             // are no messages; Ready is no message because a Ready entity alone lives on.
             Graph.Nodes.Where(n => n.Role != null && n.Role != n.Message).Select(n => n.Label).Should().Equal("OrphanRequest");
-            Graph.Nodes.Where(n => n.Message != null && n.Role == null).Should().BeEmpty();
+
+            // Till has no suffix, and is one all the same: OpenShopSystem hands it over, and
+            // SettleTillSystem turns it into an event and takes it off.
+            var till = Graph.Nodes.Where(n => n.Message != null && n.Role == null).Should().ContainSingle().Subject;
+            till.Label.Should().Be("Till");
+            till.ConsumedBy.Select(Label).Should().Equal("SettleTillSystem");
+            till.ConsumedByRemoval.Should().BeTrue();
             Graph.Nodes.Single(n => n.Label == "PlaceFurnitureRequest").ConsumedBy.Select(Label).Should().Equal("PlaceFurnitureByRequestSystem");
             Graph.Nodes.Single(n => n.Label == "FurniturePlacedEvent").CarriedBy.Select(Label).Should().Equal("Event");
             foreach (var plumbing in new[] { "Event", "Ready", "Destructed", "JustSpawned", "ShopItem" })
