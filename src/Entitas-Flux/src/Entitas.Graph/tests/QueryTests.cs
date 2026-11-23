@@ -58,6 +58,43 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void The_start_of_a_flow_seeds_before_the_readers_named_after_its_event()
+        {
+            var output = new GraphQueries(HireFlow(), budget: 0).Query("hire worker");
+
+            // The readers of WorkerHiredEvent match both words, as the event does, and would take
+            // four of the five seeds; the request and its handler say only "hire". As seeds the
+            // readers say nothing the event does not: the event lists them one step out.
+            output.Split('\n')[0].Should().Be("query \"hire worker\": 16 nodes match; " +
+                                              "seeds: WorkerHiredEvent, Worker, HireByRequestSystem, HireRequest, HireWindow " +
+                                              "(also: IncrementWorkersHiredStatSystem, SendWorkerHiredAnalyticsSystem, AddClothesToWardrobeOnWorkerHiredSystem, " +
+                                              "UnlockHireFirstWorkerAchievementSystem, WorkersQuery, WorkerFiredEvent, … 5 more)");
+            Sections(output)["1 step out:"].Should().Contain(new[]
+            {
+                "IncrementWorkersHiredStatSystem", "SendWorkerHiredAnalyticsSystem", "AddClothesToWardrobeOnWorkerHiredSystem",
+                "UnlockHireFirstWorkerAchievementSystem", "WorkersQuery"
+            });
+            Links(output).Should().Contain(("WorkerHiredEvent", "created by", "HireByRequestSystem"))
+                .And.Contain(("HireByRequestSystem", "reads", "HireRequest"));
+        }
+
+        [Fact]
+        public void A_reader_of_a_seeded_event_seeds_only_for_words_the_event_lacks()
+        {
+            var graph = HireFlow();
+
+            // The reader that adds clothes has "wardrobe", which the event lacks: it seeds, ahead of the event.
+            new GraphQueries(graph, budget: 0).Query("wardrobe worker hired").Should()
+                .StartWith("query \"wardrobe worker hired\": 17 nodes match; seeds: AddClothesToWardrobeOnWorkerHiredSystem, WorkerHiredEvent, Worker, ");
+
+            // WorkersQuery outranks the event on edges and is picked first; the event takes its slot
+            // when it comes, so the rule does not hang on which of the two won the tie.
+            var output = new GraphQueries(graph, budget: 0).Query("worker");
+            output.Should().StartWith("query \"worker\": 13 nodes match; seeds: Worker, WorkerHiredEvent, WorkerFiredEvent, OccupyWorkerSlotsSystem, OpenWorkerWindowSystem (also: WorkersQuery, ");
+            Sections(output)["1 step out:"].Should().Contain("WorkersQuery");
+        }
+
+        [Fact]
         public void A_feature_seeds_only_when_nothing_else_matches()
         {
             // FurnitureFeature outranks Furniture by degree, but it has no data flow to walk.
@@ -223,18 +260,8 @@ namespace Entitas.Graph.Tests
         static EcsGraph PlacementFeature()
         {
             var graph = new EcsGraph();
-
-            string Node(string kind, string fullName, string? role = null)
-            {
-                graph.Nodes.Add(new GraphNode { Id = fullName, Label = fullName.Substring(fullName.LastIndexOf('.') + 1), Kind = kind, FullName = fullName, Role = role });
-                return fullName;
-            }
-
-            void Edge(string source, string relation, string target, string? through = null) => graph.Edges.Add(new GraphEdge
-            {
-                Source = source, Target = target, Relation = relation, Via = relation == Relation.Reads ? "AllOf" : "Add",
-                Confidence = through == null ? Confidence.Extracted : Confidence.Inferred, Through = through, SourceFile = "Code.cs", Line = graph.Edges.Count + 1
-            });
+            string Node(string kind, string fullName, string? role = null) => AddNode(graph, kind, fullName, role);
+            void Edge(string source, string relation, string target, string? through = null) => AddEdge(graph, source, relation, target, through);
 
             var request = Node(NodeKind.Component, "Game.Furniture.PlaceFurnitureRequest", "request");
             var placed = Node(NodeKind.Component, "Game.Furniture.FurniturePlacedEvent", "event");
@@ -280,6 +307,67 @@ namespace Entitas.Graph.Tests
             Edge(Node(NodeKind.System, "Game.Placement.StartReplacingByClickSystem"), Relation.Creates, replacing);
             return graph;
         }
+
+        /// <summary>
+        /// What made `query hire worker` miss the start of the flow on a 2000-file project, in
+        /// miniature. A window creates HireRequest, HireByRequestSystem handles it and raises
+        /// WorkerHiredEvent, and four systems named after the event react to it. The event and
+        /// its readers say both words; the request and its handler say only "hire". Worker is
+        /// state much of the code reads, so it wins its tie with the handler on edges, and
+        /// WorkersQuery, a query class, reads the event and more components than the event has
+        /// edges — as WardrobeQuery does WardrobeChangedEvent there.
+        /// </summary>
+        static EcsGraph HireFlow()
+        {
+            var graph = new EcsGraph();
+            string Node(string kind, string fullName, string? role = null) => AddNode(graph, kind, fullName, role);
+            void Edge(string source, string relation, string target) => AddEdge(graph, source, relation, target);
+
+            var request = Node(NodeKind.Component, "Game.Cats.HireRequest", "request");
+            var hired = Node(NodeKind.Component, "Game.Cats.WorkerHiredEvent", "event");
+            var fired = Node(NodeKind.Component, "Game.Cats.WorkerFiredEvent", "event");
+            var worker = Node(NodeKind.Component, "Game.Cats.Worker");
+            var id = Node(NodeKind.Component, "Game.Common.Id");
+            var cloth = Node(NodeKind.Component, "Game.Wardrobe.AddClothToWardrobeRequest", "request");
+
+            Edge(Node(NodeKind.Type, "Game.Ui.HireWindow"), Relation.Creates, request);
+            var hire = Node(NodeKind.System, "Game.Cats.HireByRequestSystem");
+            Edge(hire, Relation.Reads, request);
+            Edge(hire, Relation.Destroys, request);
+            Edge(hire, Relation.Reads, id);
+            Edge(hire, Relation.Creates, worker);
+            Edge(hire, Relation.Creates, hired);
+            Edge(Node(NodeKind.System, "Game.Cats.FireByRequestSystem"), Relation.Creates, fired);
+
+            foreach (var reader in new[]
+                     {
+                         "Game.Analytics.SendWorkerHiredAnalyticsSystem", "Game.Statistics.IncrementWorkersHiredStatSystem",
+                         "Game.Achievements.UnlockHireFirstWorkerAchievementSystem", "Game.Wardrobe.AddClothesToWardrobeOnWorkerHiredSystem"
+                     })
+                Edge(Node(NodeKind.System, reader), Relation.Reads, hired);
+            Edge("Game.Wardrobe.AddClothesToWardrobeOnWorkerHiredSystem", Relation.Creates, cloth);
+
+            foreach (var reader in new[] { "OccupyWorkerSlotsSystem", "OpenWorkerWindowSystem", "ApplyRushHourSpeedToWorkersSystem", "UnoccupyUsablesOfNonWorkersSystem", "RedirectWorkersOnShiftChangedSystem" })
+                Edge(Node(NodeKind.System, "Game.Cats." + reader), Relation.Reads, worker);
+
+            var query = Node(NodeKind.Type, "Game.Cats.WorkersQuery");
+            Edge(query, Relation.Reads, hired);
+            foreach (var component in new[] { worker, id, Node(NodeKind.Component, "Game.Cats.Salary"), Node(NodeKind.Component, "Game.Cats.Mood"), Node(NodeKind.Component, "Game.Cats.Energy"), Node(NodeKind.Component, "Game.Cats.Skill") })
+                Edge(query, Relation.Reads, component);
+            return graph;
+        }
+
+        static string AddNode(EcsGraph graph, string kind, string fullName, string? role = null)
+        {
+            graph.Nodes.Add(new GraphNode { Id = fullName, Label = fullName.Substring(fullName.LastIndexOf('.') + 1), Kind = kind, FullName = fullName, Role = role });
+            return fullName;
+        }
+
+        static void AddEdge(EcsGraph graph, string source, string relation, string target, string? through = null) => graph.Edges.Add(new GraphEdge
+        {
+            Source = source, Target = target, Relation = relation, Via = relation == Relation.Reads ? "AllOf" : "Add",
+            Confidence = through == null ? Confidence.Extracted : Confidence.Inferred, Through = through, SourceFile = "Code.cs", Line = graph.Edges.Count + 1
+        });
 
         // -- reading an answer -----------------------------------------------------------------
 

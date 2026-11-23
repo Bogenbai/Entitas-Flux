@@ -17,7 +17,9 @@ namespace Entitas.Graph.Output
     /// in it, so it cannot tell the central one from the rest; and among names that say the
     /// words equally well, the one that says least besides them. Edge counts only break the
     /// ties left, and only edges written in the code count: a factory call credits a system
-    /// with forty components, which says nothing about how central it is.
+    /// with forty components, which says nothing about how central it is. A reader of a seeded
+    /// event that says no word the event does not is no seed (<see cref="ChooseSeeds"/>): the
+    /// event shows it one step out, and the slot goes to what starts the flow.
     ///
     /// On a real project a plain walk reaches most of the graph in two steps, through the few
     /// components everything touches (an Id, a position, the Destructed flag). Two rules keep it
@@ -88,7 +90,7 @@ namespace Entitas.Graph.Output
             // place of a system that does something; the systems it runs name it in their
             // placement. Only when nothing else matches do features (or loose types) seed.
             var candidates = result.Matches.Where(n => index.Flow(n.Node.Id).Count > 0).ToList();
-            result.Seeds = (candidates.Count > 0 ? candidates : result.Matches).Take(Math.Max(1, seedLimit)).ToList();
+            result.Seeds = ChooseSeeds(index, candidates.Count > 0 ? candidates : result.Matches, Math.Max(1, seedLimit));
             if (result.Seeds.Count == 0)
                 return result;
 
@@ -102,6 +104,45 @@ namespace Entitas.Graph.Output
             result.Nodes = Walk(index, result.Seeds, depth, linksPerNode);
             return result;
         }
+
+        /// <summary>
+        /// The best matches, but never a reader of a seeded event that matches no word the event
+        /// does not. Such a reader usually matches because it is named after the event it reacts
+        /// to (SendWorkerHiredAnalyticsSystem, WorkerHiredEvent), and as a seed it covers nothing
+        /// of the question the event does not: the event lists it one step out, near the top of
+        /// its links, since it matches the words. Asked "hire worker" on a 2000-file project, the
+        /// event and three such readers took four of the five seeds, and the request and the
+        /// system raising the event — which say only "hire", and are where the flow starts — were
+        /// left under "also".
+        ///
+        /// Only readers of an event. A request's reader is the system doing the work, and the
+        /// request, its handler and the event it raises are neighbours that make the best seeds
+        /// together. A component's readers in general can be many, and the per-node cap under the
+        /// budget would hide them; an event has few. An event that ranks below its reader still
+        /// takes the reader's slot, so the rule does not hang on which of the two won a tie on
+        /// edges. A slot is not handed back when too few others match: --limit is a maximum, and
+        /// the reader is in the answer either way.
+        /// </summary>
+        static List<SubgraphNode> ChooseSeeds(Index index, IReadOnlyList<SubgraphNode> ranked, int limit)
+        {
+            var seeds = new List<SubgraphNode>();
+            foreach (var node in ranked)
+            {
+                if (seeds.Count == limit)
+                    break;
+                if (seeds.Any(seed => EchoesEvent(index, node, seed)))
+                    continue;
+                seeds.RemoveAll(seed => EchoesEvent(index, seed, node));
+                seeds.Add(node);
+            }
+            return seeds;
+        }
+
+        /// <summary>The reader reads the event and matches none of the words the event does not.</summary>
+        static bool EchoesEvent(Index index, SubgraphNode reader, SubgraphNode @event) =>
+            @event.Node.Role == "event" &&
+            (reader.MatchedTerms & ~@event.MatchedTerms) == 0 &&
+            index.Flow(@event.Node.Id).Any(e => e.Source == reader.Node.Id && e.Target == @event.Node.Id && e.Relation == Relation.Reads);
 
         /// <summary>
         /// Breadth-first, a level at a time, so a level can be put in answer order before any of
@@ -298,6 +339,7 @@ namespace Entitas.Graph.Output
                     Reacted = node.Attributes.Contains("Watched") &&
                               Flow(node.Id).Any(e => e.Relation == Relation.Reacts && e.Target == node.Id && Graph.Node(e.Source)?.Generated == false),
                     Score = facts.Score,
+                    MatchedTerms = facts.MatchedTerms,
                     LabelScore = facts.LabelScore,
                     OtherWords = facts.OtherWords,
                     Degree = facts.Degree,
@@ -334,11 +376,11 @@ namespace Entitas.Graph.Output
                     {
                         space ??= NameWords.NamespaceWords(node.FullName);
                         if (NameWords.Match(Terms[t], _stems[t], space) != NameWords.Fit.None)
-                            facts.Score++;
+                            facts.Matched(t);
                         continue;
                     }
 
-                    facts.Score++;
+                    facts.Matched(t);
                     facts.LabelScore += (int)fit;
                 }
 
@@ -353,6 +395,14 @@ namespace Entitas.Graph.Output
             sealed class Facts
             {
                 public int Score, LabelScore, OtherWords, Degree, Neighbours, Written;
+                public ulong MatchedTerms;
+
+                public void Matched(int term)
+                {
+                    Score++;
+                    if (term < 64)
+                        MatchedTerms |= 1UL << term;
+                }
             }
         }
     }
@@ -364,6 +414,13 @@ namespace Entitas.Graph.Output
 
         /// <summary>How many of the query's words its name or namespace has, as words.</summary>
         public int Score;
+
+        /// <summary>
+        /// Which of the words those are, one bit per word in query order: what tells a reader
+        /// named after an event from one that says more than the event. A query of more than 64
+        /// words compares its first 64.
+        /// </summary>
+        public ulong MatchedTerms;
 
         /// <summary>
         /// How well its name alone has them: 2 a word (by stem: placement finds Place), 1 the start
