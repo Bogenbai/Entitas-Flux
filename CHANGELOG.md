@@ -11,6 +11,32 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Added
+- **Shift+F6 on a component, then regenerate, is a complete rename in file mode.** An IDE
+  rename of the class renames the class and every reference to the type, the generated files
+  included, but not the members the generator derives from its name (`AddHealth`, `hasHealth`,
+  `GameMatcher.Health`, `IAnyHealthListener.OnAnyHealth`, …) — so the next regeneration
+  deleted them from under the code still using them. Now the files about to be deleted give
+  the rename away (they still declare the old API but already reference the new class), and
+  the guess is verified by generating as if the class still had its old name, which must
+  reproduce the generated files on disk exactly. Unity then asks before deleting anything —
+  *"Component 'Health' looks renamed to 'Hp' — update usages of AddHealth, hasHealth, …?"*
+  with *Update usages*, *Regenerate only* and *Not now* — and `entitas-gen` prints the rename
+  and its usages, writes nothing and exits 1 until it is re-run with `--apply-renames` or
+  `--ignore-renames`. The usages are rewritten by the same engine as `[RenameTo]`, in the
+  declaring assembly and in every assembly that references it, before Unity compiles. Nothing
+  is rewritten when the pairing is ambiguous (several components renamed, added or deleted in
+  one generation): generation goes on as before, with a warning. A component deleted while
+  another is added is not a rename, and a rename nothing uses is regenerated without a
+  question. The check only runs when a generation is about to delete files, so adding or
+  editing components costs nothing extra.
+
+### Changed
+- `entitas-rename` (and *Tools → Entitas → Rename Component…*) stops with an explanation when
+  an IDE rename of another component is still waiting for that decision, instead of planning
+  against generated files that are about to change. It no longer looks for usages in
+  `.Player.csproj` twins, which are the same assemblies compiled with player defines.
+
 ## [0.5.0] - 2026-11-22
 
 ### Added

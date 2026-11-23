@@ -55,6 +55,11 @@ namespace Entitas.SourceGenerator.Cli
             Console.Error.WriteLine("  -p, --project <csproj>  Generate for this project only (repeatable). Default: every");
             Console.Error.WriteLine("                          csproj in the root that declares [assembly: ContextDefinition].");
             Console.Error.WriteLine("      --check             Write nothing; exit 1 if any generated file is out of date.");
+            Console.Error.WriteLine("      --apply-renames     A component was renamed in the IDE (Shift+F6) and code still uses");
+            Console.Error.WriteLine("                          its old generated API (AddHealth, hasHealth, …): update those usages,");
+            Console.Error.WriteLine("                          then regenerate. Without it such a rename is printed and nothing is");
+            Console.Error.WriteLine("                          written (exit 1).");
+            Console.Error.WriteLine("      --ignore-renames    Regenerate anyway, leaving those usages to break.");
             Console.Error.WriteLine("  -v, --verbose           List every file written or deleted.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  entitas-gen <csproj> <output-dir>   Write into <output-dir> whatever the Output setting.");
@@ -87,7 +92,11 @@ namespace Entitas.SourceGenerator.Cli
                     continue;
                 }
 
-                var result = GenerationHost.RunProject(csproj, root, new WriterOptions { Check = options.Check });
+                var result = GenerationHost.RunProject(csproj, root, new WriterOptions
+                {
+                    Check = options.Check,
+                    Renames = options.Renames
+                });
                 GenerationHost.Print(result, root, options.Verbose, Console.Out);
                 failed |= GenerationHost.Failed(result, options.Check);
             }
@@ -115,7 +124,8 @@ namespace Entitas.SourceGenerator.Cli
             var result = GenerationHost.RunProject(csproj, root, new WriterOptions
             {
                 Check = options.Check,
-                OutputDirectoryOverride = options.LegacyOutputDirectory
+                OutputDirectoryOverride = options.LegacyOutputDirectory,
+                Renames = options.Renames
             });
 
             GenerationHost.Print(result, root, options.Verbose, Console.Out);
@@ -158,6 +168,7 @@ namespace Entitas.SourceGenerator.Cli
             public readonly List<string> Projects = new List<string>();
             public bool Check;
             public bool Verbose;
+            public RenameHandling Renames = RenameHandling.Ask;
             public string? RequestPath;
             public string? ResponsePath;
             public string? LegacyOutputDirectory;
@@ -183,6 +194,14 @@ namespace Entitas.SourceGenerator.Cli
                             break;
                         case "--check":
                             options.Check = true;
+                            break;
+                        case "--apply-renames":
+                            if (options.Renames == RenameHandling.Ignore) return null;
+                            options.Renames = RenameHandling.Apply;
+                            break;
+                        case "--ignore-renames":
+                            if (options.Renames == RenameHandling.Apply) return null;
+                            options.Renames = RenameHandling.Ignore;
                             break;
                         case "-v":
                         case "--verbose":

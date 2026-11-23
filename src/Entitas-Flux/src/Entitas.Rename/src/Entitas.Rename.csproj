@@ -46,6 +46,7 @@
     <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\GeneratedFileWriter.cs" Link="GeneratedFileWriter.cs" />
     <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\GenerationHost.cs" Link="GenerationHost.cs" />
     <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\UnityProtocol.cs" Link="UnityProtocol.cs" />
+    <Compile Include="..\..\Entitas.SourceGenerator.Cli\src\RenameDetection.cs" Link="RenameDetection.cs" />
   </ItemGroup>
 
   <ItemGroup>

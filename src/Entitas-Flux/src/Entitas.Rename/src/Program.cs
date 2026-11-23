@@ -57,7 +57,12 @@ namespace Entitas.Rename
                         if (options.Apply)
                         {
                             Console.WriteLine("           note: generated files were out of date — regenerating them first.");
-                            Regenerate(csprojPath, project, projectRoot);
+                            var regenerated = Regenerate(csprojPath, project, projectRoot);
+                            if (regenerated.Rename?.Outcome == RenameOutcome.Pending)
+                                throw new RenameException(
+                                    $"{regenerated.Rename.OldClassName} was renamed to {regenerated.Rename.NewClassName} in the IDE and " +
+                                    "its old generated API is still in use. Regenerate first — Tools > Entitas > Generate in Unity, " +
+                                    "or entitas-gen --apply-renames (or --ignore-renames) — then rename again.");
                         }
                         else
                         {
@@ -81,7 +86,7 @@ namespace Entitas.Rename
                     options.NewName,
                     new RenameOptions { IncludeStrings = options.IncludeStrings });
 
-                var external = CollectExternal(csprojPath, compilation, plan);
+                var external = GenerationHost.ReferencingEdits(csprojPath, compilation, plan);
 
                 PrintPlan(plan, external, options);
 
@@ -189,56 +194,6 @@ namespace Entitas.Rename
             path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}");
 
         // -- output -----------------------------------------------------------
-
-        /// <summary>
-        /// Usages living in other Unity assemblies (test asmdefs, Editor assemblies). Their
-        /// csproj is compiled on its own and wired to THIS project's compilation — including
-        /// the generated API — so the generated members resolve as real symbols.
-        /// </summary>
-        static List<ExternalEdits> CollectExternal(string csprojPath, CSharpCompilation declaring, RenamePlan plan)
-        {
-            var results = new List<ExternalEdits>();
-            var root = Path.GetDirectoryName(csprojPath)!;
-            var declaringName = Path.GetFileNameWithoutExtension(csprojPath);
-
-            var reference = RenameEngine.WithGeneratedCode(declaring).ToMetadataReference();
-
-            foreach (var candidate in Directory
-                         .EnumerateFiles(root, "*.csproj", SearchOption.TopDirectoryOnly)
-                         .OrderBy(path => path, StringComparer.Ordinal))
-            {
-                if (string.Equals(candidate, csprojPath, StringComparison.Ordinal))
-                    continue;
-
-                // Cheap filter: only assemblies that reference this one can use its API.
-                var xml = File.ReadAllText(candidate);
-                if (xml.IndexOf(declaringName + ".csproj", StringComparison.OrdinalIgnoreCase) < 0 &&
-                    xml.IndexOf(declaringName + ".dll", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-
-                var info = ProjectLoader.ParseProject(candidate);
-                if (info.SourceFiles.Count == 0)
-                    continue;
-
-                var compilation = ProjectLoader.BuildCompilation(candidate, info);
-
-                // Drop the prebuilt copy of this assembly, or it would clash with the live one.
-                var stale = compilation.References
-                    .OfType<PortableExecutableReference>()
-                    .Where(r => Path.GetFileNameWithoutExtension(r.FilePath ?? string.Empty) == declaringName)
-                    .Cast<MetadataReference>()
-                    .ToArray();
-
-                var edits = ExternalRename.CollectEdits(
-                    compilation.RemoveReferences(stale).AddReferences(reference),
-                    plan);
-
-                if (edits.Files.Count > 0 || edits.Warnings.Count > 0)
-                    results.Add(edits);
-            }
-
-            return results;
-        }
 
         static void PrintPlan(RenamePlan plan, List<ExternalEdits> external, CommandLineOptions options)
         {
