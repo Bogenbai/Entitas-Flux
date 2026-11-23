@@ -114,9 +114,10 @@
 
   const nodes = new vis.DataSet(), edges = new vis.DataSet();
   const network = new vis.Network(document.getElementById('network'), { nodes, edges }, {
-    nodes: { font: { size: 13, color: getComputedStyle(document.body).color }, borderWidth: 1 },
+    // A halo in the background colour keeps a label readable where it touches a neighbour's.
+    nodes: { font: { size: 13, color: getComputedStyle(document.body).color, strokeWidth: 4, strokeColor: getComputedStyle(document.body).backgroundColor }, borderWidth: 1 },
     edges: { arrows: { to: { enabled: true, scaleFactor: 0.5 } }, smooth: false, width: 1.2 },
-    physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -60, springLength: 110 }, stabilization: { iterations: 200 } },
+    physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -60, springLength: 110, avoidOverlap: 1 }, stabilization: { iterations: 200 } },
     interaction: { hover: true, tooltipDelay: 150 },
     layout: { improvedLayout: false }
   });
@@ -170,7 +171,7 @@
         id, label: n.label, shape: k.shape, size: 8 + Math.min(18, Math.sqrt(degree(id)) * 2),
         color: { background: color, border: id === selected ? '#111' : color },
         borderWidth: id === selected ? 3 : 1,
-        font: k.shape === 'box' ? { color: '#fff' } : undefined,
+        font: k.shape === 'box' ? { color: '#fff', strokeWidth: 0 } : undefined,
         title: n.kind + (n.file ? '\n' + n.file + (n.line ? ':' + n.line : '') : '')
       };
     }));
@@ -187,8 +188,12 @@
         title: label(e.from) + ' ' + e.relation + ' ' + label(e.to) + ' via ' + e.via + (e.through ? ' (' + e.through + ')' : '') + (e.file ? '\n' + e.file + ':' + e.line : '')
       };
     }));
-    network.setOptions({ physics: true });
-    network.stabilize(150);
+    // Around a busy node (a system touching twenty components) the default springs pack the
+    // neighbours' labels on top of each other; a scoped view has few nodes, so give them room.
+    const spread = ids.size <= 80;
+    network.setOptions({ physics: { enabled: true, forceAtlas2Based: {
+      gravitationalConstant: spread ? -140 : -60, springLength: spread ? 190 : 110, avoidOverlap: 1 } } });
+    network.stabilize(spread ? 300 : 150);
   }
 
   function select(id) {
