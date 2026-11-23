@@ -37,7 +37,7 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   otherwise answer with hundreds of readers (~23 000 tokens). An answer over the cap starts
   with a summary by feature or root, then says what it left out. `who-reads` of an event costs
   ~400 tokens where grep and reading the files that mention it costs ~6000. `graph.json`
-  (~1.4 M tokens on that project) is for programs, and the README says so.
+  (~1.4 M tokens on that project) is for programs, and the documentation says so.
 
   `query <words>` answers with the connected piece of the graph, like Graphify's: the
   best-matching nodes seed a breadth-first walk over data flow (`--depth`, default 2;
@@ -118,7 +118,8 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   classes too, so a system binding views is credited with what each view's registrars add
   (`who-creates HueAnimator` names the view binders; +430 inferred edges on the production
   project, build time unchanged). What the graph leaves out on purpose, or cannot know from
-  the code, is listed in the README under *What it does not see*.
+  the code, is listed on the [ECS graph](https://github.com/Bogenbai/Entitas-Flux/wiki/ECS-Graph#what-it-does-not-see)
+  wiki page under *What it does not see*.
 
   A jump nested in another `if` before a write makes the write conditional too:
   `ForbidViewAttachByRequest` destroys its request only once `!(targetEntity != null &&
@@ -203,6 +204,9 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   editing components costs nothing extra.
 
 ### Changed
+- The README is short again: what the framework does, with a picture or a few lines of code per
+  feature. The guides moved to the [wiki](https://github.com/Bogenbai/Entitas-Flux/wiki): installation, code
+  generation and its options, generated files, renaming, debug hooks and the ECS graph.
 - `entitas-rename` (and *Tools → Entitas → Rename Component…*) stops with an explanation when
   an IDE rename of another component is still waiting for that decision, instead of planning
   against generated files that are about to change. It no longer looks for usages in
