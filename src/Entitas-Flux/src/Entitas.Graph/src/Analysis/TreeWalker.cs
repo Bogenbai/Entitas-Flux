@@ -87,10 +87,11 @@ namespace Entitas.Graph.Analysis
                 case ApiKind.Has: Emit(access, Relation.Reads, "Has", name); break;
                 case ApiKind.Get: Emit(access, Relation.Reads, "Get", name); break;
                 case ApiKind.Index:
-                    // entity.AddComponent(GameComponentsLookup.X, component) and friends.
-                    var call = IndexCall(name);
-                    if (call is "AddComponent" or "ReplaceComponent") Emit(access, Relation.Creates, call, name);
-                    else if (call == "RemoveComponent") Emit(access, Relation.Removes, call, name);
+                    // entity.AddComponent(GameComponentsLookup.X, component) and friends. The entity
+                    // is the call's receiver, not the lookup class the index name hangs off.
+                    var (call, entity) = IndexCall(name);
+                    if (call is "AddComponent" or "ReplaceComponent") Emit(access, Relation.Creates, call, name, entity);
+                    else if (call == "RemoveComponent") Emit(access, Relation.Removes, call, name, entity);
                     else Emit(access, Relation.Reads, "Index", name);
                     break;
                 case ApiKind.EntityIndex: Emit(access, Relation.Reads, "EntityIndex", name); break;
@@ -131,7 +132,7 @@ namespace Entitas.Graph.Analysis
             }
         }
 
-        void Emit(Access access, string relation, string via, SimpleNameSyntax name)
+        void Emit(Access access, string relation, string via, SimpleNameSyntax name, ExpressionSyntax? entity = null)
         {
             access.Relation = relation;
             access.Via = via;
@@ -155,7 +156,7 @@ namespace Entitas.Graph.Analysis
             }
 
             if (access.Relation == Relation.Creates || access.Relation == Relation.Removes)
-                TraceEntity(access, Receiver(name));
+                TraceEntity(access, entity ?? Receiver(name));
 
             _result.Accesses.Add(access);
         }
@@ -175,17 +176,18 @@ namespace Entitas.Graph.Analysis
             Accessor = a.Accessor, Method = a.Method, Component = a.Component, Context = a.Context, File = a.File, Line = a.Line
         };
 
-        static string? IndexCall(SimpleNameSyntax name)
+        /// <summary>The call an index constant is passed to, and the entity it is called on (null when unqualified).</summary>
+        static (string? Call, ExpressionSyntax? Entity) IndexCall(SimpleNameSyntax name)
         {
             SyntaxNode node = name.Parent is MemberAccessExpressionSyntax access && access.Name == name ? access : name;
             return node.Parent is ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax call } }
                 ? call.Expression switch
                 {
-                    MemberAccessExpressionSyntax m => m.Name.Identifier.ValueText,
-                    IdentifierNameSyntax i => i.Identifier.ValueText,
-                    _ => null
+                    MemberAccessExpressionSyntax m => (m.Name.Identifier.ValueText, m.Expression),
+                    IdentifierNameSyntax i => (i.Identifier.ValueText, null),
+                    _ => default
                 }
-                : null;
+                : default;
         }
 
         static AssignmentExpressionSyntax? AssignmentTarget(SimpleNameSyntax name)
@@ -275,6 +277,7 @@ namespace Entitas.Graph.Analysis
                         {
                             access.Group = GroupOf(forEach.Expression);
                             access.Loop = LoopKey(forEach);
+                            access.EveryEntity = access.Relation == Relation.Removes && RunsForEveryEntity(identifier, forEach);
                         }
                         else if (declaration is VariableDeclaratorSyntax { Initializer.Value: var initializer })
                         {
@@ -293,6 +296,70 @@ namespace Entitas.Graph.Analysis
                     access.RootFactory = FactoryOf(invocation);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Whether a write in the body of <paramref name="loop"/> runs for every entity the loop
+        /// visits: not under a condition, a nested loop, a catch or a lambda, and not after a
+        /// jump that can skip it (<c>if (…) continue;</c>). Asked of removals only: taking X off
+        /// every entity of a group of X is what makes X transient, and a conditional RemoveX — a
+        /// timer removed once it ran out — leaves entities that keep it.
+        /// </summary>
+        static bool RunsForEveryEntity(SyntaxNode write, ForEachStatementSyntax loop)
+        {
+            for (var node = write.Parent; node != null && node != loop; node = node.Parent)
+            {
+                switch (node)
+                {
+                    case IfStatementSyntax:
+                    case SwitchStatementSyntax:
+                    case SwitchExpressionSyntax:
+                    case ConditionalExpressionSyntax:
+                    case ConditionalAccessExpressionSyntax:
+                    case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.LogicalAndExpression) ||
+                                                            binary.IsKind(SyntaxKind.LogicalOrExpression) ||
+                                                            binary.IsKind(SyntaxKind.CoalesceExpression):
+                    case CommonForEachStatementSyntax:
+                    case ForStatementSyntax:
+                    case WhileStatementSyntax:
+                    case DoStatementSyntax:
+                    case CatchClauseSyntax:
+                    case AnonymousFunctionExpressionSyntax:
+                    case LocalFunctionStatementSyntax:
+                        return false;
+                }
+            }
+
+            foreach (var node in loop.Statement.DescendantNodes(n => n is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax))
+            {
+                if (node.SpanStart >= write.SpanStart)
+                    break;
+
+                switch (node)
+                {
+                    case ContinueStatementSyntax or BreakStatementSyntax when Leaves(node, loop):
+                    case ReturnStatementSyntax or ThrowStatementSyntax or ThrowExpressionSyntax or GotoStatementSyntax:
+                    case YieldStatementSyntax yield when yield.IsKind(SyntaxKind.YieldBreakStatement):
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>Whether a continue/break belongs to <paramref name="loop"/> rather than a loop or switch inside it.</summary>
+        static bool Leaves(SyntaxNode jump, ForEachStatementSyntax loop)
+        {
+            foreach (var ancestor in jump.Ancestors())
+            {
+                if (ancestor == loop)
+                    return true;
+                if (ancestor is CommonForEachStatementSyntax or ForStatementSyntax or WhileStatementSyntax or DoStatementSyntax ||
+                    (ancestor is SwitchStatementSyntax && jump is BreakStatementSyntax))
+                    return false;
+            }
+
+            return true;
         }
 
         static string SiteKey(Access access, SyntaxNode node) => $"{access.File}:{node.SpanStart}";

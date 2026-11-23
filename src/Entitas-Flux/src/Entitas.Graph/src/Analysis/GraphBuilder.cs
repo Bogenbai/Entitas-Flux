@@ -227,6 +227,20 @@ namespace Entitas.Graph.Analysis
             foreach (var edge in InferDestroysFromMarking(context, accesses, destroys, groups, known))
                 AddEdge(edge);
 
+            // Flags set only while the entity carries a transient component (JustCreated). Group
+            // shapes and loops exist only here, so the conclusion goes into the graph for the report.
+            var transient = TransientComponents(context, accesses, groups);
+            foreach (var node in graph.Nodes)
+                if (transient.TryGetValue(node.Label, out var removers) && node.Kind == NodeKind.Component)
+                    node.TransientRemovedBy.AddRange(removers);
+            var guards = TransientGuards(context, accesses, groups, transient);
+            foreach (var edge in edges.Values)
+            {
+                if (edge.Relation == Relation.Creates && edge.Confidence == Confidence.Extracted && edge.Entity == "group" &&
+                    guards.TryGetValue((edge.Source, edge.Target), out var guard))
+                    edge.OnlyWhile = guard;
+            }
+
             graph.Edges.AddRange(edges.Values);
             graph.Nodes.Sort((a, b) => string.CompareOrdinal(a.Id, b.Id));
             FeatureTree.Place(graph);
@@ -494,6 +508,92 @@ namespace Entitas.Graph.Analysis
                 };
             }
         }
+
+        /// <summary>
+        /// Components no entity keeps: those with [Cleanup], and those a system takes off every
+        /// entity holding them — RemoveX, isX = false or RemoveComponent(X), run for every entity
+        /// of a loop over a group of X alone (UnmarkJustCreatedEntitiesSystem). The group may skip
+        /// entities with NoneOf only when that same loop sets what it skips: those are the
+        /// entities it already took X from (CreationProcessed). Anything less — a removal under a
+        /// condition or through a helper, a group requiring more than X, a loop that also sets X
+        /// (isX = condition) — leaves entities that keep X, so it does not count.
+        /// Returns component name → the systems removing it that way (none for [Cleanup] alone).
+        /// </summary>
+        static Dictionary<string, List<string>> TransientComponents(BuildContext context, List<Access> accesses, Dictionary<ISymbol, GroupShape> groups)
+        {
+            var loopWrites = accesses
+                .Where(a => a.Loop != null && a.Relation == Relation.Creates)
+                .GroupBy(a => a.Loop!)
+                .ToDictionary(g => g.Key, g => g.Select(a => a.Component.Name).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+
+            var transient = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var removal in accesses)
+            {
+                if (removal.Relation != Relation.Removes || !removal.EveryEntity || removal.Accessor.Kind != NodeKind.System ||
+                    removal.Component.ChangeOf != null || removal.Group == null || !groups.TryGetValue(removal.Group, out var shape))
+                    continue;
+
+                var name = removal.Component.Name;
+                var writes = loopWrites.TryGetValue(removal.Loop!, out var written) ? written : new HashSet<string>(StringComparer.Ordinal);
+                if (shape.AllOf.Count != 1 || shape.AllOf[0] != name || shape.AnyOf.Count > 0 || shape.Changes.Count > 0 ||
+                    writes.Contains(name) || !shape.NoneOf.All(writes.Contains))
+                    continue;
+
+                if (!transient.TryGetValue(name, out var removers))
+                    transient[name] = removers = new List<string>();
+                if (!removers.Contains(removal.Accessor.Id))
+                    removers.Add(removal.Accessor.Id);
+            }
+
+            foreach (var removers in transient.Values)
+                removers.Sort(StringComparer.Ordinal);
+            foreach (var component in context.Components.Where(c => c.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal))))
+                if (!transient.ContainsKey(component.Name))
+                    transient[component.Name] = new List<string>();
+            return transient;
+        }
+
+        /// <summary>
+        /// A flag a system sets in a loop over a group requiring a transient component is set
+        /// while the entity carries that component and never again (AssignFloorFromSnapshotSystem
+        /// sets FloorRestored on AllOf(Id, Floor, Tilemap, JustCreated)): a "done" marker as surely
+        /// as one the setter leaves out with NoneOf. Only the group's AllOf counts, without the
+        /// XChanged requirements (a changed entity need not carry the component), and only loops
+        /// in the setter itself: every write of the flag it makes on existing entities must be
+        /// such a loop, or the flag stays in "never cleared".
+        /// Returns (setter id, flag id) → the id of the transient component, the first by name.
+        /// </summary>
+        static Dictionary<(string Source, string Target), string> TransientGuards(
+            BuildContext context,
+            List<Access> accesses,
+            Dictionary<ISymbol, GroupShape> groups,
+            Dictionary<string, List<string>> transient)
+        {
+            var guards = new Dictionary<(string, string), string>();
+            var unguarded = new HashSet<(string, string)>();
+            foreach (var write in accesses.Where(a => a.Relation == Relation.Creates && a.Component.Flag && a.Component.ChangeOf == null &&
+                                                      a.Site == null && a.Group != null))
+            {
+                var key = (write.Accessor.Id, write.Component.Id);
+                var guard = groups.TryGetValue(write.Group!, out var shape)
+                    ? shape.AllOf.Where(n => n != write.Component.Name && !shape.Changes.Contains(n) && transient.ContainsKey(n))
+                        .OrderBy(n => n, StringComparer.Ordinal).FirstOrDefault()
+                    : null;
+
+                if (guard == null)
+                {
+                    unguarded.Add(key);
+                    guards.Remove(key);
+                }
+                else if (!unguarded.Contains(key) && context.ComponentByName(guard) is { } component)
+                {
+                    var id = component.Id;
+                    guards[key] = guards.TryGetValue(key, out var other) && string.CompareOrdinal(other, id) < 0 ? other : id;
+                }
+            }
+
+            return guards;
+        }
     }
 
     // -- model used while building ------------------------------------------------------
@@ -602,6 +702,12 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>That foreach: writes sharing it land on the same entities.</summary>
         public string? Loop;
+
+        /// <summary>
+        /// For removals in a foreach of the accessor itself (not through a helper): the removal
+        /// runs on every entity the loop visits — no condition, no jump before it.
+        /// </summary>
+        public bool EveryEntity;
 
         /// <summary>For matcher reads: the field or local the group is assigned to, and the clause.</summary>
         public ISymbol? MatcherGroup;

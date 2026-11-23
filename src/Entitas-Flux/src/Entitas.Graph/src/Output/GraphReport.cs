@@ -110,25 +110,69 @@ namespace Entitas.Graph.Output
             // sits down a second time), and the NoneOf then freezes the first outcome — the
             // stale-flag bug this list is for (SatAtTable: set on the first sitting, still set
             // after the customer moved to a chair with no table).
+            //
+            // A setter whose loops run over a group requiring a transient component marks each
+            // entity once too, without a NoneOf: it only sees the entity while the entity carries
+            // that component (FloorRestored is set on AllOf(…, JustCreated), and
+            // UnmarkJustCreatedEntitiesSystem takes JustCreated off every entity). Only the builder
+            // sees groups, so it records that on the setter's edge (only_while). The same [Watched]
+            // exception applies: a guard that lets the setter run once freezes the first outcome
+            // just the same.
             var reacting = new HashSet<string>(graph.Edges.Where(e => e.Relation == Relation.Reacts && e.Confidence == Confidence.Extracted).Select(e => e.Source), StringComparer.Ordinal);
-            bool SetOnce(GraphNode c)
+            List<string> Setters(GraphNode c) => In(c).Where(e => e.Relation == Relation.Creates && e.Entity == "group").Select(e => e.Source).Distinct().ToList();
+            string? OnlyWhile(GraphNode c, string setter)
             {
-                var setters = In(c).Where(e => e.Relation == Relation.Creates && e.Entity == "group").Select(e => e.Source).Distinct().ToList();
-                return setters.All(s => !reacting.Contains(s) &&
-                                        In(c).Any(e => e.Source == s && e.Relation == Relation.Filters && e.Confidence == Confidence.Extracted));
+                var writes = In(c).Where(e => e.Source == setter && e.Relation == Relation.Creates && e.Entity == "group").ToList();
+                return writes.All(e => e.OnlyWhile != null) ? writes.Select(e => e.OnlyWhile!).OrderBy(g => g, StringComparer.Ordinal).First() : null;
+            }
+            bool SetOnce(GraphNode c) =>
+                Setters(c).All(s => !reacting.Contains(s) &&
+                                    (In(c).Any(e => e.Source == s && e.Relation == Relation.Filters && e.Confidence == Confidence.Extracted) ||
+                                     OnlyWhile(c, s) != null));
+
+            // Why a flag counts as set once when no NoneOf says so: who sees entities only while
+            // they carry what, and what takes that away. The line has to stand on its own.
+            string? OnlyWhileReason(GraphNode c)
+            {
+                var setters = Setters(c);
+                var guarded = setters.Select(s => (Setter: s, Guard: OnlyWhile(c, s))).Where(g => g.Guard != null).ToList();
+                if (guarded.Count == 0)
+                    return null;
+
+                return string.Join("; ", guarded.GroupBy(g => g.Guard!).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g =>
+                {
+                    var who = setters.Count == 1
+                        ? "the setter only sees"
+                        : string.Join(", ", g.Select(s => $"`{Name(s.Setter)}`").OrderBy(n => n, StringComparer.Ordinal)) + (g.Count() == 1 ? " only sees" : " only see");
+                    return $"{who} entities while they have `{Name(g.Key)}`, {TakenAwayBy(g.Key)}";
+                }));
+            }
+
+            string TakenAwayBy(string transientId)
+            {
+                var transient = graph.Node(transientId);
+                var cleanup = transient?.Attributes.FirstOrDefault(a => a.StartsWith("Cleanup", StringComparison.Ordinal));
+                if (cleanup != null)
+                    return cleanup == "Cleanup(DestroyEntity)" ? "whose entities [Cleanup] destroys" : "which [Cleanup] removes";
+                var removers = transient?.TransientRemovedBy.Select(r => $"`{Name(r)}`").ToList() ?? new List<string>();
+                return removers.Count == 0
+                    ? "which no entity keeps"
+                    : $"which {string.Join(" and ", removers)} remove{(removers.Count == 1 ? "s" : string.Empty)}";
             }
 
             Section(sb, itemsPerSection, "State flags that are never cleared",
                 "Flags set on existing entities (inside a foreach over a group) and read, but never removed, destroyed or [Cleanup] — " +
                 "once set they stay set, so every later frame sees them. Flags set while creating an entity (identity markers) are not listed, " +
-                "nor are flags their setter excludes with NoneOf (next section) — unless the setter reacts to a [Watched] change, which comes again while the flag stays from the first time.",
+                "nor are flags their setter excludes with NoneOf or sets only while the entity carries a transient component (next section) — " +
+                "unless the setter reacts to a [Watched] change, which comes again while the flag stays from the first time.",
                 neverCleared.Where(c => !SetOnce(c)).Select(c => Line(c, In(c), Relation.Creates, "set by", graph)));
 
-            Section(sb, itemsPerSection, "Flags set once on purpose? (the setter filters them out with NoneOf)",
-                "Never cleared either, but every system setting them on existing entities also excludes them from its own group with NoneOf, " +
-                "so each entity is marked once and then skipped: the usual shape of a \"done\" marker. Usually deliberate; " +
+            Section(sb, itemsPerSection, "Flags set once on purpose? (the setter filters them out with NoneOf, or only sees entities while they carry a transient component)",
+                "Never cleared either, but every system setting them on existing entities either excludes them from its own group with NoneOf, " +
+                "or loops over a group that requires a transient component — one with [Cleanup], or one a system takes off every entity holding it (JustCreated) — " +
+                "so each entity is marked once and then left alone: the usual shape of a \"done\" marker. Usually deliberate; " +
                 "worth a look only if something expects the flag to go away again.",
-                neverCleared.Where(SetOnce).Select(c => Line(c, In(c), Relation.Creates, "set by", graph)));
+                neverCleared.Where(SetOnce).Select(c => Line(c, In(c), Relation.Creates, "set by", graph, OnlyWhileReason(c))));
 
             Section(sb, itemsPerSection, "Systems not registered in any feature",
                 "They exist but nothing adds them, so they never run (or are added outside a feature). A generated feature listed here " +
@@ -166,10 +210,11 @@ namespace Entitas.Graph.Output
             sb.AppendLine();
         }
 
-        static string Line(GraphNode component, List<GraphEdge> edges, string relation, string verb, EcsGraph graph)
+        static string Line(GraphNode component, List<GraphEdge> edges, string relation, string verb, EcsGraph graph, string? reason = null)
         {
             var who = edges.Where(e => e.Relation == relation).Select(e => graph.Node(e.Source)?.Label ?? e.Source).Distinct().OrderBy(n => n, StringComparer.Ordinal).Take(4).ToList();
-            return $"- `{component.Label}` {(who.Count > 0 ? $"{verb} {string.Join(", ", who.Select(w => $"`{w}`"))}" : string.Empty)} — {component.SourceFile}:{component.Line}";
+            return $"- `{component.Label}` {(who.Count > 0 ? $"{verb} {string.Join(", ", who.Select(w => $"`{w}`"))}" : string.Empty)}" +
+                   $"{(reason != null ? " — " + reason : string.Empty)} — {component.SourceFile}:{component.Line}";
         }
 
         static int Distinct(IEnumerable<GraphEdge> edges, params string[] relations) =>

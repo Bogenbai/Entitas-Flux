@@ -9,7 +9,8 @@ namespace Entitas.Graph.Tests
 {
     /// <summary>
     /// Flags destroyed with their entity or set once on purpose, and reactions to a [Watched]
-    /// change seen from the system that causes them — on the shop part of the Fixture/ project.
+    /// change seen from the system that causes them — on the shop and crate parts of the
+    /// Fixture/ project.
     /// </summary>
     public class FlagsAndWatchedTests
     {
@@ -68,9 +69,81 @@ namespace Entitas.Graph.Tests
             neverCleared.Should().Contain("`Inspected`")
                 .And.Contain("`Receipted`", "its setter filters it with NoneOf, but sets it in reaction to a [Watched] change, which comes again")
                 .And.NotContain("`ProcessingStoring`").And.NotContain("`TimeIsUp`").And.NotContain("`Unboxed`");
-            setOnce.Should().StartWith("### Flags set once on purpose? (the setter filters them out with NoneOf) — 1")
+            setOnce.Should().StartWith("### Flags set once on purpose? (the setter filters them out with NoneOf, or only sees entities while they carry a transient component) — 2")
                 .And.Contain("- `Unboxed` set by `UnboxItemsSystem` — Components.cs:30")
                 .And.NotContain("`TimeIsUp`", "it is guarded by NoneOf too, but destroyed with its entity");
+        }
+
+        // -- flags set only while a transient component is there -----------------------------------
+
+        [Fact]
+        public void A_component_one_system_takes_off_every_holder_is_transient()
+        {
+            string[] RemovedBy(string component) => Graph.Nodes.Single(n => n.Label == component).TransientRemovedBy.Select(Label).ToArray();
+
+            RemovedBy("JustSpawned").Should().Equal(new[] { "UnmarkJustSpawnedSystem" },
+                "its NoneOf skips only the crates the same loop marked SpawnSeen, which it took JustSpawned from");
+            RemovedBy("Wrapped").Should().Equal(new[] { "UnwrapCratesSystem" }, "RemoveComponent(GameComponentsLookup.Wrapped) is a removal too");
+            RemovedBy("Tapped").Should().Equal(new[] { "RemoveTappedGameSystem" }, "the generated [Cleanup] system has the same shape");
+
+            RemovedBy("Fragile").Should().BeEmpty("PackFragileCratesSystem can continue before the removal: some crates keep it");
+            RemovedBy("Stacked").Should().BeEmpty("UnstackCratesSystem's NoneOf spares wrapped crates, and it does not wrap them itself");
+            RemovedBy("Unpaid").Should().BeEmpty("CommitCartSystem's group requires ShopItem too: not every holder");
+            RemovedBy("SpawnSeen").Should().BeEmpty();
+        }
+
+        [Fact]
+        public void A_flag_set_in_a_loop_over_a_transient_component_records_it_on_the_edge()
+        {
+            Edges("RestoreCrateSystem", Relation.Creates, "CrateRestored").Should().ContainSingle(e =>
+                e.Entity == "group" && e.Confidence == Confidence.Extracted && e.OnlyWhile == "component:JustSpawned");
+            Edges("LabelCratesSystem", Relation.Creates, "CrateLabelled").Should().ContainSingle(e => e.OnlyWhile == null);
+            Edges("UnmarkJustSpawnedSystem", Relation.Creates, "SpawnSeen").Should().ContainSingle(e => e.OnlyWhile == "component:JustSpawned",
+                "the unmarking loop sets SpawnSeen while the crate still has JustSpawned");
+
+            var json = Graph.ToJson();
+            json.Should().Contain("\"only_while\": \"component:JustSpawned\"").And.Contain("\"transient_removed_by\": [");
+            EcsGraph.FromJson(json).Edges.Single(e => e.Source == "system:Sample.RestoreCrateSystem" && e.Target == "component:CrateRestored")
+                .OnlyWhile.Should().Be("component:JustSpawned");
+        }
+
+        [Fact]
+        public void The_report_lists_a_flag_set_only_on_transient_entities_as_set_once_and_says_why()
+        {
+            var report = GraphReport.Build(Graph);
+            var neverCleared = Section(report, "State flags that are never cleared");
+            var setOnce = Section(report, "Flags set once on purpose?");
+
+            setOnce.Should().Contain("- `CrateRestored` set by `RestoreCrateSystem` — the setter only sees entities while they have `JustSpawned`, " +
+                                     "which `UnmarkJustSpawnedSystem` removes — Components.cs:41\n");
+            neverCleared.Should().Contain("- `CrateLabelled` set by `LabelCratesSystem` — Components.cs:42\n", "its setter's group requires nothing transient")
+                .And.NotContain("`CrateRestored`");
+        }
+
+        [Fact]
+        public void A_guarded_setter_stays_never_cleared_beside_an_unguarded_one_or_when_it_reacts_to_a_change()
+        {
+            // A second setter without the guard: the flag can be set again on any crate.
+            var graph = EcsGraph.FromJson(Graph.ToJson());
+            graph.Edges.Add(new GraphEdge { Source = "system:Sample.LabelCratesSystem", Target = "component:CrateRestored", Relation = Relation.Creates, Via = "Flag", Entity = "group" });
+            graph.Sort();
+            Section(GraphReport.Build(graph), "State flags that are never cleared").Should().Contain("`CrateRestored`");
+
+            // The guarded setter reacts to a [Watched] change: it sets the flag once while the change comes again.
+            graph = EcsGraph.FromJson(Graph.ToJson());
+            graph.Edges.Add(new GraphEdge { Source = "system:Sample.RestoreCrateSystem", Target = "component:Selected", Relation = Relation.Reacts, Via = "AllOf" });
+            graph.Sort();
+            Section(GraphReport.Build(graph), "State flags that are never cleared").Should().Contain("`CrateRestored`");
+        }
+
+        [Fact]
+        public void A_cleanup_component_as_the_guard_is_named_as_such()
+        {
+            var graph = EcsGraph.FromJson(Graph.ToJson());
+            graph.Edges.Single(e => e.Source == "system:Sample.RestoreCrateSystem" && e.Target == "component:CrateRestored").OnlyWhile = "component:Tapped";
+
+            Section(GraphReport.Build(graph), "Flags set once on purpose?").Should().Contain(
+                "- `CrateRestored` set by `RestoreCrateSystem` — the setter only sees entities while they have `Tapped`, which [Cleanup] removes — ");
         }
 
         static string Section(string report, string title)

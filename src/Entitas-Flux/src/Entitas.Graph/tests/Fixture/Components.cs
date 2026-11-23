@@ -30,6 +30,17 @@ namespace Sample
     [Game] public sealed class Unboxed : IComponent { }            // a done marker: its setter filters it out with NoneOf
     [Game] public sealed class Receipted : IComponent { }          // the same guard, but set in reaction to a [Watched] change
 
+    // Crates, spawned with markers that do not stay: what a flag's setter requires decides
+    // whether the flag is set once.
+    [Game] public sealed class Crate : IComponent { }
+    [Game] public sealed class JustSpawned : IComponent { }        // transient: one system takes it off every crate holding it
+    [Game] public sealed class SpawnSeen : IComponent { }          // set by that system, which leaves it out with NoneOf
+    [Game] public sealed class Wrapped : IComponent { }            // transient too, taken off with RemoveComponent(index)
+    [Game] public sealed class Fragile : IComponent { }            // taken off some crates only: not transient
+    [Game] public sealed class Stacked : IComponent { }            // taken off unwrapped crates only (NoneOf): not transient
+    [Game] public sealed class CrateRestored : IComponent { }      // set once on purpose: its setter only sees JustSpawned crates
+    [Game] public sealed class CrateLabelled : IComponent { }      // set on every crate, every frame: never cleared
+
     // Findings the report must list.
     [Game] public sealed class Dead : IComponent { }              // read, never created
     [Game] public sealed class Unused : IComponent { }            // created, never read

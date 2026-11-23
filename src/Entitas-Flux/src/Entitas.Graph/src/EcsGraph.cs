@@ -74,6 +74,14 @@ namespace Entitas.Graph
         /// <summary>"request" or "event", by the project's naming convention.</summary>
         public string? Role;
 
+        /// <summary>
+        /// The systems taking this component off every entity that holds it, in a loop over a
+        /// group of it alone (UnmarkJustCreatedEntitiesSystem and JustCreated): no entity keeps
+        /// it, so a flag set only on entities carrying it is set once. Empty for most components;
+        /// [Cleanup] components get their generated cleanup system here.
+        /// </summary>
+        public List<string> TransientRemovedBy = new List<string>();
+
         // systems and features
         public List<string> Interfaces = new List<string>();
         public List<Registration> RegisteredIn = new List<Registration>();
@@ -124,6 +132,14 @@ namespace Entitas.Graph
 
         /// <summary>For contains: the position of the Add(...) in the feature, 1-based.</summary>
         public int Order;
+
+        /// <summary>
+        /// For a flag's EXTRACTED creates on existing entities: the transient component (one with
+        /// [Cleanup], or with <see cref="GraphNode.TransientRemovedBy"/>) that every group the
+        /// setter's loops run over requires. The setter only sees an entity while it carries
+        /// that component, so it sets the flag once per entity, on purpose.
+        /// </summary>
+        public string? OnlyWhile;
 
         public string Key => $"{Source}\u0001{Target}\u0001{Relation}\u0001{Via}\u0001{Confidence}\u0001{Through}\u0001{Entity}";
     }
@@ -244,6 +260,7 @@ namespace Entitas.Graph
                         if (n.Fields.Count > 0) WriteStrings(w, "fields", n.Fields);
                         if (n.Attributes.Count > 0) WriteStrings(w, "attributes", n.Attributes);
                         if (n.Role != null) w.WriteString("role", n.Role);
+                        if (n.TransientRemovedBy.Count > 0) WriteStrings(w, "transient_removed_by", n.TransientRemovedBy);
                     }
                     if (n.Interfaces.Count > 0) WriteStrings(w, "interfaces", n.Interfaces);
                     if (n.Root) w.WriteBoolean("root", true);
@@ -288,6 +305,7 @@ namespace Entitas.Graph
                     if (e.Context != null) w.WriteString("context", e.Context);
                     if (e.Through != null) w.WriteString("through", e.Through);
                     if (e.Entity != null) w.WriteString("entity", e.Entity);
+                    if (e.OnlyWhile != null) w.WriteString("only_while", e.OnlyWhile);
                     if (e.Order > 0) w.WriteNumber("order", e.Order);
                     if (e.Count > 1) w.WriteNumber("count", e.Count);
                     if (e.SourceFile != null) w.WriteString("source_file", e.SourceFile);
@@ -353,6 +371,7 @@ namespace Entitas.Graph
                 node.Contexts.AddRange(Strs(n, "contexts"));
                 node.Fields.AddRange(Strs(n, "fields"));
                 node.Attributes.AddRange(Strs(n, "attributes"));
+                node.TransientRemovedBy.AddRange(Strs(n, "transient_removed_by"));
                 node.Interfaces.AddRange(Strs(n, "interfaces"));
                 if (n.TryGetProperty("registered_in", out var reg))
                     foreach (var r in reg.EnumerateArray())
@@ -379,6 +398,7 @@ namespace Entitas.Graph
                     Context = Str(e, "context"),
                     Through = Str(e, "through"),
                     Entity = Str(e, "entity"),
+                    OnlyWhile = Str(e, "only_while"),
                     Order = e.TryGetProperty("order", out var o) ? o.GetInt32() : 0,
                     Count = e.TryGetProperty("count", out var c) ? c.GetInt32() : 1,
                     SourceFile = Str(e, "source_file"),

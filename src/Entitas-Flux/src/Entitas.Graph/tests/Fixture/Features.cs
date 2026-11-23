@@ -43,6 +43,22 @@ namespace Sample
         }
     }
 
+    /// <summary>A root of its own, so the crates move no order or query of the features above.</summary>
+    public sealed class CrateFeature : Feature
+    {
+        public CrateFeature(ISystemFactory systems)
+        {
+            Add(systems.Create<SpawnCrateSystem>());
+            Add(systems.Create<RestoreCrateSystem>());
+            Add(systems.Create<LabelCratesSystem>());
+            Add(systems.Create<LoadCratesSystem>());
+            Add(systems.Create<PackFragileCratesSystem>());
+            Add(systems.Create<UnstackCratesSystem>());
+            Add(systems.Create<UnwrapCratesSystem>());
+            Add(systems.Create<UnmarkJustSpawnedSystem>());
+        }
+    }
+
     public sealed class LateFeature : Feature
     {
         public LateFeature(ISystemFactory systems)
