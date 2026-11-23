@@ -57,9 +57,29 @@ namespace Entitas.Graph.Tests
             var lines = block.Split('\n');
 
             lines.Length.Should().BeLessOrEqualTo(15);
-            foreach (var command in new[] { "who-creates", "who-reads", "lifecycle", "systems-of", "path", "explain", "query \"<words>\"", "diff --ref", "report" })
+            foreach (var command in new[] { "who-creates", "who-reads", "lifecycle", "systems-of", "path", "explain", "query \"<words>\"", "diff --commit", "diff --ref", "report" })
                 block.Should().Contain(command);
             block.Should().Contain("~2000 tokens").And.Contain("Never read graph.json");
+        }
+
+        [Fact]
+        public void A_block_from_another_version_is_reported_so_build_can_say_run_install()
+        {
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty("there is no block yet, and install is opt-in");
+
+            Install();
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty("the block is what install writes now");
+
+            // An older package listed fewer commands.
+            var claude = RepoFile("CLAUDE.md");
+            File.WriteAllText(claude, File.ReadAllText(claude).Replace("diff --commit <sha> (what one commit changed); ", string.Empty));
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().Equal(claude);
+
+            var elsewhere = Path.Combine(Path.GetTempPath(), "entitas-flux-build", "entitas-graph.dll");
+            AssistantSetup.OutdatedBlocks(_unity, elsewhere).Should().BeEmpty("a tool outside the repository would write an absolute path");
+
+            Install();
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty("install brought it up to date");
         }
 
         [Fact]

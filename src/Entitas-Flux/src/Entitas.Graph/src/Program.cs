@@ -140,13 +140,18 @@ namespace Entitas.Graph
 
         // -- install / uninstall ------------------------------------------------------------
 
+        /// <summary>The dll that is running: install names it, so the block points at the copy the project has.</summary>
+        static string ToolPath()
+        {
+            var tool = typeof(Program).Assembly.Location;
+            return tool.Length > 0 ? tool : Path.Combine(AppContext.BaseDirectory, "entitas-graph.dll");
+        }
+
         static int InstallOrUninstall(Options options)
         {
             if (options.Positional.Count > 0) throw new UsageException($"'{options.Command}' takes no arguments");
 
-            // The block names the dll that is running, so it points at the copy the project has.
-            var tool = typeof(Program).Assembly.Location;
-            if (tool.Length == 0) tool = Path.Combine(AppContext.BaseDirectory, "entitas-graph.dll");
+            var tool = ToolPath();
 
             var result = options.Command == "install"
                 ? AssistantSetup.Install(options.Root, options.Targets, options.Gitignore, tool)
@@ -179,6 +184,9 @@ namespace Entitas.Graph
             File.WriteAllText(Path.Combine(options.Out, "GRAPH_REPORT.md"), GraphReport.Build(graph));
             if (options.Html)
                 File.WriteAllText(Path.Combine(options.Out, "graph.html"), GraphHtml.Build(graph));
+
+            foreach (var file in AssistantSetup.OutdatedBlocks(options.Root, ToolPath()))
+                Console.Error.WriteLine($"note: the entitas-graph block in {Relative(file, options.Root)} was written by another version — run 'install' to update it.");
 
             var counts = graph.Nodes.GroupBy(n => n.Kind).ToDictionary(g => g.Key, g => g.Count());
             if (Get(counts, NodeKind.Component) == 0)

@@ -592,7 +592,7 @@ dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll 
 ```
 It writes a short block into `CLAUDE.md` in the repository root: the nearest folder above the Unity project that holds `.git`, because that is where assistants run, or the Unity root when there is none. When the project has an `AGENTS.md` there, the block goes into it too; a `CLAUDE.md` that pulls `AGENTS.md` in with `@AGENTS.md` is left alone, so the block is not loaded twice. `--target <file>` (repeatable) writes to other files instead, `.github/copilot-instructions.md` for example.
 
-The block names the tool that ran `install`, by a path relative to the file's folder, with `-r` pointing at the Unity root when that is a different folder. A UPM install is named by glob, because the package folder's name changes with every update. The block sits between `<!-- entitas-graph:begin -->` and `<!-- entitas-graph:end -->`: running `install` again replaces it and leaves the rest of the file as it was, line endings included. Run it again after switching between a manual and a UPM install. `install` also adds `entitas-graph-out/` to the repository's `.gitignore` unless a line there already covers it (`--no-gitignore` skips that). `entitas-graph uninstall` takes the block out again and deletes a file that held nothing else.
+The block names the tool that ran `install`, by a path relative to the file's folder, with `-r` pointing at the Unity root when that is a different folder. A UPM install is named by glob, because the package folder's name changes with every update. The block sits between `<!-- entitas-graph:begin -->` and `<!-- entitas-graph:end -->`: running `install` again replaces it and leaves the rest of the file as it was, line endings included. Run it again after switching between a manual and a UPM install, and after updating the package: the block lists the commands, and `build` says when the block was written by another version. `install` also adds `entitas-graph-out/` to the repository's `.gitignore` unless a line there already covers it (`--no-gitignore` skips that). `entitas-graph uninstall` takes the block out again and deletes a file that held nothing else.
 
 With the Unity project in `src/cat-caffeine` and a manual install, the block reads:
 ```md
@@ -606,7 +606,7 @@ another, run entitas-graph from this file's folder instead of searching the code
 
 Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;
 explain <Name>; query "<words>" (the connected subgraph around the matching nodes);
-diff --ref <branch or commit> (data-flow changes since then, for reviewing a branch);
+diff --commit <sha> (what one commit changed); diff --ref <branch> (changes since a branch, for reviewing it);
 report (= `src/cat-caffeine/entitas-graph-out/GRAPH_REPORT.md`, an overview worth reading once).
 Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.
 <!-- entitas-graph:end -->

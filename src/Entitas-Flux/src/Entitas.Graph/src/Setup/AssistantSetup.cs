@@ -124,6 +124,39 @@ namespace Entitas.Graph.Setup
         }
 
         /// <summary>
+        /// Instruction files whose entitas-graph block differs from what install would write now.
+        /// The block lists the commands, so it goes stale when the package is updated, and nothing
+        /// else would tell the user to run install again. Files without a block are left out:
+        /// install is opt-in. A tool running from outside the repository (a build of the framework
+        /// itself) would write an absolute path, so it does not judge the project's block.
+        /// </summary>
+        public static List<string> OutdatedBlocks(string unityRoot, string toolPath)
+        {
+            var unity = Path.GetFullPath(unityRoot);
+            var repository = FindGitRoot(unity) ?? unity;
+            var outdated = new List<string>();
+            if (!InstructionBlock.IsUnder(toolPath, repository)) return outdated;
+
+            foreach (var file in DefaultTargets(repository))
+            {
+                var existing = TextFile.Read(file);
+                if (existing == null) continue;
+                try
+                {
+                    if (InstructionBlock.Uninstall(existing.Text) == null) continue;
+                    var block = InstructionBlock.Build(Path.GetDirectoryName(file)!, unity, toolPath, repository);
+                    if (InstructionBlock.Install(existing.Text, block) != existing.Text) outdated.Add(file);
+                }
+                catch (FormatException)
+                {
+                    outdated.Add(file);
+                }
+            }
+
+            return outdated;
+        }
+
+        /// <summary>
         /// The nearest folder at or above the Unity root holding <c>.git</c> — a folder, or a file
         /// in a worktree or submodule. Assistants run at the repository root, and in many projects
         /// that is above the Unity root.
