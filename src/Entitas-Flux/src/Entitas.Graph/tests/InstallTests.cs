@@ -52,7 +52,7 @@ namespace Entitas.Graph.Tests
             result.Files.Should().Contain(f => f.Path == RepoFile("entitas-graph.cmd") && f.Outcome == FileOutcome.Created);
             File.ReadAllText(RepoFile("entitas-graph")).Should().Contain("root=\"$here/src/game\"\n");
             File.ReadAllText(RepoFile("entitas-graph.cmd")).Should().Contain("set \"root=%~dp0src\\game\"\r\n");
-            result.Notes.Should().BeEmpty();
+            result.Notes.Should().ContainSingle().Which.Should().Contain("approve the project's MCP server", "the only note: what the new server needs from the user");
         }
 
         [Fact]
@@ -67,6 +67,7 @@ namespace Entitas.Graph.Tests
             block.Should().Contain("~2000 tokens").And.Contain("Never read graph.json");
             block.Should().Contain("--help lists every command and option", "options such as --budget and --depth are not listed in the block");
             block.Should().Contain("Before changing code, open the files an answer names", "the graph is where to look, not a reason to skip the code");
+            block.Should().Contain("mcp__entitas-graph__*", "a subagent without Bash cannot run the command, but can list the server's tools");
         }
 
         [Fact]
@@ -198,6 +199,89 @@ namespace Entitas.Graph.Tests
         const string ProjectSettings = "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/.claude/scripts/session.sh\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Edit|Write\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"echo 'BLOCKED: no edits in Assets/Plugins/.' >&2; exit 2\"\n          }\n        ]\n      }\n    ]\n  }\n}\n";
 
         string Settings => Path.Combine(_repo, ".claude", "settings.json");
+
+        string Servers => Path.Combine(_repo, ".mcp.json");
+
+        const string ProjectServers = "{\n  \"mcpServers\": {\n    \"UnityMCP\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-for-unity\"]\n    }\n  }\n}\n";
+
+        [Fact]
+        public void Install_registers_the_MCP_server_next_to_the_projects_own_and_uninstall_takes_only_it_out()
+        {
+            File.WriteAllText(Servers, ProjectServers);
+
+            var result = Install();
+
+            var text = File.ReadAllText(Servers);
+            text.Should().Contain("\"UnityMCP\"").And.Contain("mcp-for-unity", "the project's own servers stay");
+            var server = System.Text.Json.JsonDocument.Parse(text).RootElement.GetProperty("mcpServers").GetProperty("entitas-graph");
+            server.GetProperty("command").GetString().Should().Be("sh");
+            server.GetProperty("args")[1].GetString().Should().Be(McpConfig.Script);
+            result.Notes.Should().Contain(n => n.Contains("mcp__entitas-graph__*"), "the agents that need it have to list it");
+
+            Install().Files.Should().Contain(f => f.Path == Servers && f.Outcome == FileOutcome.Unchanged);
+
+            AssistantSetup.Uninstall(_unity, None);
+            System.Text.Json.JsonDocument.Parse(File.ReadAllText(Servers)).RootElement.GetProperty("mcpServers")
+                .EnumerateObject().Select(p => p.Name).Should().Equal("UnityMCP");
+
+            File.Delete(Servers);
+            Install();
+            AssistantSetup.Uninstall(_unity, None).Files.Should().Contain(f => f.Path == Servers && f.Outcome == FileOutcome.Deleted, "nothing else was in it");
+            File.Exists(Servers).Should().BeFalse();
+        }
+
+        [Fact]
+        public void An_entitas_graph_server_install_did_not_write_stops_it_before_writing_anything()
+        {
+            var theirs = "{ \"mcpServers\": { \"entitas-graph\": { \"command\": \"node\", \"args\": [\"their-graph.js\"] } } }\n";
+            File.WriteAllText(Servers, theirs);
+
+            var install = () => Install();
+
+            install.Should().Throw<InvalidOperationException>().WithMessage("*.mcp.json*not written by entitas-graph install*");
+            File.ReadAllText(Servers).Should().Be(theirs);
+            File.Exists(RepoFile("CLAUDE.md")).Should().BeFalse();
+        }
+
+        [Fact]
+        public void Without_mcp_install_leaves_the_servers_file_alone_and_an_older_server_of_ours_is_reported()
+        {
+            AssistantSetup.Install(_unity, None, gitignore: false, _tool, mcp: false);
+            File.Exists(Servers).Should().BeFalse();
+
+            Install();
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty();
+            File.WriteAllText(Servers, File.ReadAllText(Servers).Replace("git rev-parse --show-toplevel", "pwd"));
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().Contain(Servers, "build tells the user to run install again");
+        }
+
+        [Fact]
+        public void The_registered_command_reaches_the_server_from_any_folder_of_the_repository()
+        {
+            if (OperatingSystem.IsWindows()) return; // sh and git as Claude Code on macOS and Linux run them
+
+            // Claude Code finds .mcp.json from any folder below it but starts the server where it
+            // was started itself: a real repository, and a start two folders down.
+            var repo = Path.Combine(_repo, "real");
+            var unity = Path.Combine(repo, "src", "game");
+            Directory.CreateDirectory(Path.Combine(unity, "Assets", "Code"));
+            Run("git", "init", "-q", repo);
+            AssistantSetup.Install(unity, None, gitignore: false, Path.Combine(AppContext.BaseDirectory, "entitas-graph.dll"));
+
+            var start = new System.Diagnostics.ProcessStartInfo("sh") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = Path.Combine(unity, "Assets", "Code") };
+            start.ArgumentList.Add("-c");
+            start.ArgumentList.Add(McpConfig.Script);
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.StandardInput.Write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
+            process.StandardInput.Close();
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+
+            var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            lines.Should().HaveCount(2, process.StandardError.ReadToEnd());
+            lines[0].Should().Contain("\"serverInfo\":{\"name\":\"entitas-graph\"");
+            lines[1].Should().Contain("\"name\":\"who_reads\"");
+        }
 
         [Fact]
         public void Install_adds_the_Claude_hook_next_to_the_projects_own_and_uninstall_takes_only_it_out()
