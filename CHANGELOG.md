@@ -78,6 +78,18 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   under it; an `if`/`else` pair cancels out. `explain` of a system names who else reads the
   requests it handles.
 
+  None of it depends on a project's naming. Requests and events are recognised by what
+  happens to their entities as well as by name: a component whose every holder a reader's
+  loop destroys (directly, or by marking it for a sweeper) is a request; one created only with
+  such a consumed marker and read on its own is an event. `flow`, `query` and `explain` follow
+  them in projects without `*Request`/`*Event`, and a matching suffix still wins; only the
+  report's four request/event sections stay name-based, since a request nobody handles can't
+  be found by structure. A `when:`-style helper is read from its body (`if (gate) apply(self);`),
+  whatever its parameter is called. A second test project with different names throughout (a
+  space port: `DockingOrder`, `Pulse` + `Armed`, `Doomed`, `Fresh`, `.Apply(…, gate:)`) proves
+  it; on the production project every answer stayed byte-identical, and with suffixes that
+  match nothing `flow CommitCartRequest` still follows the whole chain.
+
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and
   `#node=…` links, hover to fade what a node is not connected to (from the canvas or the side
