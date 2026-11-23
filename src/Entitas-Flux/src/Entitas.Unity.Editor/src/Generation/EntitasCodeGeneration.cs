@@ -77,9 +77,25 @@ namespace Entitas.Unity.Editor.Generation
 
             // The checkmark is native menu state: it outlives a domain reload, and the validate
             // function only runs when the menu is drawn, so anything reading it in between got
-            // the last drawn value (unchecked in a fresh editor). Set it from the setting now
-            // (menus are not built yet while InitializeOnLoad runs, hence the delay).
-            EditorApplication.delayCall += SyncAutomaticMenu;
+            // the last drawn value (unchecked in a fresh editor). Setting it once is not enough:
+            // menus are not built yet while InitializeOnLoad runs, and after an editor assembly
+            // changes (the package DLL replaced) Unity rebuilds them some frames later, which
+            // clears the checkmark again — seen on a real project, where one delayCall was too
+            // early. So keep it in sync for a few seconds after every load.
+            _menuSyncUntil = EditorApplication.timeSinceStartup + MenuSyncSeconds;
+            EditorApplication.update -= KeepMenuInSync;
+            EditorApplication.update += KeepMenuInSync;
+        }
+
+        const double MenuSyncSeconds = 10;
+        static double _menuSyncUntil;
+
+        static void KeepMenuInSync()
+        {
+            if (Menu.GetChecked(MenuAutomatic) != Automatic)
+                SyncAutomaticMenu();
+            if (EditorApplication.timeSinceStartup >= _menuSyncUntil)
+                EditorApplication.update -= KeepMenuInSync;
         }
 
         static string StatePath => Path.Combine(EntitasTools.ScratchDirectory, "state.json");

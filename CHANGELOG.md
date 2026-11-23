@@ -18,13 +18,15 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   its next preference, so another editor open on another project could switch it off here.
   Generation then stopped and the next compile used stale generated files (`ENT0004`,
   `CS1061`). It is now kept per project and per user, in `UserSettings/EditorUserSettings.asset`
-  (out of version control in Unity's `.gitignore`, so it is not imposed on a team), and
-  written at once. The old machine-wide value is not carried over, since it may belong to any
-  project on the machine: the switch starts on in every project, and a project that had it off
-  needs it turned off once more. The checkmark is set from the setting after every domain
-  reload and on every change; before, it was set only while the menu was being drawn, so it
-  read unchecked in a fresh editor and anything checking it without opening the menu got a
-  stale answer.
+  (out of version control in Unity's `.gitignore`, so it is not imposed on a team). Unity
+  writes that file when the project is saved or closed; a crash before then falls back to the
+  default, on, which is the safe side. The old machine-wide value is not carried over, since it
+  may belong to any project on the machine: the switch starts on in every project, and a
+  project that had it off needs it turned off once more. The checkmark follows the setting on
+  every change and for a few seconds after every load, because Unity rebuilds its menus some
+  frames after an editor assembly changes and clears it; before, it was set only while the
+  menu was being drawn, so it read unchecked in a fresh editor and anything checking it
+  without opening the menu got a stale answer.
 
 ## [0.5.0] - 2026-11-22
 
