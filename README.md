@@ -658,7 +658,12 @@ dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll 
 ```
 It writes a short block into `CLAUDE.md` in the repository root: the nearest folder above the Unity project that holds `.git`, because that is where assistants run, or the Unity root when there is none. When the project has an `AGENTS.md` there, the block goes into it too; a `CLAUDE.md` that pulls `AGENTS.md` in with `@AGENTS.md` is left alone, so the block is not loaded twice. `--target <file>` (repeatable) writes to other files instead, `.github/copilot-instructions.md` for example.
 
-The block names the tool that ran `install`, by a path relative to the file's folder, with `-r` pointing at the Unity root when that is a different folder. A UPM install is named by glob, because the package folder's name changes with every update. The block sits between `<!-- entitas-graph:begin -->` and `<!-- entitas-graph:end -->`: running `install` again replaces it and leaves the rest of the file as it was, line endings included. Run it again after switching between a manual and a UPM install, and after updating the package: the block lists the commands, and `build` says when the block was written by another version. `install` also adds `entitas-graph-out/` to the repository's `.gitignore` unless a line there already covers it (`--no-gitignore` skips that). `entitas-graph uninstall` takes the block out again and deletes a file that held nothing else.
+Next to it, in the repository root, `install` writes two short commands, and the block names them instead of the tool's path:
+```bash
+./entitas-graph who-reads <Component>        # macOS, Linux, Git Bash
+.\entitas-graph.cmd who-reads <Component>    # Windows cmd or PowerShell
+```
+Each finds `entitas-graph.dll` when it runs: under `Library/PackageCache` or `Packages` for a UPM install, whatever hash the package folder has this time, else in `Assets/Entitas/Entitas/Tools~`. It points the tool at the Unity root through `ENTITAS_GRAPH_ROOT`, so there is no `-r` to type, and an explicit `-r` still wins. Updating the package, or moving between a manual and a UPM install, needs no new `install`. The Windows one is a `.cmd`, not a `.ps1`: PowerShell refuses unsigned scripts by default. Commit both, so the team gets them; `install` rewrites only files it wrote itself and stops when a file of that name is someone else's. The block sits between `<!-- entitas-graph:begin -->` and `<!-- entitas-graph:end -->`: running `install` again replaces it and leaves the rest of the file as it was, line endings included. Run it again after updating the package: the block lists the commands, and `build` says when the block or a wrapper was written by another version. `install` also adds `entitas-graph-out/` to the repository's `.gitignore` unless a line there already covers it (`--no-gitignore` skips that). `entitas-graph uninstall` takes the block out again, deletes a file that held nothing else, and removes the two commands.
 
 With the Unity project in `src/cat-caffeine` and a manual install, the block reads:
 ```md
@@ -667,7 +672,7 @@ With the Unity project in `src/cat-caffeine` and a manual install, the block rea
 This is an Entitas project. To find who creates, reads, filters, removes or destroys a component, what a feature
 runs and in what order, or how data gets from one system to another, run entitas-graph from this file's folder instead of searching the code:
 
-    dotnet src/cat-caffeine/Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component> -r src/cat-caffeine
+    ./entitas-graph who-reads <Component>        (Windows cmd or PowerShell: .\entitas-graph.cmd)
 
 Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;
 explain <Name>; query "<words>" (the connected subgraph around the matching nodes);

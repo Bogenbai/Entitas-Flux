@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -70,8 +71,25 @@ namespace Entitas.Graph.Setup
                 plan.Add((file, existing, Apply(file, () => InstructionBlock.Install(existing?.Text, block))));
             }
 
+            // The wrappers the block names, in the repository root. A file of that name install did
+            // not write is someone else's: stop before writing anything.
+            var wrappers = new List<(string File, TextFile? Existing, string Updated)>();
+            foreach (var (file, text) in WrapperTexts(repository, unity, toolPath))
+            {
+                var existing = TextFile.Read(file);
+                if (existing != null && !Wrappers.IsOurs(existing.Text))
+                    throw new SetupException($"{file} exists and was not written by entitas-graph install — rename or move it, then run install again.");
+                wrappers.Add((file, existing, text));
+            }
+
             foreach (var (file, existing, updated) in plan)
                 result.Files.Add(Write(file, existing, updated));
+            foreach (var (file, existing, updated) in wrappers)
+            {
+                result.Files.Add(Write(file, existing, updated));
+                if (Path.GetFileName(file) == Wrappers.ShName && !MakeExecutable(file))
+                    result.Notes.Add($"could not mark {file} executable — run chmod +x on it, or call it as sh {Wrappers.ShName}.");
+            }
 
             if (!InstructionBlock.IsUnder(toolPath, repository))
                 result.Notes.Add($"{Path.GetFileName(toolPath)} is outside {repository}, so the block names it by absolute path and works on this " +
@@ -120,14 +138,56 @@ namespace Entitas.Graph.Setup
                 }
             }
 
+            foreach (var file in Wrappers.Files(repository))
+            {
+                var existing = TextFile.Read(file);
+                if (existing == null) continue;
+                if (Wrappers.IsOurs(existing.Text))
+                {
+                    File.Delete(file);
+                    result.Files.Add(new FileChange(file, FileOutcome.Deleted));
+                }
+                else
+                {
+                    result.Files.Add(new FileChange(file, FileOutcome.Unchanged, "not written by install, left alone"));
+                }
+            }
+
             return result;
         }
 
+        /// <summary>Each wrapper's file in the repository root and the text install writes into it.</summary>
+        static IEnumerable<(string File, string Text)> WrapperTexts(string repository, string unity, string toolPath)
+        {
+            yield return (Path.Combine(repository, Wrappers.ShName), Wrappers.Sh(repository, unity, toolPath, repository));
+            yield return (Path.Combine(repository, Wrappers.CmdName), Wrappers.Cmd(repository, unity, toolPath, repository));
+        }
+
+        /// <summary>chmod +x, so the block's ./entitas-graph runs; git keeps the bit for the team. Nothing to do on Windows.</summary>
+        static bool MakeExecutable(string file)
+        {
+            if (OperatingSystem.IsWindows()) return true;
+            try
+            {
+                var start = new ProcessStartInfo("chmod") { UseShellExecute = false, RedirectStandardError = true };
+                start.ArgumentList.Add("+x");
+                start.ArgumentList.Add(file);
+                using var process = Process.Start(start);
+                if (process == null) return false;
+                process.WaitForExit();
+                return process.ExitCode == 0;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+        }
+
         /// <summary>
-        /// Instruction files whose entitas-graph block differs from what install would write now.
-        /// The block lists the commands, so it goes stale when the package is updated, and nothing
-        /// else would tell the user to run install again. Files without a block are left out:
-        /// install is opt-in. A tool running from outside the repository (a build of the framework
+        /// Instruction files whose entitas-graph block differs from what install would write now,
+        /// and wrappers install wrote that differ from today's. The block lists the commands, so it
+        /// goes stale when the package is updated, and nothing else would tell the user to run
+        /// install again. Files without a block, and missing wrappers, are left out: install is opt-in. A tool running from outside the repository (a build of the framework
         /// itself) would write an absolute path, so it does not judge the project's block.
         /// </summary>
         public static List<string> OutdatedBlocks(string unityRoot, string toolPath)
@@ -151,6 +211,12 @@ namespace Entitas.Graph.Setup
                 {
                     outdated.Add(file);
                 }
+            }
+
+            foreach (var (file, text) in WrapperTexts(repository, unity, toolPath))
+            {
+                var existing = TextFile.Read(file);
+                if (existing != null && Wrappers.IsOurs(existing.Text) && existing.Text != text) outdated.Add(file);
             }
 
             return outdated;

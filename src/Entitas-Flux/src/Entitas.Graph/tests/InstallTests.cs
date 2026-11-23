@@ -44,9 +44,14 @@ namespace Entitas.Graph.Tests
             result.Files.Should().Contain(f => f.Path == RepoFile("CLAUDE.md") && f.Outcome == FileOutcome.Created);
             var text = File.ReadAllText(RepoFile("CLAUDE.md"));
             text.Should().StartWith(InstructionBlock.Begin + "\n").And.EndWith(InstructionBlock.End + "\n");
-            text.Should().Contain("    dotnet src/game/Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component> -r src/game\n");
+            text.Should().Contain("    ./entitas-graph who-reads <Component>        (Windows cmd or PowerShell: .\\entitas-graph.cmd)\n");
+            text.Should().NotContain("dotnet ").And.NotContain(" -r ", "the wrappers find the tool and the Unity root");
             text.Should().Contain("`src/game/entitas-graph-out/GRAPH_REPORT.md`");
             File.Exists(Path.Combine(_unity, "CLAUDE.md")).Should().BeFalse();
+            result.Files.Should().Contain(f => f.Path == RepoFile("entitas-graph") && f.Outcome == FileOutcome.Created);
+            result.Files.Should().Contain(f => f.Path == RepoFile("entitas-graph.cmd") && f.Outcome == FileOutcome.Created);
+            File.ReadAllText(RepoFile("entitas-graph")).Should().Contain("root=\"$here/src/game\"\n");
+            File.ReadAllText(RepoFile("entitas-graph.cmd")).Should().Contain("set \"root=%~dp0src\\game\"\r\n");
             result.Notes.Should().BeEmpty();
         }
 
@@ -84,24 +89,25 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
-        public void Omits_the_root_option_when_the_instruction_file_sits_in_the_Unity_root()
+        public void A_block_beside_the_Unity_root_names_the_wrappers_in_the_repository_root()
         {
             var block = InstructionBlock.Build(_unity, _unity, _tool, _repo);
 
-            block.Should().Contain("    dotnet Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component>\n");
-            block.Should().NotContain(" -r ");
+            block.Should().Contain("    ../../entitas-graph who-reads <Component>        (Windows cmd or PowerShell: ..\\..\\entitas-graph.cmd)\n");
             block.Should().Contain("`entitas-graph-out/GRAPH_REPORT.md`");
         }
 
         [Fact]
-        public void Names_a_package_cache_install_by_glob_because_its_folder_carries_a_hash()
+        public void A_package_cache_install_is_found_by_the_wrapper_whatever_hash_its_folder_has()
         {
             var tool = Path.Combine(_unity, "Library", "PackageCache", "com.bogenbai.entitas-flux@1a2b3c4d5e", "Tools~", "entitas-graph.dll");
 
             AssistantSetup.Install(_unity, None, gitignore: false, tool);
 
-            File.ReadAllText(RepoFile("CLAUDE.md")).Should().Contain(
-                "    dotnet src/game/Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll who-reads <Component> -r src/game\n");
+            File.ReadAllText(RepoFile("CLAUDE.md")).Should().Contain("    ./entitas-graph who-reads <Component>").And.NotContain("PackageCache");
+            var sh = File.ReadAllText(RepoFile("entitas-graph"));
+            sh.Should().Contain("\"$root\"/Library/PackageCache/*/Tools~/entitas-graph.dll").And.NotContain("1a2b3c4d5e", "the hash changes with every update");
+            File.ReadAllText(RepoFile("entitas-graph.cmd")).Should().Contain("for /d %%p in (\"%root%\\Library\\PackageCache\\*\")").And.NotContain("1a2b3c4d5e");
         }
 
         [Fact]
@@ -111,20 +117,21 @@ namespace Entitas.Graph.Tests
 
             Install(target);
 
-            File.ReadAllText(target).Should().Contain("dotnet ../src/game/Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component> -r ../src/game\n");
+            File.ReadAllText(target).Should().Contain("    ../entitas-graph who-reads <Component>        (Windows cmd or PowerShell: ..\\entitas-graph.cmd)\n");
             File.Exists(RepoFile("CLAUDE.md")).Should().BeFalse();
+            File.Exists(RepoFile("entitas-graph")).Should().BeTrue("the wrappers stay in the repository root");
         }
 
         [Fact]
-        public void Quotes_path_segments_with_spaces_but_keeps_the_glob_expandable()
+        public void A_Unity_root_with_a_space_is_quoted_in_both_wrappers()
         {
             var unity = Path.Combine(_repo, "My Game");
             Directory.CreateDirectory(Path.Combine(unity, "Assets"));
             var tool = Path.Combine(unity, "Library", "PackageCache", "com.bogenbai.entitas-flux@abc", "Tools~", "entitas-graph.dll");
 
-            var block = InstructionBlock.Build(_repo, unity, tool, _repo);
-
-            block.Should().Contain("dotnet \"My Game\"/Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll who-reads <Component> -r \"My Game\"\n");
+            Wrappers.Sh(_repo, unity, tool, _repo).Should().Contain("root=\"$here/My Game\"\n");
+            Wrappers.Cmd(_repo, unity, tool, _repo).Should().Contain("set \"root=%~dp0My Game\"\r\n");
+            InstructionBlock.Build(_repo, unity, tool, _repo).Should().Contain("`My Game/entitas-graph-out/GRAPH_REPORT.md`");
         }
 
         [Fact]
@@ -134,8 +141,89 @@ namespace Entitas.Graph.Tests
 
             var result = AssistantSetup.Install(_unity, None, gitignore: false, tool);
 
-            File.ReadAllText(RepoFile("CLAUDE.md")).Should().Contain($"dotnet {Path.GetFullPath(tool).Replace('\\', '/')} who-reads");
+            File.ReadAllText(RepoFile("entitas-graph")).Should().Contain($"for tool in \"{Path.GetFullPath(tool).Replace('\\', '/')}\" ");
             result.Notes.Should().ContainSingle(n => n.Contains("absolute path"));
+        }
+
+        [Fact]
+        public void The_sh_wrapper_runs_the_tool_it_finds_with_the_Unity_root_whatever_layout_the_project_has()
+        {
+            if (OperatingSystem.IsWindows()) return; // the sh wrapper is for macOS, Linux and Git Bash
+
+            // A stand-in for dotnet that prints what it was given.
+            var bin = Path.Combine(_repo, "bin");
+            Directory.CreateDirectory(bin);
+            File.WriteAllText(Path.Combine(bin, "dotnet"), "#!/bin/sh\necho \"tool=$1 args=$2 $3 root=$ENTITAS_GRAPH_ROOT\"\n");
+            Run("chmod", "+x", Path.Combine(bin, "dotnet"));
+
+            string Graph(string args)
+            {
+                var start = new System.Diagnostics.ProcessStartInfo(RepoFile("entitas-graph")) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+                foreach (var arg in args.Split(' ')) start.ArgumentList.Add(arg);
+                start.Environment["PATH"] = bin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+                using var process = System.Diagnostics.Process.Start(start)!;
+                var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                return output.Trim();
+            }
+
+            // Nothing installed yet: the wrapper says where it looked.
+            Install();
+            Run("sh", "-n", RepoFile("entitas-graph"));
+            Run("test", "-x", RepoFile("entitas-graph"));
+            Graph("who-reads Health").Should().StartWith("entitas-graph: entitas-graph.dll not found in " + _repo + "/src/game");
+
+            // Installed by hand: the tool sits in Assets/Entitas/Entitas/Tools~.
+            Directory.CreateDirectory(Path.GetDirectoryName(_tool)!);
+            File.WriteAllText(_tool, string.Empty);
+            Graph("who-reads Health").Should().Be($"tool={_tool} args=who-reads Health root={_repo}/src/game");
+
+            // Updated through the Package Manager: a package folder with a hash, found without a new install.
+            var package = Path.Combine(_unity, "Library", "PackageCache", "com.bogenbai.entitas-flux@9f8e7d", "Tools~");
+            Directory.CreateDirectory(package);
+            File.WriteAllText(Path.Combine(package, "entitas-graph.dll"), string.Empty);
+            Graph("flow HireRequest").Should().Be($"tool={package}/entitas-graph.dll args=flow HireRequest root={_repo}/src/game");
+        }
+
+        static void Run(string file, params string[] args)
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(file) { UseShellExecute = false };
+            foreach (var arg in args) start.ArgumentList.Add(arg);
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.WaitForExit();
+            process.ExitCode.Should().Be(0, $"{file} {string.Join(" ", args)} succeeds");
+        }
+
+        [Fact]
+        public void A_file_named_like_a_wrapper_that_install_did_not_write_stops_it_before_writing_anything()
+        {
+            File.WriteAllText(RepoFile("entitas-graph"), "#!/bin/sh\necho mine\n");
+
+            var install = () => Install();
+
+            install.Should().Throw<SetupException>().WithMessage("*was not written by entitas-graph install*");
+            File.Exists(RepoFile("CLAUDE.md")).Should().BeFalse();
+            File.ReadAllText(RepoFile("entitas-graph")).Should().Be("#!/bin/sh\necho mine\n");
+
+            // Uninstall leaves it alone too.
+            AssistantSetup.Uninstall(_unity, None).Files.Should().Contain(f => f.Path == RepoFile("entitas-graph") && f.Outcome == FileOutcome.Unchanged);
+            File.Exists(RepoFile("entitas-graph")).Should().BeTrue();
+        }
+
+        [Fact]
+        public void Uninstall_removes_the_wrappers_and_an_outdated_one_is_reported()
+        {
+            Install();
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty();
+
+            File.AppendAllText(RepoFile("entitas-graph.cmd"), "rem an older version\r\n");
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().Equal(RepoFile("entitas-graph.cmd"));
+
+            var result = AssistantSetup.Uninstall(_unity, None);
+
+            result.Files.Should().Contain(f => f.Path == RepoFile("entitas-graph") && f.Outcome == FileOutcome.Deleted);
+            result.Files.Should().Contain(f => f.Path == RepoFile("entitas-graph.cmd") && f.Outcome == FileOutcome.Deleted);
+            File.Exists(RepoFile("entitas-graph")).Should().BeFalse();
         }
 
         [Fact]
@@ -252,7 +340,9 @@ namespace Entitas.Graph.Tests
 
                 var result = AssistantSetup.Install(unity, None, gitignore: true, Path.Combine(unity, "Assets", "Tools~", "entitas-graph.dll"));
 
-                File.ReadAllText(Path.Combine(unity, "CLAUDE.md")).Should().Contain("dotnet Assets/Tools~/entitas-graph.dll who-reads <Component>\n");
+                File.ReadAllText(Path.Combine(unity, "CLAUDE.md")).Should().Contain("    ./entitas-graph who-reads <Component>");
+                File.ReadAllText(Path.Combine(unity, "entitas-graph")).Should().Contain("root=\"$here\"\n").And.Contain("\"$here/Assets/Tools~/entitas-graph.dll\"");
+                File.ReadAllText(Path.Combine(unity, "entitas-graph.cmd")).Should().Contain("set \"root=%~dp0.\"\r\n");
                 File.Exists(Path.Combine(unity, ".gitignore")).Should().BeFalse();
                 result.Notes.Should().Contain(n => n.Contains(".gitignore"));
             }

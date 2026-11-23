@@ -118,10 +118,11 @@ namespace Entitas.Graph
             Console.Error.WriteLine("                              or against the project at a second one.");
             Console.Error.WriteLine("  diff --commit <commit>      What one commit changed: its first parent against it.");
             Console.Error.WriteLine("  install                     Tell the project's AI assistant to use these commands: a block in CLAUDE.md");
-            Console.Error.WriteLine("                              (and AGENTS.md, if present) in the git root; entitas-graph-out/ in .gitignore.");
-            Console.Error.WriteLine("  uninstall                   Remove that block again.");
+            Console.Error.WriteLine("                              (and AGENTS.md, if present) in the git root, the short commands entitas-graph and\n" +
+                                    "                              entitas-graph.cmd next to it, and entitas-graph-out/ in .gitignore.");
+            Console.Error.WriteLine("  uninstall                   Remove that block and those commands again.");
             Console.Error.WriteLine();
-            Console.Error.WriteLine("  -r, --root <dir>            Unity project root (default: current directory).");
+            Console.Error.WriteLine("  -r, --root <dir>            Unity project root (default: $ENTITAS_GRAPH_ROOT, set by the wrappers, else the current directory).");
             Console.Error.WriteLine("  -p, --project <csproj>      The project declaring the contexts (default: found under the root).");
             Console.Error.WriteLine("  -o, --out <dir>             Output folder (default: <root>/entitas-graph-out).");
             Console.Error.WriteLine("      --request-suffix <s>    Name suffix of request components (default: Request).");
@@ -191,7 +192,7 @@ namespace Entitas.Graph
                 File.WriteAllText(Path.Combine(options.Out, "graph.html"), GraphHtml.Build(graph));
 
             foreach (var file in AssistantSetup.OutdatedBlocks(options.Root, ToolPath()))
-                Console.Error.WriteLine($"note: the entitas-graph block in {Relative(file, options.Root)} was written by another version — run 'install' to update it.");
+                Console.Error.WriteLine($"note: {Relative(file, options.Root)} was written by another version of entitas-graph install — run 'install' to update it.");
 
             var counts = graph.Nodes.GroupBy(n => n.Kind).ToDictionary(g => g.Key, g => g.Count());
             if (Get(counts, NodeKind.Component) == 0)
@@ -411,7 +412,10 @@ namespace Entitas.Graph
         {
             public string Command = string.Empty;
             public readonly List<string> Positional = new List<string>();
-            public string Root = Directory.GetCurrentDirectory();
+            // The wrappers install writes point here through ENTITAS_GRAPH_ROOT; -r still wins.
+            public string Root = Environment.GetEnvironmentVariable(Setup.Wrappers.RootVariable) is { Length: > 0 } fromWrapper
+                ? Path.GetFullPath(fromWrapper)
+                : Directory.GetCurrentDirectory();
             public string? Project;
             public string? OutOverride;
             public string RequestSuffix = "Request";

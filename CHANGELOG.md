@@ -168,7 +168,10 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   `install` tells the project's AI assistant to use all this instead of grepping: a short
   block in `CLAUDE.md` in the repository root (and `AGENTS.md` when present) naming the tool
   by a path relative to that file — by glob for a UPM install, whose folder name changes
-  with every update — plus `entitas-graph-out/` in `.gitignore`. The block also tells the
+  with every update — plus `entitas-graph-out/` in `.gitignore`. It also writes two short
+  commands next to that file, `./entitas-graph` (sh) and `entitas-graph.cmd` (cmd and
+  PowerShell), which find the tool and the Unity root themselves, so the block names
+  `./entitas-graph who-reads <Component>`, and a package update needs no new `install`. The block also tells the
   assistant to open the files an answer names before changing code, since links through calls
   and frames are inferred and DI, scenes and prefabs are not in the graph. Re-running replaces the
   block and leaves the rest of the file alone, and `build` says when the block was written by

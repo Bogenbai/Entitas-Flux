@@ -23,12 +23,15 @@ namespace Entitas.Graph.Setup
         /// from — usually the repository root, which is often above the Unity root.
         /// </summary>
         /// <param name="toolPath">Where entitas-graph.dll lives.</param>
-        /// <param name="repositoryRoot">The git root, or the Unity root without one.</param>
+        /// <param name="repositoryRoot">The git root, or the Unity root without one — where the <see cref="Wrappers"/> are.</param>
         public static string Build(string targetDirectory, string unityRoot, string toolPath, string repositoryRoot)
         {
-            var tool = CommandPath(targetDirectory, unityRoot, toolPath, repositoryRoot);
+            // The wrappers find the tool and the Unity root themselves, so the block names a short
+            // command that survives package updates instead of `dotnet <path> … -r <root>`.
+            var wrappers = RelativePath(targetDirectory, repositoryRoot);
+            var sh = wrappers == "." ? "./" + Wrappers.ShName : Quote(wrappers + "/" + Wrappers.ShName);
+            var cmd = (wrappers == "." ? "." : wrappers.Replace('/', '\\')) + "\\" + Wrappers.CmdName;
             var root = RelativePath(targetDirectory, unityRoot);
-            var rootOption = root == "." ? string.Empty : " -r " + Quote(root);
             var report = (root == "." ? string.Empty : root + "/") + "entitas-graph-out/GRAPH_REPORT.md";
             return string.Join("\n",
                 Begin,
@@ -36,7 +39,7 @@ namespace Entitas.Graph.Setup
                 "This is an Entitas project. To find who creates, reads, filters, removes or destroys a component, what a feature",
                 "runs and in what order, or how data gets from one system to another, run entitas-graph from this file's folder instead of searching the code:",
                 "",
-                $"    dotnet {tool} who-reads <Component>{rootOption}",
+                $"    {sh} who-reads <Component>        (Windows cmd or PowerShell: {cmd})",
                 "",
                 "Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;",
                 "explain <Name>; query \"<words>\" (the connected subgraph around the matching nodes);",
@@ -48,30 +51,6 @@ namespace Entitas.Graph.Setup
                 // infers (links through calls, frames) or cannot see (DI, scenes) is checked there.
                 "Before changing code, open the files an answer names: links marked * and frames are inferred, and DI, scenes and prefabs are not in the graph.",
                 End);
-        }
-
-        /// <summary>
-        /// How the block names entitas-graph.dll. Under Library/PackageCache the package folder is
-        /// <c>name@hash</c> and the hash changes with every package update, so that folder is
-        /// named by glob; a block with the hash would break on the next update. A tool outside the
-        /// repository (a build of the framework itself) is named by absolute path: a relative path
-        /// climbing out of the repository works on this machine only anyway, and hides that.
-        /// </summary>
-        public static string CommandPath(string targetDirectory, string unityRoot, string toolPath, string repositoryRoot)
-        {
-            var packageCache = Path.Combine(unityRoot, "Library", "PackageCache");
-            if (IsUnder(toolPath, packageCache))
-            {
-                var segments = RelativePath(packageCache, toolPath).Split('/');
-                var at = segments[0].IndexOf('@');
-                segments[0] = (at > 0 ? segments[0].Substring(0, at) : segments[0]) + "*";
-                var cache = RelativePath(targetDirectory, packageCache);
-                return Quote(cache) + "/" + string.Join("/", segments.Select(QuoteSegment));
-            }
-
-            return IsUnder(toolPath, repositoryRoot)
-                ? Quote(RelativePath(targetDirectory, toolPath))
-                : Quote(Path.GetFullPath(toolPath).Replace('\\', '/'));
         }
 
         /// <summary>
