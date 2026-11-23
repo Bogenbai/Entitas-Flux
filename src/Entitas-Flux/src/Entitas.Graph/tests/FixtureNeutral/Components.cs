@@ -25,6 +25,10 @@ namespace Harbor
     [Port] public sealed class Docked : IComponent { }
     [Port] public sealed class Wrecked : IComponent { }
 
+    // Only tankers carry one: the factory adds it in `case ShipKind.Tanker`, and each launcher passes its kind as a constant.
+    [Port] public sealed class Tank : IComponent { public int Value; }
+    public enum ShipKind { Freighter, Tanker }
+
     // A one-frame marker, and a flag set once while a ship still carries it.
     [Port] public sealed class Fresh : IComponent { }
     [Port] public sealed class Registered : IComponent { }

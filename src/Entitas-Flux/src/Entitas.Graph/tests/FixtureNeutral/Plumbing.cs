@@ -41,10 +41,10 @@ namespace Harbor
         }
     }
 
-    /// <summary>A factory: a ship is built with everything it carries.</summary>
+    /// <summary>A factory: a ship is built with everything it carries, a tanker with a tank too.</summary>
     public sealed class ShipFactory
     {
-        public PortEntity Launch(int id)
+        public PortEntity Launch(int id, ShipKind kind)
         {
             PortEntity ship = Make.Blank();
             ship.isShip = true;
@@ -52,6 +52,12 @@ namespace Harbor
             ship.AddFuel(50);
             ship.AddCargo(id * 40);
             ship.AddHull(3);
+            switch (kind)
+            {
+                case ShipKind.Tanker:
+                    ship.AddTank(id * 100);
+                    break;
+            }
             ship.isFresh = true;
             return ship;
         }

@@ -41,6 +41,7 @@ namespace Harbor
             Add(new PrioritizeShipsSystem(contexts.port));
             Add(new ScrapShipsSystem(contexts.port));
             Add(new ScrapFleetSystem(contexts.port));
+            Add(new LaunchTankersSystem(contexts.signal, factory));
         }
     }
 

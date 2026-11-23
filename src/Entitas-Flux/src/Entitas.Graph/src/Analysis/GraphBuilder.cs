@@ -246,8 +246,11 @@ namespace Entitas.Graph.Analysis
                 }
             }
 
-            // Access through queries, factories and services, credited to the systems calling them.
-            foreach (var (edge, condition, entries) in Propagate(context, accesses, destroys, calls, groupUses, groups, callerGuards))
+            // Access through queries, factories and services, credited to the systems calling them —
+            // as far as the constants they pass let it happen.
+            var written = new HashSet<string>(results.SelectMany(r => r.Written), StringComparer.Ordinal);
+            var constants = new ConstantArguments(context, written, accesses, destroys, calls);
+            foreach (var (edge, condition, entries) in Propagate(context, accesses, destroys, calls, groupUses, groups, callerGuards, constants))
                 AddEdge(edge, condition, entries);
 
             // Destroyers of an entity shape destroy every component created on that shape.
@@ -313,6 +316,12 @@ namespace Entitas.Graph.Analysis
         /// and says which of the system's cases runs the factory (`request.isGhost`), and the
         /// factory's own `if` last, the first to go when the text is cut. A method called both
         /// under a condition and without one is reached unconditionally.
+        ///
+        /// Each way to a method carries the values its calls pass (<see cref="ConstantArguments"/>):
+        /// a clause there those values rule out drops that way — `CreateCat` called with a
+        /// customer's snapshot never runs `case Worker` — and one they settle leaves the condition.
+        /// A write no way reaches is not credited to the system at all; one some ways reach keeps
+        /// only their conditions and calls.
         /// </summary>
         static IEnumerable<(GraphEdge Edge, IReadOnlyList<Condition>? Condition, IReadOnlyCollection<string> Called)> Propagate(
             BuildContext context,
@@ -321,7 +330,8 @@ namespace Entitas.Graph.Analysis
             List<CallSite> calls,
             List<GroupUse> groupUses,
             Dictionary<ISymbol, GroupShape> groups,
-            CallerGuards callerGuards)
+            CallerGuards callerGuards,
+            ConstantArguments constants)
         {
             // A query's matchers sit in its constructor; the methods using the group read them.
             var matchersByGroup = accesses
@@ -392,16 +402,13 @@ namespace Entitas.Graph.Analysis
                 // method: the calls in its code first, then down the calls the walk followed, until
                 // nothing changes (a method reached twice, the second time unconditionally).
                 var paths = new Dictionary<IMethodSymbol, Path>(SymbolEqualityComparer.Default);
-                bool Arrive(IMethodSymbol method, IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
+                bool Arrive(IMethodSymbol method, Bindings bindings, IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
                 {
                     if (!depths.ContainsKey(method))
                         return false;
                     if (!paths.TryGetValue(method, out var path))
-                    {
-                        paths[method] = new Path(condition, entries);
-                        return true;
-                    }
-                    return path.Join(condition, entries);
+                        paths[method] = path = new Path();
+                    return path.Join(bindings, condition, entries);
                 }
 
                 foreach (var root in roots)
@@ -409,7 +416,7 @@ namespace Entitas.Graph.Analysis
                     var guard = callerGuards.Of(root);
                     foreach (var call in callees[root])
                         foreach (var method in Dispatch(call.Callee))
-                            Arrive(method, Guards.And(guard, call.Condition), new[] { Name(method) });
+                            Arrive(method, constants.Bind(call, method, Bindings.None), Guards.And(guard, call.Condition), new[] { Name(method) });
                 }
 
                 for (var changed = true; changed;)
@@ -419,23 +426,64 @@ namespace Entitas.Graph.Analysis
                     {
                         if (depth + 1 >= context.Options.MaxCallDepth || !callees.TryGetValue(method, out var further) || !paths.TryGetValue(method, out var from))
                             continue;
-                        foreach (var call in further)
-                            foreach (var callee in Dispatch(call.Callee))
-                                changed |= Arrive(callee, Guards.And(from.Condition, call.Condition), from.Entries);
+                        foreach (var way in from.Ways.ToList())
+                            foreach (var call in further)
+                            {
+                                if (!constants.Holds(call.Condition, method, way.Bindings, out var callCondition))
+                                    continue;
+                                foreach (var callee in Dispatch(call.Callee))
+                                    changed |= Arrive(callee, constants.Bind(call, callee, way.Bindings), Guards.And(way.Condition, callCondition), way.Entries);
+                            }
                     }
+                }
+
+                // A write made under `ways`, the ones the constants of each way rule out dropped;
+                // nothing when none is left.
+                (bool Reached, IReadOnlyList<Condition>? Condition, IReadOnlyCollection<string> Entries) Reach(Path path, IMethodSymbol method, Condition? own)
+                {
+                    // Most methods are reached one way, knowing no values: nothing to decide.
+                    if (path.Single is { Bindings.IsEmpty: true } only)
+                        return (true, Guards.And(only.Condition, own), only.Entries);
+
+                    var reachedAny = false;
+                    var unconditional = false;
+                    var ways = new List<Condition>();
+                    var entries = new SortedSet<string>(StringComparer.Ordinal);
+                    foreach (var way in path.Ways)
+                    {
+                        if (!constants.Holds(own, method, way.Bindings, out var rest))
+                            continue;
+                        reachedAny = true;
+                        entries.UnionWith(way.Entries);
+                        if (Guards.And(way.Condition, rest) is { } condition)
+                            ways.AddRange(condition);
+                        else
+                            unconditional = true;
+                    }
+                    return (reachedAny, unconditional ? null : ways, entries);
                 }
 
                 foreach (var (method, _) in reached)
                 {
+                    // Every way here passed a constant ruling out the call that leads here.
+                    if (!paths.TryGetValue(method, out var path))
+                        continue;
                     var through = Name(method);
-                    var path = paths.TryGetValue(method, out var known) ? known : new Path(null, new[] { through });
                     if (byMethod.TryGetValue(method, out var found))
                     {
                         // Only writes carry a condition: a read under one is still a read of the component.
                         foreach (var access in found)
-                            yield return (access.ToEdge(Confidence.Inferred, through, system.Id),
-                                access.Relation is Relation.Creates or Relation.Removes ? Guards.And(path.Condition, access.Condition) : null,
-                                path.Entries);
+                        {
+                            if (access.Relation is not (Relation.Creates or Relation.Removes))
+                            {
+                                yield return (access.ToEdge(Confidence.Inferred, through, system.Id), null, path.Entries);
+                                continue;
+                            }
+
+                            var (reachedWrite, condition, entries) = Reach(path, method, access.Condition);
+                            if (reachedWrite)
+                                yield return (access.ToEdge(Confidence.Inferred, through, system.Id), condition, entries);
+                        }
                     }
 
                     if (groupsByMethod.TryGetValue(method, out var usedGroups))
@@ -452,6 +500,9 @@ namespace Entitas.Graph.Analysis
                         {
                             if (destroy.Group == null || !groups.TryGetValue(destroy.Group, out var shape))
                                 continue;
+                            var (reachedDestroy, condition, entries) = Reach(path, method, destroy.Condition);
+                            if (!reachedDestroy)
+                                continue;
                             foreach (var name in shape.AllOf)
                             {
                                 var component = context.ComponentByName(name);
@@ -460,7 +511,7 @@ namespace Entitas.Graph.Analysis
                                 {
                                     Source = system.Id, Target = component.Id, Relation = Relation.Destroys, Via = "Destroy",
                                     Confidence = Confidence.Inferred, Through = through, SourceFile = destroy.File, Line = destroy.Line
-                                }, Guards.And(path.Condition, destroy.Condition), path.Entries);
+                                }, condition, entries);
                             }
                         }
                     }
@@ -468,14 +519,51 @@ namespace Entitas.Graph.Analysis
             }
         }
 
-        /// <summary>How a system gets to a method: the conditions on the way (null: none) and its own calls that lead there.</summary>
+        /// <summary>
+        /// How a system gets to a method: one <see cref="Way"/> per set of values its calls pass the
+        /// method's parameters, in a stable order. Past <see cref="MostWays"/> distinct sets, further
+        /// ones join the way that knows no values — weaker, and still true.
+        /// </summary>
         sealed class Path
         {
+            const int MostWays = 8;
+
+            readonly SortedDictionary<string, Way> _ways = new SortedDictionary<string, Way>(StringComparer.Ordinal);
+            IReadOnlyCollection<string>? _entries;
+
+            public IEnumerable<Way> Ways => _ways.Values;
+
+            /// <summary>The only way, when there is one.</summary>
+            public Way? Single => _ways.Count == 1 ? _ways.Values.First() : null;
+
+            /// <summary>The system's calls leading here, by any way; asked once the ways are all known.</summary>
+            public IReadOnlyCollection<string> Entries => _entries ??= _ways.Count == 1
+                ? _ways.Values.First().Entries
+                : new SortedSet<string>(_ways.Values.SelectMany(w => w.Entries), StringComparer.Ordinal);
+
+            /// <summary>Another way there; true when anything changed.</summary>
+            public bool Join(Bindings bindings, IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
+            {
+                _entries = null;
+                if (!_ways.ContainsKey(bindings.Key) && _ways.Count >= MostWays)
+                    bindings = Bindings.None;
+                if (_ways.TryGetValue(bindings.Key, out var way))
+                    return way.Join(condition, entries);
+                _ways[bindings.Key] = new Way(bindings, condition, entries);
+                return true;
+            }
+        }
+
+        /// <summary>The ways to a method under one set of values for its parameters: the conditions on the way (null: none) and the system's own calls that lead there.</summary>
+        sealed class Way
+        {
+            public readonly Bindings Bindings;
             public List<Condition>? Condition;
             public readonly SortedSet<string> Entries = new SortedSet<string>(StringComparer.Ordinal);
 
-            public Path(IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
+            public Way(Bindings bindings, IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
             {
+                Bindings = bindings;
                 if (condition != null)
                 {
                     Condition = new List<Condition>();
@@ -937,6 +1025,9 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>The condition the call sits under in the caller, null when none.</summary>
         public Condition? Condition;
+
+        /// <summary>The call itself, for the values it passes (<see cref="ConstantArguments.Bind"/>), worked out only where they matter.</summary>
+        public InvocationExpressionSyntax? Syntax;
     }
 
     sealed class RegistrationSite
@@ -964,5 +1055,8 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>Methods called from no method — a field initializer's lambda — so from anywhere, at any time.</summary>
         public readonly List<IMethodSymbol> CalledOutsideMethods = new List<IMethodSymbol>();
+
+        /// <summary>Names of members written other than while their object is built (TreeWalker.NoteWritten).</summary>
+        public readonly HashSet<string> Written = new HashSet<string>(StringComparer.Ordinal);
     }
 }

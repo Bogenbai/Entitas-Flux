@@ -251,12 +251,12 @@ namespace Entitas.Graph.Tests
             Condition(Relation.Creates, "D").Should().Be("!e.isC", "a guard before it in its block");
             Condition(Relation.Creates, "E").Should().Be("!e.isC && _amount < 0", "the guard above it, then its own if");
             Condition(Relation.Creates, "F").Should().Be("!e.isC && !(_amount < 0)");
-            Condition(Relation.Creates, "G").Should().Be("!e.isC && case Kind.One");
+            Condition(Relation.Creates, "G").Should().Be("!e.isC && case One", "an enum member goes without its type");
             Condition(Relation.Creates, "A").Should().Be("!e.isC && _amount > 9");
             Condition(Relation.Removes, "A").Should().Be("!e.isC && _target != null");
             Condition(Relation.Creates, "H").Should().Be("!e.isC && caught InvalidOperationException");
             Condition(Relation.Creates, "I").Should().Be("!e.isC && _amount > 100 && !e.isB", "x == false reads as !x");
-            Condition(Relation.Creates, "J").Should().Be("!e.isC && _kind == Kind.Two && _amount < -1000 && _amount != 5");
+            Condition(Relation.Creates, "J").Should().Be("!e.isC && _kind == Two && _amount < -1000 && _amount != 5");
             Condition(Relation.Creates, "L").Should().Be("_amount != 3", "a guard after a loop tells the writes after it from those before");
 
             // Made in the if and in the else, it happens either way.
@@ -273,7 +273,7 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
-        public void A_long_condition_loses_enum_types_then_its_tail()
+        public void A_long_condition_loses_its_tail()
         {
             var graph = Snippet(@"
                 public sealed class LongSystem : IExecuteSystem
@@ -324,9 +324,8 @@ namespace Entitas.Graph.Tests
 
             string? Condition(string component) => ConditionIn(graph, "LongSystem", Relation.Creates, component);
 
-            Condition("C").Should().Be("!_first && !_second && _kind == Kind.Two", "guards in the order they are written, its own if last");
-            Condition("F").Should().Be("_kind == Two && _alphaAmount > 1000 && _betaAmount > 2000 && _first",
-                "past 70 characters an enum member loses its type first");
+            Condition("C").Should().Be("!_first && !_second && _kind == Two", "guards in the order they are written, its own if last");
+            Condition("F").Should().Be("_kind == Two && _alphaAmount > 1000 && _betaAmount > 2000 && _first");
             Condition("D").Should().Be("_alphaAmount > 1000 && _betaAmount > 2000 && _gammaAmount > 3000 && …",
                 "then the innermost clauses go, the outermost stay");
             Condition("E").Should().Be("_alphaAmount > 1000 && _kind == Two && _betaAmount + _gammaAmount + _…",
@@ -520,6 +519,377 @@ namespace Entitas.Graph.Tests
             ConditionIn(graph, "DllSystem", Relation.Creates, "B").Should().Be("_flag", "`when` is one of the names a condition goes by");
             ConditionIn(graph, "DllSystem", Relation.Creates, "C").Should().BeNull("no body to read, and `open` is no such name");
         }
+
+        [Fact]
+        public void An_enum_member_keeps_its_type_only_where_its_name_would_be_ambiguous()
+        {
+            var graph = Snippet(@"
+                public enum Shape { One, Round }
+
+                public sealed class EnumSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly Kind _kind;
+                    readonly Shape _shape;
+                    readonly int Two;
+
+                    public void Execute()
+                    {
+                        if (_kind == Kind.One && _shape == Shape.Round)
+                            _e.isB = true;
+                        if (_kind == Kind.One && _shape == Shape.One)
+                            _e.isC = true;
+                        if (_kind == Kind.Two && Two > 0)
+                            _e.isD = true;
+                    }
+                }");
+
+            string? Condition(string component) => ConditionIn(graph, "EnumSystem", Relation.Creates, component);
+
+            Condition("B").Should().Be("_kind == One && _shape == Round");
+            Condition("C").Should().Be("_kind == Kind.One && _shape == Shape.One", "two enums have a member One");
+            Condition("D").Should().Be("_kind == Kind.Two && Two > 0", "a field is called Two");
+        }
+
+        const string Yard = @"
+            public enum Hull { Steel, Wood, Glass }
+
+            public static class Yard
+            {
+                public static void Build(GameEntity e, Kind kind)
+                {
+                    switch (kind)
+                    {
+                        case Kind.One:
+                            e.isB = true;
+                            break;
+                        case Kind.Two:
+                            e.isC = true;
+                            break;
+                    }
+                }
+
+                public static bool Pick(GameEntity e, Kind kind) => kind switch
+                {
+                    Kind.One => e.isD = true,
+                    _ => e.isE = true
+                };
+
+                public static void Check(GameEntity e, Kind kind)
+                {
+                    if (kind == Kind.Two)
+                        e.isF = true;
+                    if (kind != Kind.Two)
+                        e.isG = true;
+                }
+
+                public static void Paint(GameEntity e, Hull hull)
+                {
+                    switch (hull)
+                    {
+                        case Hull.Wood or Hull.Glass:
+                            e.isH = true;
+                            break;
+                    }
+                }
+
+                public static void Guard(GameEntity e, Kind kind)
+                {
+                    switch (kind)
+                    {
+                        case Kind.One when e.isK:
+                            e.isI = true;
+                            break;
+                    }
+                }
+            }";
+
+        [Fact]
+        public void A_constant_argument_decides_the_helper_s_switch_arm_and_if()
+        {
+            var graph = Snippet(Yard + @"
+                public sealed class OneSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+
+                    public void Execute()
+                    {
+                        Yard.Build(_e, Kind.One);
+                        Yard.Pick(_e, Kind.One);
+                        Yard.Check(_e, Kind.One);
+                        Yard.Paint(_e, Hull.Steel);
+                        Yard.Guard(_e, Kind.One);
+                    }
+                }
+
+                public sealed class TwoSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly Kind _kind;
+
+                    public void Execute()
+                    {
+                        Yard.Build(_e, Kind.Two);
+                        Yard.Pick(_e, Kind.Two);
+                        Yard.Paint(_e, Hull.Glass);
+                        Yard.Guard(_e, Kind.Two);
+                        Yard.Check(_e, _kind);
+                    }
+                }");
+
+            string? Condition(string system, string component) => ConditionIn(graph, system, Relation.Creates, component);
+            bool Creates(string system, string component) => CreatesIn(graph, system, component);
+
+            // switch: the case passed, unconditionally; the other never.
+            Condition("OneSystem", "B").Should().BeNull();
+            Creates("OneSystem", "C").Should().BeFalse("Build is called with Kind.One");
+            Condition("TwoSystem", "C").Should().BeNull();
+            Creates("TwoSystem", "B").Should().BeFalse();
+
+            // A switch expression: arms in order, the discard taking what the ones before it leave.
+            Condition("OneSystem", "D").Should().BeNull();
+            Creates("OneSystem", "E").Should().BeFalse("the first arm takes Kind.One");
+            Condition("TwoSystem", "E").Should().BeNull();
+            Creates("TwoSystem", "D").Should().BeFalse();
+
+            // ==, != and `or` patterns.
+            Creates("OneSystem", "F").Should().BeFalse();
+            Condition("OneSystem", "G").Should().BeNull();
+            Creates("OneSystem", "H").Should().BeFalse("Steel is neither Wood nor Glass");
+            Condition("TwoSystem", "H").Should().BeNull();
+
+            // `when` stays the condition once its case matches.
+            Condition("OneSystem", "I").Should().Be("e.isK");
+            Creates("TwoSystem", "I").Should().BeFalse();
+
+            // A value that is no constant decides nothing; the helper's own edges keep every clause.
+            Condition("TwoSystem", "F").Should().Be("kind == Two");
+            Condition("TwoSystem", "G").Should().Be("kind != Two");
+            Condition("Yard", "B").Should().Be("case One");
+            Condition("Yard", "E").Should().Be("default");
+            Condition("Yard", "H").Should().Be("case Wood or Glass");
+            Condition("Yard", "I").Should().Be("case One when e.isK");
+        }
+
+        [Fact]
+        public void Constants_reach_through_helpers_objects_and_results_but_not_past_a_reassignment()
+        {
+            var graph = Snippet(@"
+                public static class Outer
+                {
+                    public static void Run(GameEntity e, Kind kind) => Inner.Apply(e, kind);
+                    public static void Walk(GameEntity e, Kind kind) => Inner.Apply(e, kind);
+                }
+
+                public static class Inner
+                {
+                    public static void Apply(GameEntity e, Kind kind)
+                    {
+                        if (kind == Kind.Two)
+                            e.isB = true;
+                    }
+
+                    public static void Reassigned(GameEntity e, Kind kind, bool swap)
+                    {
+                        if (swap)
+                            kind = Kind.Two;
+                        if (kind == Kind.Two)
+                            e.isC = true;
+                    }
+
+                    public static void Named(GameEntity e, Kind kind)
+                    {
+                        bool isTwo = kind == Kind.Two;
+                        if (isTwo)
+                            e.isG = true;
+                    }
+                }
+
+                public class Order
+                {
+                    public virtual Kind Level { get; }
+                    public Order(Kind level) => Level = level;
+                }
+
+                public sealed class Rush : Order
+                {
+                    public Rush() : base(Kind.One) { }
+                    public override Kind Level => Kind.Two;
+                }
+
+                public sealed class Spec
+                {
+                    public readonly Kind Kind;
+                    public Kind Mode;
+                    public string Label { get; set; }
+
+                    public Spec(Kind kind) => Kind = kind;
+
+                    public void Swap() => Mode = Kind.Two;
+                }
+
+                public sealed class Specs
+                {
+                    public Spec Make(Kind kind) => new Spec(kind);
+                }
+
+                public static class Plant
+                {
+                    public static void Build(GameEntity e, Spec spec)
+                    {
+                        switch (spec.Kind)
+                        {
+                            case Kind.Two:
+                                e.isD = true;
+                                break;
+                        }
+                        if (spec.Mode == Kind.Two)
+                            e.isE = true;
+                        if (spec.Label == ""gate"")
+                            e.isF = true;
+                    }
+
+                    public static void Ship(GameEntity e, Order order)
+                    {
+                        if (order.Level == Kind.Two)
+                            e.isH = true;
+                    }
+                }
+
+                public sealed class ChainSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly Specs _specs;
+                    readonly bool _flag;
+
+                    public void Execute()
+                    {
+                        Outer.Run(_e, Kind.One);
+                        Inner.Reassigned(_e, Kind.One, _flag);
+                        var spec = _specs.Make(Kind.One);
+                        Plant.Build(_e, spec);
+                        Plant.Build(_e, new Spec(Kind.One) { Mode = Kind.One, Label = ""gate"" });
+                        Inner.Named(_e, Kind.One);
+                        Plant.Ship(_e, new Rush());
+                    }
+                }
+
+                public sealed class MixedSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly int _amount;
+
+                    public void Execute()
+                    {
+                        if (_amount > 0)
+                            Outer.Run(_e, Kind.One);
+                        if (_amount < 0)
+                            Outer.Walk(_e, Kind.Two);
+                    }
+                }");
+
+            // Through a helper passing its parameter on.
+            CreatesIn(graph, "ChainSystem", "B").Should().BeFalse("Run passes Kind.One on to Apply");
+
+            // A parameter assigned in the helper is not what the call passed.
+            ConditionIn(graph, "ChainSystem", Relation.Creates, "C").Should().Be("kind == Two");
+
+            // In an object: built by a method's result, a constructor, an initializer.
+            CreatesIn(graph, "ChainSystem", "D").Should().BeFalse("both specs are built with Kind.One, which nothing changes");
+            ConditionIn(graph, "ChainSystem", Relation.Creates, "E").Should().Be("spec.Mode == Two", "Swap writes Mode after the spec is built");
+            ConditionIn(graph, "ChainSystem", Relation.Creates, "F").Should().BeNull(
+                "the second spec is built with the label tested, so one way there is unconditional");
+
+            // A local holding a test of the parameter is that test.
+            CreatesIn(graph, "ChainSystem", "G").Should().BeFalse("isTwo is kind == Kind.Two, and kind is Kind.One");
+
+            // The constructor sets Level to One, but Rush overrides it: a virtual property says nothing.
+            ConditionIn(graph, "ChainSystem", Relation.Creates, "H").Should().Be("order.Level == Two");
+
+            // Of two ways there only the one the constants allow is left, with its condition and its call.
+            var mixed = graph.Edges.Single(e => e.Source.EndsWith(":MixedSystem", StringComparison.Ordinal) && e.Target == "component:B");
+            mixed.Condition.Should().Be("_amount < 0");
+            mixed.Through.Should().Be("Inner.Apply");
+            mixed.Called.Should().Be("Outer.Walk");
+        }
+
+        [Fact]
+        public void Literals_consts_and_nameof_are_constants_too()
+        {
+            var graph = Snippet(@"
+                public sealed class Gate { }
+
+                public static class Codes
+                {
+                    public const int Big = 7;
+
+                    public static void ByNumber(GameEntity e, int level)
+                    {
+                        switch (level)
+                        {
+                            case 1: e.isB = true; break;
+                            case Big: e.isC = true; break;
+                        }
+                    }
+
+                    public static void ByName(GameEntity e, string name)
+                    {
+                        if (name == ""Gate"")
+                            e.isD = true;
+                    }
+
+                    public static void ByFlag(GameEntity e, bool on)
+                    {
+                        if (on)
+                            e.isE = true;
+                        else
+                            e.isF = true;
+                    }
+
+                    public static void ByTag(GameEntity e, Tag tag, Gate gate)
+                    {
+                        if (tag == null)
+                            e.isG = true;
+                        if (gate == null)
+                            e.isH = true;
+                    }
+                }
+
+                // Like a UnityEngine.Object: == says what it likes, even of a new object and null.
+                public sealed class Tag
+                {
+                    public static bool operator ==(Tag a, Tag b) => true;
+                    public static bool operator !=(Tag a, Tag b) => false;
+                    public override bool Equals(object other) => true;
+                    public override int GetHashCode() => 0;
+                }
+
+                public sealed class CodeSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+
+                    public void Execute()
+                    {
+                        Codes.ByNumber(_e, Codes.Big);
+                        Codes.ByName(_e, nameof(Gate));
+                        Codes.ByFlag(_e, false);
+                        Codes.ByTag(_e, new Tag(), new Gate());
+                    }
+                }");
+
+            CreatesIn(graph, "CodeSystem", "B").Should().BeFalse();
+            ConditionIn(graph, "CodeSystem", Relation.Creates, "C").Should().BeNull("a const");
+            ConditionIn(graph, "CodeSystem", Relation.Creates, "D").Should().BeNull("nameof is a constant string");
+            CreatesIn(graph, "CodeSystem", "E").Should().BeFalse("false never takes the if");
+            ConditionIn(graph, "CodeSystem", Relation.Creates, "F").Should().BeNull("and always takes its else");
+
+            // A new object is never null — unless == is the type's own, which may say anything.
+            ConditionIn(graph, "CodeSystem", Relation.Creates, "G").Should().Be("tag == null");
+            CreatesIn(graph, "CodeSystem", "H").Should().BeFalse();
+        }
+
+        static bool CreatesIn(EcsGraph graph, string system, string component) =>
+            graph.Edges.Any(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == Relation.Creates && e.Target == "component:" + component);
 
         static string? ConditionIn(EcsGraph graph, string system, string relation, string component) =>
             graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;

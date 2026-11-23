@@ -12,7 +12,7 @@ namespace Harbor
         public void Execute() => _signal.ReplaceClock(_signal.hasClock ? _signal.clock.Value + 1 : 0);
     }
 
-    /// <summary>Launches a ship every tenth tick, through the factory.</summary>
+    /// <summary>Launches a freighter every tenth tick, through the factory.</summary>
     public sealed class LaunchShipsSystem : IExecuteSystem
     {
         readonly SignalContext _signal;
@@ -27,7 +27,26 @@ namespace Harbor
         public void Execute()
         {
             if (_signal.hasClock && _signal.clock.Value % 10 == 0)
-                _factory.Launch(_signal.clock.Value);
+                _factory.Launch(_signal.clock.Value, ShipKind.Freighter);
+        }
+    }
+
+    /// <summary>Launches a tanker every 25th tick, through the same factory.</summary>
+    public sealed class LaunchTankersSystem : IExecuteSystem
+    {
+        readonly SignalContext _signal;
+        readonly ShipFactory _factory;
+
+        public LaunchTankersSystem(SignalContext signal, ShipFactory factory)
+        {
+            _signal = signal;
+            _factory = factory;
+        }
+
+        public void Execute()
+        {
+            if (_signal.hasClock && _signal.clock.Value % 25 == 0)
+                _factory.Launch(_signal.clock.Value, ShipKind.Tanker);
         }
     }
 

@@ -7,25 +7,30 @@ namespace Entitas.Graph.Analysis
 {
     /// <summary>
     /// One clause a write runs under, in the code's own words: `amount &lt; 0`, `!(amount &lt; 0)`
-    /// for an else, `case Kind.X`, the `when:` argument of a helper taking the write as a lambda.
-    /// <see cref="Compact"/> is the same without enum types (`currencyTypeId == Coins`), used only
-    /// when the whole condition does not fit. <see cref="Site"/> is the branch point it comes from
-    /// and <see cref="Negated"/> the side taken there: the body of an if and its else, or of
+    /// for an else, `case X` (enum members without their type), the `when:` argument of a helper
+    /// taking the write as a lambda. <see cref="Site"/> is the branch point it comes from and
+    /// <see cref="Negated"/> the side taken there: the body of an if and its else, or of
     /// `if (c) { …; continue; }` and what follows it, exclude each other however they are worded.
+    ///
+    /// <see cref="Node"/> is that branch point in the code, kept so a call's constant arguments
+    /// can decide the clause later (<see cref="ConstantArguments"/>); <see cref="Residual"/>, for
+    /// `case X when c`, is the clause left when the case is known to match: its `when`.
     /// </summary>
     sealed class Clause
     {
         public readonly string Text;
-        public readonly string Compact;
         public readonly string? Site;
         public readonly bool Negated;
+        public readonly Microsoft.CodeAnalysis.SyntaxNode? Node;
+        public readonly Clause? Residual;
 
-        public Clause(string text, string compact, string? site, bool negated)
+        public Clause(string text, string? site, bool negated, Microsoft.CodeAnalysis.SyntaxNode? node = null, Clause? residual = null)
         {
             Text = text;
-            Compact = compact;
             Site = site;
             Negated = negated;
+            Node = node;
+            Residual = residual;
         }
 
         /// <summary>Whether this and <paramref name="other"/> cannot both hold: the two sides of one branch point, or one written as the other's negation.</summary>
@@ -66,21 +71,18 @@ namespace Entitas.Graph.Analysis
         public bool IsWithin(Condition other) => Clauses.All(other.Contains);
 
         /// <summary>
-        /// One line of at most about <paramref name="length"/> characters: as written, then without
-        /// enum types, then cut at the tail — whole clauses while they fit, the next one cut short
-        /// when enough of it is left to recognise, otherwise " &amp;&amp; …".
+        /// One line of at most about <paramref name="length"/> characters: as written, then cut at
+        /// the tail — whole clauses while they fit, the next one cut short when enough of it is
+        /// left to recognise, otherwise " &amp;&amp; …".
         /// </summary>
         public string Render(int length)
         {
             string Wrap(string text) => Clauses.Count > 1 && Guards.NeedsParentheses(text) ? "(" + text + ")" : text;
 
-            var full = string.Join(" && ", Clauses.Select(c => Wrap(c.Text)));
+            var parts = Clauses.Select(c => Wrap(c.Text)).ToList();
+            var full = string.Join(" && ", parts);
             if (full.Length <= length)
                 return full;
-            var parts = Clauses.Select(c => Wrap(c.Compact)).ToList();
-            var compact = string.Join(" && ", parts);
-            if (compact.Length <= length)
-                return compact;
 
             if (parts[0].Length > length)
                 return Cut(parts[0], length);
@@ -217,7 +219,7 @@ namespace Entitas.Graph.Analysis
                 var parts = text.Contains(" or ") ? new List<string> { text } : SplitTopLevel(text, " && ");
                 if (parts[parts.Count - 1].EndsWith("…", StringComparison.Ordinal))
                     parts[parts.Count - 1] = text;
-                written[new Condition(parts.Select(p => new Clause(p, p, null, false)).ToList())] = text;
+                written[new Condition(parts.Select(p => new Clause(p, null, false)).ToList())] = text;
             }
 
             return Reduce(written.Keys) is { } reduced

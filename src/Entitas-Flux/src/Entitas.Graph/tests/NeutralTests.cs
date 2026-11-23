@@ -133,6 +133,21 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void Only_the_launcher_passing_the_tanker_kind_creates_a_tank()
+        {
+            // ShipFactory.Launch adds Tank in `case ShipKind.Tanker`; one launcher passes Freighter, the other Tanker.
+            Edges("ShipFactory", Relation.Creates, "Tank").Should().ContainSingle(e => e.Condition == "case Tanker");
+            Edges("LaunchTankersSystem", Relation.Creates, "Tank").Should().ContainSingle(e =>
+                e.Confidence == Confidence.Inferred && e.Through == "ShipFactory.Launch" && e.Condition == "_signal.hasClock && _signal.clock.Value % 25 == 0");
+            Edges("LaunchShipsSystem", Relation.Creates, "Tank").Should().BeEmpty("it launches freighters only");
+
+            // Everything else the factory makes, both make, under their own call's condition alone.
+            Edges("LaunchShipsSystem", Relation.Creates, "Hull").Should().ContainSingle(e => e.Condition == "_signal.hasClock && _signal.clock.Value % 10 == 0");
+            Edges("LaunchTankersSystem", Relation.Creates, "Hull").Should().ContainSingle();
+            Queries.WhoCreates("Tank").Should().NotContain("LaunchShipsSystem");
+        }
+
+        [Fact]
         public void Explain_names_the_other_reader_of_an_order_and_where_each_role_comes_from()
         {
             Queries.Explain("DockShipsSystem").Should().Contain(

@@ -25,6 +25,7 @@ namespace Entitas.Graph.Analysis
         readonly Dictionary<(IMethodSymbol, int), (ISymbol? Group, string? Loop)> _helperLoops =
             new Dictionary<(IMethodSymbol, int), (ISymbol?, string?)>();
         readonly Dictionary<ForEachStatementSyntax, bool> _steady = new Dictionary<ForEachStatementSyntax, bool>();
+        readonly Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?> _enumMembers = new Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?>();
 
         public TreeWalker(BuildContext context, SyntaxTree tree)
         {
@@ -51,11 +52,89 @@ namespace Entitas.Graph.Analysis
                     case IdentifierNameSyntax identifier when !_generated:
                         VisitGroupUse(identifier);
                         break;
+                    case AssignmentExpressionSyntax assignment:
+                        NoteWritten(assignment.Left, IsConstruction(assignment));
+                        break;
+                    case PrefixUnaryExpressionSyntax prefix when prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression):
+                        NoteWritten(prefix.Operand, false);
+                        break;
+                    case PostfixUnaryExpressionSyntax postfix when postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression):
+                        NoteWritten(postfix.Operand, false);
+                        break;
+                    case ArgumentSyntax argument when argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword):
+                        NoteWritten(argument.Expression, false);
+                        break;
+                    case RefExpressionSyntax reference:
+                        NoteWritten(reference.Expression, false);
+                        break;
                 }
             }
 
             return _result.Accesses.Count + _result.Destroys.Count + _result.Calls.Count + _result.Registrations.Count + _result.GroupUses.Count +
-                   _result.CalledOutsideMethods.Count > 0 ? _result : null;
+                   _result.CalledOutsideMethods.Count + _result.Written.Count > 0 ? _result : null;
+        }
+
+        // -- fields written after construction ----------------------------------------------
+
+        /// <summary>
+        /// The name of what <paramref name="target"/> writes, unless it is how an object is built:
+        /// its constructor setting its own members, or an object initializer. A member no one
+        /// writes otherwise keeps the value it was built with, which is what lets a constant
+        /// travel inside an object (<see cref="ConstantArguments"/>). By name, without binding —
+        /// this runs on every assignment of the project — so a write to any member of that name
+        /// counts: that costs a constant, never soundness.
+        /// </summary>
+        void NoteWritten(ExpressionSyntax target, bool construction)
+        {
+            switch (target)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    NoteWritten(parenthesized.Expression, construction);
+                    break;
+                case TupleExpressionSyntax tuple:
+                    foreach (var element in tuple.Arguments)
+                        NoteWritten(element.Expression, false);
+                    break;
+                case IdentifierNameSyntax identifier when !construction:
+                    _result.Written.Add(identifier.Identifier.ValueText);
+                    break;
+                case MemberAccessExpressionSyntax member when !(construction && member.Expression is ThisExpressionSyntax):
+                    _result.Written.Add(member.Name.Identifier.ValueText);
+                    break;
+                case MemberBindingExpressionSyntax binding:
+                    _result.Written.Add(binding.Name.Identifier.ValueText);
+                    break;
+                case ThisExpressionSyntax when !construction:
+                    // `this = other;` in a struct replaces every field.
+                    if (target.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault() is { } type)
+                        foreach (var field in type.Members.OfType<FieldDeclarationSyntax>().SelectMany(f => f.Declaration.Variables))
+                            _result.Written.Add(field.Identifier.ValueText);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// An assignment in an object initializer (`new T { X = 1 }`, `with { X = 1 }`), or a
+        /// statement of a constructor (not of a lambda in it, which may run later).
+        /// </summary>
+        static bool IsConstruction(AssignmentExpressionSyntax assignment)
+        {
+            if (assignment.Parent is InitializerExpressionSyntax initializer &&
+                (initializer.IsKind(SyntaxKind.ObjectInitializerExpression) || initializer.IsKind(SyntaxKind.WithInitializerExpression)))
+                return initializer.Parent is BaseObjectCreationExpressionSyntax or WithExpressionSyntax;
+
+            foreach (var ancestor in assignment.Ancestors())
+            {
+                switch (ancestor)
+                {
+                    case ConstructorDeclarationSyntax:
+                        return true;
+                    case AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or MemberDeclarationSyntax or AccessorDeclarationSyntax:
+                        return false;
+                }
+            }
+
+            return false;
         }
 
         // -- the generated API ---------------------------------------------------------------
@@ -660,26 +739,78 @@ namespace Entitas.Graph.Analysis
         }
 
         /// <summary>
-        /// The clause as text — `amount &lt; 0`, `!(amount &lt; 0)` for an else, `case Kind.X` —
-        /// whole, and compact for when the line is too long (<see cref="Condition.Render"/> cuts
-        /// it). The compact form binds member accesses, so it is worked out only where it can
-        /// differ: where a member is accessed on a name that may be an enum type.
+        /// The clause as text — `amount &lt; 0`, `!(amount &lt; 0)` for an else, `case X` — with the
+        /// node it comes from, and for `case X when c` the clause left once X is known to match.
         /// </summary>
         Clause ClauseOf(SyntaxNode clause, bool negate)
         {
-            var text = ClauseText(clause, negate, compact: false);
-            var compact = Written(clause).Any(n => n.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>().Any(MayBeEnumMember))
-                ? ClauseText(clause, negate, compact: true)
-                : text;
-            return new Clause(text, compact, $"{_file}:{clause.SpanStart}", negate);
+            var written = Written(clause).ToList();
+            var typed = TypedEnumMembers(written);
+            Clause? residual = clause switch
+            {
+                SwitchSectionSyntax { Labels.Count: 1 } section when section.Labels[0] is CasePatternSwitchLabelSyntax { WhenClause: { } when } =>
+                    new Clause(Condition(when.Condition, false, typed), null, false),
+                SwitchExpressionArmSyntax { WhenClause: { } when } => new Clause(Condition(when.Condition, false, typed), null, false),
+                _ => null
+            };
+            return new Clause(ClauseText(clause, negate, typed), $"{_file}:{clause.SpanStart}", negate, clause, residual);
+        }
 
-            static bool MayBeEnumMember(MemberAccessExpressionSyntax member) =>
-                member.Expression is IdentifierNameSyntax { Identifier.ValueText: var name } ? name.Length > 0 && char.IsUpper(name[0])
-                : member.Expression is MemberAccessExpressionSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax;
+        /// <summary>
+        /// An enum member is written without its type (`case Worker`, `currencyTypeId == Coins`):
+        /// what it is compared with says which enum it is. Not when that leaves two things in the
+        /// clause with one name — members of two enums, or a member and a variable — so these
+        /// names keep their type. Null when every member can go without.
+        /// </summary>
+        HashSet<string>? TypedEnumMembers(IEnumerable<SyntaxNode> written)
+        {
+            Dictionary<string, ITypeSymbol>? members = null;
+            HashSet<string>? typed = null;
+            HashSet<string>? names = null;
+            foreach (var node in written.SelectMany(n => n.DescendantNodesAndSelf()))
+            {
+                if (node is MemberAccessExpressionSyntax access && EnumMember(access) is { } member)
+                {
+                    members ??= new Dictionary<string, ITypeSymbol>(StringComparer.Ordinal);
+                    if (!members.TryGetValue(member.Name, out var type))
+                        members[member.Name] = member.ContainingType;
+                    else if (!SymbolEqualityComparer.Default.Equals(type, member.ContainingType))
+                        (typed ??= new HashSet<string>(StringComparer.Ordinal)).Add(member.Name);
+                }
+                else if (node is IdentifierNameSyntax identifier && !(identifier.Parent is MemberAccessExpressionSyntax parent && parent.Name == identifier))
+                {
+                    (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(identifier.Identifier.ValueText);
+                }
+            }
+
+            if (members != null && names != null)
+                foreach (var name in members.Keys.Where(names.Contains))
+                    (typed ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
+            return typed;
+        }
+
+        /// <summary>
+        /// `Kind.X` (or `Outer.Kind.X`) naming an enum member through its type. Bound only where a
+        /// member is accessed on a name that may be a type, and once per node.
+        /// </summary>
+        IFieldSymbol? EnumMember(MemberAccessExpressionSyntax member)
+        {
+            if (!(member.Expression is IdentifierNameSyntax { Identifier.ValueText: var name } ? name.Length > 0 && char.IsUpper(name[0])
+                    : member.Expression is MemberAccessExpressionSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax))
+                return null;
+            if (!_enumMembers.TryGetValue(member, out var field))
+            {
+                field = _model.GetSymbolInfo(member).Symbol is IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } symbol &&
+                        _model.GetSymbolInfo(member.Expression).Symbol is ITypeSymbol
+                    ? symbol
+                    : null;
+                _enumMembers[member] = field;
+            }
+            return field;
         }
 
         /// <summary>The parts of a clause <see cref="ClauseText"/> writes out: an if's condition, not its body.</summary>
-        static IEnumerable<SyntaxNode> Written(SyntaxNode clause) => clause switch
+        internal static IEnumerable<SyntaxNode> Written(SyntaxNode clause) => clause switch
         {
             ArgumentSyntax argument => new[] { argument.Expression },
             IfStatementSyntax ifStatement => new[] { ifStatement.Condition },
@@ -693,42 +824,42 @@ namespace Entitas.Graph.Analysis
             _ => new[] { clause }
         };
 
-        string ClauseText(SyntaxNode clause, bool negate, bool compact)
+        string ClauseText(SyntaxNode clause, bool negate, HashSet<string>? typed)
         {
             switch (clause)
             {
                 case ArgumentSyntax argument:
-                    return Condition(argument.Expression, negate, compact);
+                    return Condition(argument.Expression, negate, typed);
                 case IfStatementSyntax ifStatement:
-                    return Condition(ifStatement.Condition, negate, compact);
+                    return Condition(ifStatement.Condition, negate, typed);
                 case ConditionalExpressionSyntax conditional:
-                    return Condition(conditional.Condition, negate, compact);
+                    return Condition(conditional.Condition, negate, typed);
                 case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression):
-                    return Text(binary.Left, compact) + " == null";
+                    return Text(binary.Left, typed) + " == null";
                 case BinaryExpressionSyntax binary:
-                    return Condition(binary.Left, negate, compact);
+                    return Condition(binary.Left, negate, typed);
                 case AssignmentExpressionSyntax assignment:
-                    return Text(assignment.Left, compact) + " == null";
+                    return Text(assignment.Left, typed) + " == null";
                 case ConditionalAccessExpressionSyntax access:
-                    return Text(access.Expression, compact) + " != null";
+                    return Text(access.Expression, typed) + " != null";
                 case CatchClauseSyntax catchClause:
-                    return catchClause.Declaration == null ? "caught an exception" : "caught " + Text(catchClause.Declaration.Type, compact);
+                    return catchClause.Declaration == null ? "caught an exception" : "caught " + Text(catchClause.Declaration.Type, typed);
                 case SwitchSectionSyntax section:
                     return section.Labels.Any(l => l is DefaultSwitchLabelSyntax)
                         ? "default"
                         : "case " + string.Join(" or ", section.Labels.Select(l => l switch
                         {
-                            CaseSwitchLabelSyntax value => Text(value.Value, compact),
-                            CasePatternSwitchLabelSyntax pattern => Text(pattern.Pattern, compact) +
-                                                                     (pattern.WhenClause == null ? string.Empty : " when " + Text(pattern.WhenClause.Condition, compact)),
-                            _ => Text(l, compact)
+                            CaseSwitchLabelSyntax value => Text(value.Value, typed),
+                            CasePatternSwitchLabelSyntax pattern => Text(pattern.Pattern, typed) +
+                                                                     (pattern.WhenClause == null ? string.Empty : " when " + Text(pattern.WhenClause.Condition, typed)),
+                            _ => Text(l, typed)
                         }));
                 case SwitchExpressionArmSyntax arm:
                     return arm.Pattern is DiscardPatternSyntax && arm.WhenClause == null
                         ? "default"
-                        : "case " + Text(arm.Pattern, compact) + (arm.WhenClause == null ? string.Empty : " when " + Text(arm.WhenClause.Condition, compact));
+                        : "case " + Text(arm.Pattern, typed) + (arm.WhenClause == null ? string.Empty : " when " + Text(arm.WhenClause.Condition, typed));
                 default:
-                    return Text(clause, compact);
+                    return Text(clause, typed);
             }
         }
 
@@ -737,7 +868,7 @@ namespace Entitas.Graph.Analysis
         /// are the negation of x; a negated `==` becomes `!=` and back; a negated `is not P`
         /// becomes `is P`; a name or a call gets a plain `!`; anything else `!(…)`.
         /// </summary>
-        string Condition(ExpressionSyntax condition, bool negate, bool compact)
+        string Condition(ExpressionSyntax condition, bool negate, HashSet<string>? typed)
         {
             var expression = Unparenthesized(condition);
             while (true)
@@ -764,16 +895,16 @@ namespace Entitas.Graph.Analysis
             }
 
             if (!negate)
-                return Text(expression, compact);
+                return Text(expression, typed);
 
             return expression switch
             {
-                BinaryExpressionSyntax b when b.IsKind(SyntaxKind.EqualsExpression) => $"{Text(b.Left, compact)} != {Text(b.Right, compact)}",
-                BinaryExpressionSyntax b when b.IsKind(SyntaxKind.NotEqualsExpression) => $"{Text(b.Left, compact)} == {Text(b.Right, compact)}",
+                BinaryExpressionSyntax b when b.IsKind(SyntaxKind.EqualsExpression) => $"{Text(b.Left, typed)} != {Text(b.Right, typed)}",
+                BinaryExpressionSyntax b when b.IsKind(SyntaxKind.NotEqualsExpression) => $"{Text(b.Left, typed)} == {Text(b.Right, typed)}",
                 IsPatternExpressionSyntax { Pattern: UnaryPatternSyntax inner } pattern when inner.IsKind(SyntaxKind.NotPattern) =>
-                    $"{Text(pattern.Expression, compact)} is {Text(inner.Pattern, compact)}",
-                IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax or ElementAccessExpressionSyntax => "!" + Text(expression, compact),
-                _ => $"!({Text(expression, compact)})"
+                    $"{Text(pattern.Expression, typed)} is {Text(inner.Pattern, typed)}",
+                IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax or ElementAccessExpressionSyntax => "!" + Text(expression, typed),
+                _ => $"!({Text(expression, typed)})"
             };
         }
 
@@ -786,12 +917,12 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>
         /// The code as written, on one line, with `x == false` as `!x` and `x == true` as `x`
-        /// wherever they sit (`order.isProcessed &amp;&amp; !order.isPaid`). Compact: enum members
-        /// without their type too (`currencyTypeId == Coins` for `currencyTypeId ==
-        /// CurrencyTypeId.Coins`) — asked for only when the whole does not fit, because where there
-        /// is room the type says more.
+        /// wherever they sit (`order.isProcessed &amp;&amp; !order.isPaid`), and enum members without
+        /// their type (`currencyTypeId == Coins`) unless <paramref name="typed"/> names them
+        /// (<see cref="TypedEnumMembers"/>). Always, not only when the line is long: one enum
+        /// written two ways on two edges of one system reads as two different things.
         /// </summary>
-        string Text(SyntaxNode node, bool compact)
+        string Text(SyntaxNode node, HashSet<string>? typed)
         {
             var replacements = new List<(Microsoft.CodeAnalysis.Text.TextSpan Span, string Text)>();
             foreach (var comparison in node.DescendantNodesAndSelf().OfType<BinaryExpressionSyntax>())
@@ -808,13 +939,9 @@ namespace Entitas.Graph.Analysis
                     : $"!({operand})"));
             }
 
-            if (compact)
-            {
-                foreach (var member in node.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>())
-                    if (_model.GetSymbolInfo(member).Symbol is IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } &&
-                        _model.GetSymbolInfo(member.Expression).Symbol is ITypeSymbol)
-                        replacements.Add((member.Span, member.Name.Identifier.ValueText));
-            }
+            foreach (var member in node.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>())
+                if (EnumMember(member) is { } field && !(typed?.Contains(field.Name) ?? false))
+                    replacements.Add((member.Span, member.Name.Identifier.ValueText));
 
             // Outermost first wins where two overlap; then applied from the end, so the spans before stay valid.
             var applied = new List<(Microsoft.CodeAnalysis.Text.TextSpan Span, string Text)>();
@@ -1076,7 +1203,7 @@ namespace Entitas.Graph.Analysis
 
             var caller = EnclosingMethod(invocation);
             if (caller != null)
-                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation) });
+                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation), Syntax = invocation });
             else
                 _result.CalledOutsideMethods.Add(callee);
         }
