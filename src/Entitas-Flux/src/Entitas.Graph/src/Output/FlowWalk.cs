@@ -450,7 +450,7 @@ namespace Entitas.Graph.Output
                     _queue.Enqueue(step);
                 }
                 link.Takers.Add(new FlowTake(step, taker.Edges, frame, elsewhere, taker.Marker,
-                    taker.Marker ? OtherTriggers(taker.Node, link.Component) : Array.Empty<GraphNode>()));
+                    taker.Marker ? OtherTriggers(taker.Node, link.Component) : Array.Empty<GraphNode>(), taker.MayMiss));
             }
 
             link.Ends.AddRange(Ends(link, producers.Count == 1 ? producers[0] : null, takers));
@@ -617,6 +617,7 @@ namespace Entitas.Graph.Output
             var reads = (kind & (HandOff.Request | HandOff.Event | HandOff.Transient | HandOff.State)) != 0;
             var (reactors, skipped, unseen) = kind.HasFlag(HandOff.Watched) ? Reactors(component, relations, writes) : (new List<GraphNode>(), 0, new List<FlowUnseen>());
             var reacting = new HashSet<string>(reactors.Select(r => r.Id), StringComparer.Ordinal);
+            var mayMiss = MayMiss(writes);
             var incoming = In(component.Id);
             var takers = incoming
                 .Where(e => reads && e.Relation == Relation.Reads || e.Relation == Relation.Reacts && reacting.Contains(e.Source))
@@ -633,10 +634,27 @@ namespace Entitas.Graph.Output
                         .ThenBy(e => e.Confidence == Confidence.Extracted ? 0 : 1)
                         .ThenBy(e => e.Line)
                         .ToList();
-                    return new FlowTaker(n, edges, reacts);
+                    return new FlowTaker(n, edges, reacts, reacts && mayMiss.TryGetValue(n.Id, out var needs) ? needs : null);
                 })
                 .ToList();
             return (takers, skipped, unseen.Where(u => u.System.Id != producer?.Id).ToList());
+        }
+
+        /// <summary>
+        /// The reacting systems every one of <paramref name="writes"/> may hide the change from,
+        /// because the call making it may also take off a component their groups need (graph.json
+        /// `may_miss`), with that component's name. They stay takers, marked: a view detached
+        /// takes CatAnimator off with View, but the code does not prove it is the same entity.
+        /// </summary>
+        Dictionary<string, string> MayMiss(IReadOnlyList<GraphEdge> writes)
+        {
+            var mayMiss = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (writes.Count == 0)
+                return mayMiss;
+            foreach (var m in writes[0].MayMiss)
+                if (writes.All(w => w.MayMiss.Any(x => x.System == m.System)))
+                    mayMiss[m.System] = _graph.Node(m.Needs) is { } needs ? needs.Label : m.Needs;
+            return mayMiss;
         }
 
         /// <summary>
@@ -1143,8 +1161,11 @@ namespace Entitas.Graph.Output
         /// <summary>For a reaction: the other [Watched] components the system reacts to.</summary>
         public readonly IReadOnlyList<GraphNode> OtherTriggers;
 
+        /// <summary>For a reaction: a component its group needs that the call making the change may take off (graph.json `may_miss`).</summary>
+        public readonly string? MayMiss;
+
         public FlowTake(FlowStep step, IReadOnlyList<GraphEdge> edges, FlowFrame frame, IReadOnlyList<(string, FlowFrame)> elsewhere, bool marker,
-            IReadOnlyList<GraphNode> otherTriggers)
+            IReadOnlyList<GraphNode> otherTriggers, string? mayMiss)
         {
             Step = step;
             Edges = edges;
@@ -1152,6 +1173,7 @@ namespace Entitas.Graph.Output
             Elsewhere = elsewhere;
             Marker = marker;
             OtherTriggers = otherTriggers;
+            MayMiss = mayMiss;
         }
     }
 
@@ -1161,11 +1183,15 @@ namespace Entitas.Graph.Output
         public readonly List<GraphEdge> Edges;
         public readonly bool Marker;
 
-        public FlowTaker(GraphNode node, List<GraphEdge> edges, bool marker)
+        /// <summary>As <see cref="FlowTake.MayMiss"/>.</summary>
+        public readonly string? MayMiss;
+
+        public FlowTaker(GraphNode node, List<GraphEdge> edges, bool marker, string? mayMiss = null)
         {
             Node = node;
             Edges = edges;
             Marker = marker;
+            MayMiss = mayMiss;
         }
     }
 

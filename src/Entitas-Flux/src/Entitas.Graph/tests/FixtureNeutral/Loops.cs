@@ -87,6 +87,13 @@ namespace Harbor
             Add(new MoorHullsSystem(contexts.port));
             Add(new SlackenMooringsSystem(contexts.port));
             Add(new HaulKeelsSystem(contexts.signal, contexts.port));
+
+            // Moorings, last, so that nothing above moves.
+            Add(new UnmoorCraftsSystem(contexts.port));
+            Add(new SlackenHawsersSystem(contexts.port));
+            Add(new AlignLodestonesSystem(contexts.port));
+            Add(new ReelSpoolsSystem(contexts.port));
+            Add(new DimFloodlightsSystem(contexts.port));
         }
     }
 

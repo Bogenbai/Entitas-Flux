@@ -30,6 +30,7 @@ namespace Entitas.Graph.Analysis
         readonly Dictionary<ISymbol, List<string>> _required = new Dictionary<ISymbol, List<string>>(SymbolEqualityComparer.Default);
         readonly Dictionary<IMethodSymbol, List<ArgumentSite>> _passed = new Dictionary<IMethodSymbol, List<ArgumentSite>>(SymbolEqualityComparer.Default);
         readonly Dictionary<string, List<IMethodSymbol>> _reach = new Dictionary<string, List<IMethodSymbol>>(StringComparer.Ordinal);
+        readonly Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> _runs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
 
         /// <summary>The project's call sites by the method making them.</summary>
         public readonly Dictionary<IMethodSymbol, List<CallSite>> Callees;
@@ -191,6 +192,37 @@ namespace Entitas.Graph.Analysis
             }
             return reached;
         }
+
+        /// <summary>
+        /// What one call of <paramref name="method"/> runs: the method itself and those it reaches
+        /// through calls, an interface's or abstract method's call landing in every implementation
+        /// (<see cref="BuildContext.Dispatch"/>), as deep as Propagate walks.
+        /// </summary>
+        public HashSet<IMethodSymbol> Run(IMethodSymbol method)
+        {
+            if (_runs.TryGetValue(method, out var known))
+                return known;
+
+            var run = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { method };
+            var frontier = new List<IMethodSymbol> { method };
+            for (var depth = 0; depth < _context.Options.MaxCallDepth && frontier.Count > 0; depth++)
+            {
+                var next = new List<IMethodSymbol>();
+                foreach (var caller in frontier)
+                    if (Callees.TryGetValue(caller, out var calls))
+                        next.AddRange(_context.Dispatch(calls.Select(c => c.Callee)).Where(run.Add));
+                frontier = next;
+            }
+            _runs[method] = run;
+            return run;
+        }
+
+        /// <summary>The calls handing an entity to parameter <paramref name="parameter"/> of <paramref name="method"/>, one made through an interface included.</summary>
+        public IEnumerable<ArgumentSite> PassedTo(IMethodSymbol method, int parameter) =>
+            _passed.TryGetValue(method, out var sites) ? sites.Where(s => s.Parameter == parameter) : Enumerable.Empty<ArgumentSite>();
+
+        /// <summary>Two creations that can be one entity: the same call, or one a factory call hands back.</summary>
+        public bool SameCreation(string a, string b) => a == b || Up(a).Intersect(Up(b), StringComparer.Ordinal).Any();
 
         /// <summary>
         /// The creations the entity can come from, by their keys; null when that is not known. A

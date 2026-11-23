@@ -209,6 +209,16 @@ namespace Entitas.Graph
         public List<UnseenReactor> UnseenBy = new List<UnseenReactor>();
 
         /// <summary>
+        /// For the same writes: the systems reacting to the marker whose every reacting group
+        /// requires a component that the writing method's own run — what it calls, interface
+        /// calls included — also takes off an entity that may be the written one, and puts on
+        /// none (Analysis.UnseenReactors): a view's registrars removing CatAnimator through a
+        /// property while the view's caller removes View. They may miss the write, which the code
+        /// does not decide, so they stay reactors. Not for those in <see cref="UnseenBy"/>.
+        /// </summary>
+        public List<MayMissReactor> MayMiss = new List<MayMissReactor>();
+
+        /// <summary>
         /// For a system's creates of a request, event or transient component on an entity it has
         /// just made: the systems reading it whose groups require a component the entity is made
         /// without, which they wait for — and how it arrives: <see cref="ReaderWait.Added"/> when
@@ -227,6 +237,15 @@ namespace Entitas.Graph
         public string System = string.Empty;
 
         /// <summary>The component the reacting group requires and the written entity never gets.</summary>
+        public string Needs = string.Empty;
+    }
+
+    /// <summary>A system reacting to a [Watched] component that may miss one write of it, and why: a component its group needs that the same call may take off.</summary>
+    public sealed class MayMissReactor
+    {
+        public string System = string.Empty;
+
+        /// <summary>The component the reacting groups require and the writing method's run removes.</summary>
         public string Needs = string.Empty;
     }
 
@@ -426,6 +445,18 @@ namespace Entitas.Graph
                         }
                         w.WriteEndArray();
                     }
+                    if (e.MayMiss.Count > 0)
+                    {
+                        w.WriteStartArray("may_miss");
+                        foreach (var m in e.MayMiss)
+                        {
+                            w.WriteStartObject();
+                            w.WriteString("system", m.System);
+                            w.WriteString("needs", m.Needs);
+                            w.WriteEndObject();
+                        }
+                        w.WriteEndArray();
+                    }
                     if (e.Waits.Count > 0)
                     {
                         w.WriteStartArray("waits");
@@ -531,6 +562,10 @@ namespace Entitas.Graph
                 if (e.TryGetProperty("unseen_by", out var unseenBy) && unseenBy.ValueKind == JsonValueKind.Array)
                     foreach (var u in unseenBy.EnumerateArray())
                         unseen.Add(new UnseenReactor { System = Str(u, "system") ?? string.Empty, Needs = Str(u, "needs") ?? string.Empty });
+                var mayMiss = new List<MayMissReactor>();
+                if (e.TryGetProperty("may_miss", out var missList) && missList.ValueKind == JsonValueKind.Array)
+                    foreach (var m in missList.EnumerateArray())
+                        mayMiss.Add(new MayMissReactor { System = Str(m, "system") ?? string.Empty, Needs = Str(m, "needs") ?? string.Empty });
                 var waits = new List<ReaderWait>();
                 if (e.TryGetProperty("waits", out var waitList) && waitList.ValueKind == JsonValueKind.Array)
                     foreach (var x in waitList.EnumerateArray())
@@ -543,6 +578,7 @@ namespace Entitas.Graph
                 graph.Edges.Add(new GraphEdge
                 {
                     UnseenBy = unseen,
+                    MayMiss = mayMiss,
                     Waits = waits,
                     Source = e.GetProperty("source").GetString()!,
                     Target = e.GetProperty("target").GetString()!,

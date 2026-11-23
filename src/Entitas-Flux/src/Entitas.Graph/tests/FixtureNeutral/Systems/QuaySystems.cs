@@ -10,7 +10,7 @@ namespace Harbor
     [Port] public sealed class KeelCall : IComponent { public int Value; }     // HaulKeelsSystem destroys it only on some ticks
     [Port] public sealed class Ballast : IComponent { public int Value; }
     [Port] public sealed class Mooring : IComponent { public int Value; }
-    [Port] public sealed class Hawser : IComponent { public int Value; }
+    [Port] public sealed class Cable : IComponent { public int Value; }
     [Port] public sealed class Keel : IComponent { public int Value; }
     [Port] public sealed class Bilge : IComponent { public int Value; }
     [Port] public sealed class Bollard : IComponent { public int Value; }
@@ -28,10 +28,10 @@ namespace Harbor
     }
 
     /// <summary>
-    /// Makes a mooring fast with a bollard, unless it already has a hawser and is to stay slack.
+    /// Makes a mooring fast with a bollard, unless it already has a cable and is to stay slack.
     /// It counts the moorings with lines first: the jump is not one the method starts with.
     /// </summary>
-    public static class Moorings
+    public static class Quays
     {
         static int _lined;
 
@@ -39,7 +39,7 @@ namespace Harbor
         {
             if (mooring.mooring.Value > 0)
                 _lined++;
-            if (mooring.hasHawser)
+            if (mooring.hasCable)
             {
                 if (slack)
                     return;
@@ -127,7 +127,7 @@ namespace Harbor
 
         public void Execute()
         {
-            // The `continue` leaves the loop over the bollards, not the mooring's: every mooring gets its hawser.
+            // The `continue` leaves the loop over the bollards, not the mooring's: every mooring gets its cable.
             foreach (PortEntity mooring in _moorings.GetEntities())
             {
                 var lines = 0;
@@ -140,8 +140,8 @@ namespace Harbor
                         lines++;
                     }
                 }
-                mooring.ReplaceHawser(lines);
-                Moorings.Secure(mooring, slack: false);
+                mooring.ReplaceCable(lines);
+                Quays.Secure(mooring, slack: false);
             }
 
             // Under a switch and under a try: too involved to read, left as they were.
@@ -150,7 +150,7 @@ namespace Harbor
                 switch (mooring.mooring.Value)
                 {
                     case 0:
-                        if (mooring.hasHawser)
+                        if (mooring.hasCable)
                             continue;
                         break;
                 }
@@ -169,10 +169,10 @@ namespace Harbor
                 mooring.ReplaceKeel(_turns);
             }
 
-            // In an else: the bilge is pumped unless the mooring has no hawser and has a bilge.
+            // In an else: the bilge is pumped unless the mooring has no cable and has a bilge.
             foreach (PortEntity mooring in _moorings.GetEntities())
             {
-                if (mooring.hasHawser)
+                if (mooring.hasCable)
                 {
                     _turns++;
                 }
@@ -200,7 +200,7 @@ namespace Harbor
         }
     }
 
-    /// <summary>Leaves every mooring slack: Moorings.Secure skips those with a hawser.</summary>
+    /// <summary>Leaves every mooring slack: Quays.Secure skips those with a cable.</summary>
     public sealed class SlackenMooringsSystem : IExecuteSystem
     {
         readonly IGroup<PortEntity> _moorings;
@@ -210,7 +210,7 @@ namespace Harbor
         public void Execute()
         {
             foreach (PortEntity mooring in _moorings.GetEntities())
-                Moorings.Secure(mooring, slack: true);
+                Quays.Secure(mooring, slack: true);
         }
     }
 

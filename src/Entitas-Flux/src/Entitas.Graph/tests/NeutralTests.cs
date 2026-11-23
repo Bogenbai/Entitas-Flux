@@ -33,6 +33,10 @@ namespace Entitas.Graph.Tests
         static IEnumerable<string> UnseenBy(string source, string target, string? through) =>
             Edges(source, Relation.Creates, target).Single(e => e.Through == through).UnseenBy.Select(u => $"{Label(u.System)} needs {Label(u.Needs)}");
 
+        /// <summary>"System needs Component" for the reactors a write records as ones it may hide the change from.</summary>
+        static IEnumerable<string> MayMiss(string source, string relation, string target) =>
+            Edges(source, relation, target).Single().MayMiss.Select(m => $"{Label(m.System)} needs {Label(m.Needs)}");
+
         [Fact]
         public void The_port_compiles_with_its_generated_code()
         {
@@ -121,6 +125,39 @@ namespace Entitas.Graph.Tests
             Lines(Queries.Flow("BurnFuelSystem")).Should().ContainInOrder(
                 "reacted to by WarnLowFuelSystem  #15 (Fleet)  same frame [+0]  ShipSystems.cs:106",
                 "+1 reacting to FuelChanged need Depot, which this entity never gets");
+        }
+
+        [Fact]
+        public void A_reaction_needing_what_the_same_call_may_take_off_stays_marked()
+        {
+            // Unmooring lets the gantry go, whose magnetic grapple — reached through IGrapple and the
+            // abstract Grapple — takes the Lodestone off the craft its gantry holds, then casts the
+            // Hawser off. AlignLodestonesSystem needs the Lodestone, but that the grapple's craft
+            // is the one unmoored holds only by how Gantry is used: it stays, marked.
+            var output = Queries.Flow("UnmoorCraftsSystem");
+            Lines(output).Should().ContainInOrder(
+                "by calling Moorings.Unmoor: removes 3 (Hawser, Floodlight, Lodestone)  (if craft.hawser.Value <= 0)  Moorings.cs:72",
+                "removes Hawser  [Watched → HawserChanged]  Moorings.cs:73",
+                "reacted to by AlignLodestonesSystem (the same call may take off Lodestone, which it needs)  #30 (Probes)  same frame [+0]  MooringSystems.cs:48",
+                // Nothing takes the Spool off; the Floodlight comes off the slipway, another parameter.
+                "reacted to by ReelSpoolsSystem  #31 (Probes)  same frame [+0]  MooringSystems.cs:64",
+                "reacted to by DimFloodlightsSystem  #32 (Probes)  same frame [+0]  MooringSystems.cs:80");
+            MayMiss("UnmoorCraftsSystem", Relation.Removes, "Hawser").Should().Equal("AlignLodestonesSystem needs Lodestone");
+            MayMiss("Moorings", Relation.Removes, "Hawser").Should().Equal("AlignLodestonesSystem needs Lodestone");
+            Edges("UnmoorCraftsSystem", Relation.Removes, "Hawser").Should().OnlyContain(e => e.UnseenBy.Count == 0, "it may still see it");
+
+            // Folded, the mark stays on the name.
+            var folded = new GraphQueries(Graph, budget: output.Length / 4).Flow("UnmoorCraftsSystem");
+            Lines(folded).Should().Contain(l => l.StartsWith(
+                "reacted to by, ending there: AlignLodestonesSystem (the same call may take off Lodestone, which it needs) #30 (Probes), ReelSpoolsSystem #31 (Probes)",
+                StringComparison.Ordinal));
+
+            // Slackening snaps the Spool off only in a branch that returns before the Hawser changes.
+            Lines(Queries.Flow("SlackenHawsersSystem")).Should().Contain("reacted to by ReelSpoolsSystem  #31 (Probes)  same frame [+0]  MooringSystems.cs:64");
+            MayMiss("SlackenHawsersSystem", Relation.Creates, "Hawser").Should().BeEmpty();
+
+            // A component start takes every change: the panel mooring a craft takes nothing off.
+            Queries.Flow("Hawser").Should().NotContain("may take off");
         }
 
         [Fact]
@@ -291,12 +328,12 @@ namespace Entitas.Graph.Tests
         {
             // A `continue` of a loop of its own; jumps under a switch and a try; a goto landing
             // before the write, which the `continue` next to it then says nothing about.
-            Edges("MoorHullsSystem", Relation.Creates, "Hawser").Should().ContainSingle(e => e.Condition == null);
+            Edges("MoorHullsSystem", Relation.Creates, "Cable").Should().ContainSingle(e => e.Condition == null);
             Edges("MoorHullsSystem", Relation.Creates, "Keel").Should().ContainSingle(e => e.Condition == null);
             Edges("MoorHullsSystem", Relation.Creates, "Ballast").Should().ContainSingle(e => e.Condition == null);
 
-            // `if (mooring.hasHawser) {…} else { if (mooring.hasBilge) continue; }`
-            Edges("MoorHullsSystem", Relation.Creates, "Bilge").Should().ContainSingle(e => e.Condition == "!(!mooring.hasHawser && mooring.hasBilge)");
+            // `if (mooring.hasCable) {…} else { if (mooring.hasBilge) continue; }`
+            Edges("MoorHullsSystem", Relation.Creates, "Bilge").Should().ContainSingle(e => e.Condition == "!(!mooring.hasCable && mooring.hasBilge)");
 
             // Nested at the top of Execute, it says when the system runs at all: no condition on
             // the destroy, but the loop does not run every time, so the calls may wait.
@@ -307,13 +344,13 @@ namespace Entitas.Graph.Tests
         [Fact]
         public void A_constant_argument_decides_a_helper_s_nested_jump()
         {
-            // Moorings.Secure: `if (mooring.hasHawser) { if (slack) return; } mooring.ReplaceBollard(1);`
-            // false for slack decides the clause; true leaves it to the hawser, so it stays.
-            Edges("Moorings", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Condition == "!(mooring.hasHawser && slack)");
-            Edges("MoorHullsSystem", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Through == "Moorings.Secure" && e.Condition == null,
+            // Quays.Secure: `if (mooring.hasCable) { if (slack) return; } mooring.ReplaceBollard(1);`
+            // false for slack decides the clause; true leaves it to the cable, so it stays.
+            Edges("Quays", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Condition == "!(mooring.hasCable && slack)");
+            Edges("MoorHullsSystem", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Through == "Quays.Secure" && e.Condition == null,
                 "slack: false never returns there");
-            Edges("SlackenMooringsSystem", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Through == "Moorings.Secure" &&
-                                                                                                    e.Condition == "!(mooring.hasHawser && slack)");
+            Edges("SlackenMooringsSystem", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Through == "Quays.Secure" &&
+                                                                                                    e.Condition == "!(mooring.hasCable && slack)");
         }
 
         [Fact]
@@ -446,6 +483,7 @@ namespace Entitas.Graph.Tests
             json.Should().Contain("\"message\": \"request\",\n      \"consumed_by\": [\n        \"system:Harbor.DockShipsSystem\"\n      ]");
             json.Should().Contain("\"message\": \"event\",\n      \"carried_by\": [\n        \"component:Pulse\"\n      ]");
             json.Should().Contain("\"unseen_by\": [\n        {\n          \"system\": \"system:Harbor.WarnLowFuelSystem\",\n          \"needs\": \"component:Ship\"\n        }\n      ]");
+            json.Should().Contain("\"may_miss\": [\n        {\n          \"system\": \"system:Harbor.AlignLodestonesSystem\",\n          \"needs\": \"component:Lodestone\"\n        }\n      ]");
         }
 
         [Fact]

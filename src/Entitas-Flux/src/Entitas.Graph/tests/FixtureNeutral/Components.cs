@@ -79,4 +79,16 @@ namespace Harbor
     [Port] public sealed class Lens : IComponent { public int Value; }
     [Port] public sealed class CustomsCheck : IComponent { public int Value; }  // ClearCustomsSystem seals every check, then destroys the sealed ones
     [Port] public sealed class Seal : IComponent { public int Value; }       // LensFitting, through IFitting and the abstract Fitting, after the await  // BeamToShipsSystem destroys it only once the ship has its Hologram
+
+    // Moorings. A craft rides on its Hawser; the gantry holding it has its grapples latch on, and
+    // the magnetic one puts a Lodestone on whatever craft its gantry holds. Unmooring lets the
+    // gantry go — each grapple unlatches, through IGrapple and the abstract Grapple, and the
+    // magnetic one takes the Lodestone off again — darkens the slipway left behind and casts the
+    // Hawser off. Slackening a hawser pulled too far snaps the Spool off instead of paying out.
+    [Port, Watched] public sealed class Hawser : IComponent { public int Value; }
+    [Port] public sealed class GantryLink : IComponent { public Gantry Value; }
+    [Port] public sealed class Lodestone : IComponent { public int Value; }   // AlignLodestonesSystem needs it; unmooring takes it off through a grapple
+    [Port] public sealed class Spool : IComponent { public int Value; }       // ReelSpoolsSystem needs it; unmooring leaves it, slackening takes it off and returns
+    [Port] public sealed class Floodlight : IComponent { public int Value; }  // DimFloodlightsSystem needs it; unmooring takes it off the slipway, not the craft
+    [Port] public sealed class Slipway : IComponent { public int Value; }
 }

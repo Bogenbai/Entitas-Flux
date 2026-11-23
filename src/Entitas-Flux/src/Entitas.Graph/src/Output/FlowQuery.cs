@@ -329,7 +329,7 @@ namespace Entitas.Graph.Output
                     }
 
                     var step = take.Step;
-                    Line($"{indent}{TakeVerb(take)} {step.Node.Label}{Inferred(take.Edges)}  {_q.FlowPlace(step.Node, _walk.Root)}  {Frame(take)}{Since(step)}{Until(step)}  " +
+                    Line($"{indent}{TakeVerb(take)} {step.Node.Label}{MayMiss(take)}{Inferred(take.Edges)}  {_q.FlowPlace(step.Node, _walk.Root)}  {Frame(take)}{Since(step)}{Until(step)}  " +
                          ShortLocation(take.Edges[0]) + (step.Expanded || take.Frame.Never ? string.Empty : Where(step.Node.Id)));
                     if (!step.Expanded)
                         continue;
@@ -357,9 +357,19 @@ namespace Entitas.Graph.Output
                 var frames = ending.Select(t => Frame(t, spell: false) + Since(t.Step) + Until(t.Step)).Distinct().ToList();
                 var verb = ending.Select(TakeVerb).Distinct().Count() == 1 ? TakeVerb(ending[0]) : "taken by";
                 Line(frames.Count == 1
-                    ? $"{indent}{verb}, ending there: {string.Join(", ", ending.Select(t => $"{t.Step.Node.Label} {_q.FlowPlace(t.Step.Node, _walk.Root)}"))} — {Frame(ending[0])}{Since(ending[0].Step)}{Until(ending[0].Step)}"
-                    : $"{indent}{verb}, ending there: {string.Join("; ", ending.Select(t => $"{t.Step.Node.Label} {_q.FlowPlace(t.Step.Node, _walk.Root)} {Frame(t)}{Since(t.Step)}{Until(t.Step)}"))}");
+                    ? $"{indent}{verb}, ending there: {string.Join(", ", ending.Select(t => $"{t.Step.Node.Label}{MayMiss(t)} {_q.FlowPlace(t.Step.Node, _walk.Root)}"))} — {Frame(ending[0])}{Since(ending[0].Step)}{Until(ending[0].Step)}"
+                    : $"{indent}{verb}, ending there: {string.Join("; ", ending.Select(t => $"{t.Step.Node.Label}{MayMiss(t)} {_q.FlowPlace(t.Step.Node, _walk.Root)} {Frame(t)}{Since(t.Step)}{Until(t.Step)}"))}");
             }
+
+            /// <summary>
+            /// " (the same call may take off CatAnimator, which it needs)": a reactor the change
+            /// may never reach, since the call making it may take that off the entity too (graph.json
+            /// `may_miss`). Not said of one that never sees it anyway, under any root.
+            /// </summary>
+            static string MayMiss(FlowTake take) =>
+                take.MayMiss == null || take.Frame.Never && take.Elsewhere.All(e => e.Frame.Never)
+                    ? string.Empty
+                    : $" (the same call may take off {take.MayMiss}, which it needs)";
 
             void Ends(FlowLink link, string indent)
             {
