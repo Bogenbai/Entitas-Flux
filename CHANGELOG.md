@@ -90,6 +90,17 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   it; on the production project every answer stayed byte-identical, and with suffixes that
   match nothing `flow CommitCartRequest` still follows the whole chain.
 
+  A helper's writes are credited to a calling system only on branches its arguments can
+  reach: constants (enum members, literals, `const`, `nameof`) are followed through
+  parameters, locals, return values and the fields an object is built with, so a spawner
+  passing `Customer` no longer creates what a factory adds only in `case Worker` — on the
+  production project 88 false inferred edges went and 25 conditions got simpler. Enum
+  members in conditions are written without their type. `flow` leaves out a system reacting
+  to a `[Watched]` change when its group needs a component the changed entity never gets
+  (furniture is never a cat; `graph.json` records it on the write as `unseen_by`), a reaction
+  that never sees a change names its other triggers, and an answer near its budget drops its
+  "also, not followed" lines first.
+
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and
   `#node=…` links, hover to fade what a node is not connected to (from the canvas or the side
