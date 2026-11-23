@@ -8,6 +8,23 @@ namespace Sample
             Add(systems.Create<FurnitureFeature>());
             Add(systems.Create<UnlockAchievementSystem>());
             Add(new GameCleanupSystems(contexts));
+            Add(systems.Create<ShopFeature>());
+        }
+    }
+
+    public sealed class ShopFeature : Feature
+    {
+        public ShopFeature(ISystemFactory systems)
+        {
+            Add(systems.Create<BuyItemSystem>());
+            Add(systems.Create<TickOffersSystem>());
+            Add(systems.Create<ExpireOffersSystem>());
+            Add(systems.Create<CommitCartSystem>());
+            Add(systems.Create<SendPurchaseEventOnPaidSystem>());
+            Add(systems.Create<CountPurchasesSystem>());
+            Add(systems.Create<UnboxItemsSystem>());
+            Add(systems.Create<StoreItemsSystem>());
+            Add(systems.Create<AnimateStoringSystem>());
         }
     }
 

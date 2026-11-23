@@ -21,6 +21,8 @@ namespace Entitas.Graph.Analysis
         readonly TreeResult _result = new TreeResult();
         readonly Dictionary<SyntaxNode, TypeInfo?> _typeCache = new Dictionary<SyntaxNode, TypeInfo?>();
         readonly Dictionary<SyntaxNode, HashSet<string>> _groupFields = new Dictionary<SyntaxNode, HashSet<string>>();
+        readonly Dictionary<(IMethodSymbol, int), (ISymbol? Group, string? Loop)> _helperLoops =
+            new Dictionary<(IMethodSymbol, int), (ISymbol?, string?)>();
 
         public TreeWalker(BuildContext context, SyntaxTree tree)
         {
@@ -254,7 +256,8 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>
         /// Where the written entity comes from: a fluent chain or local (the creation site and
-        /// the factory that started it), or a foreach over a group.
+        /// the factory that started it), or a foreach over a group — directly, or through the
+        /// parameter of a helper the loop passes it to.
         /// </summary>
         void TraceEntity(Access access, ExpressionSyntax? receiver)
         {
@@ -271,12 +274,17 @@ namespace Entitas.Graph.Analysis
                         if (declaration is ForEachStatementSyntax forEach)
                         {
                             access.Group = GroupOf(forEach.Expression);
+                            access.Loop = LoopKey(forEach);
                         }
                         else if (declaration is VariableDeclaratorSyntax { Initializer.Value: var initializer })
                         {
                             access.Site = SiteKey(access, declaration);
                             access.RootFactory = FactoryOf(ChainRoot(initializer));
                         }
+                    }
+                    else if (symbol is IParameterSymbol parameter)
+                    {
+                        (access.Group, access.Loop) = LoopOfArgument(parameter);
                     }
                     break;
 
@@ -288,6 +296,71 @@ namespace Entitas.Graph.Analysis
         }
 
         static string SiteKey(Access access, SyntaxNode node) => $"{access.File}:{node.SpanStart}";
+
+        string LoopKey(ForEachStatementSyntax forEach) => $"{_file}:{forEach.SpanStart}";
+
+        /// <summary>
+        /// A write on a helper's parameter (<c>UnapplyShake(shake)</c> called from
+        /// <c>foreach (var shake in _shakes)</c>) lands on whatever entity the callers pass. When
+        /// every call in the same type passes the variable of one and the same foreach, the write
+        /// is made on that group's entities, in that loop — which is how systems move a loop body
+        /// into a method. One level deep, and nothing when the callers disagree: a helper called
+        /// from two loops cannot be credited to either.
+        /// </summary>
+        (ISymbol? Group, string? Loop) LoopOfArgument(IParameterSymbol parameter)
+        {
+            if (parameter.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.LocalFunction } method)
+                return default;
+
+            method = method.OriginalDefinition;
+            var key = (method, parameter.Ordinal);
+            if (_helperLoops.TryGetValue(key, out var cached))
+                return cached;
+
+            var declaration = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            var type = declaration?.SyntaxTree == _tree ? declaration.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault() : null;
+            (ISymbol? Group, string? Loop) found = default;
+            if (type != null)
+            {
+                foreach (var call in type.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    var name = call.Expression switch
+                    {
+                        IdentifierNameSyntax i => i.Identifier.ValueText,
+                        MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } m => m.Name.Identifier.ValueText,
+                        _ => null
+                    };
+                    if (name != method.Name || _model.GetSymbolInfo(call).Symbol is not IMethodSymbol called ||
+                        !SymbolEqualityComparer.Default.Equals(called.OriginalDefinition, method))
+                        continue;
+
+                    var passed = ArgumentFor(call, parameter);
+                    var loop = passed != null && ChainRoot(passed) is IdentifierNameSyntax variable &&
+                               _model.GetSymbolInfo(variable).Symbol is ILocalSymbol local &&
+                               local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ForEachStatementSyntax forEach
+                        ? (Group: GroupOf(forEach.Expression), Loop: LoopKey(forEach))
+                        : default;
+
+                    if (loop.Group == null || (found.Loop != null && found.Loop != loop.Loop))
+                    {
+                        found = default;
+                        break;
+                    }
+                    found = loop;
+                }
+            }
+
+            _helperLoops[key] = found;
+            return found;
+        }
+
+        static ExpressionSyntax? ArgumentFor(InvocationExpressionSyntax call, IParameterSymbol parameter)
+        {
+            var arguments = call.ArgumentList.Arguments;
+            var named = arguments.FirstOrDefault(a => a.NameColon?.Name.Identifier.ValueText == parameter.Name);
+            if (named != null) return named.Expression;
+            return parameter.Ordinal < arguments.Count && arguments[parameter.Ordinal].NameColon == null ? arguments[parameter.Ordinal].Expression : null;
+        }
 
         /// <summary>Strips fluent calls of the generated API (AddX(...).AddY(...)) down to where the entity came from.</summary>
         ExpressionSyntax? ChainRoot(ExpressionSyntax? expression)

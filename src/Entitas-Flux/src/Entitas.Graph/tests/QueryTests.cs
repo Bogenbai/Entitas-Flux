@@ -96,10 +96,15 @@ namespace Entitas.Graph.Tests
             var sections = Sections(output);
 
             output.Should().Contain("PlaceFurnitureByRequestSystem  [system; FurnitureFeature #2, GameplayFeature order 3]  (hub: touches 3 components in its own code — not expanded; use explain)");
-            sections["1 step out:"].Should().Contain("PlaceFurnitureByRequestSystem");
+            sections["1 step out:"].Should().Contain("PlaceFurnitureByRequestSystem").And.Contain("RequestPlacementSystem").And.Contain("DestroyDestructedSystem");
             output.Should().NotContain("FurniturePlacedEvent", "it is reachable only through the hub");
-            sections["2 steps out:"].Should().Contain("Destructed", "DestroyDestructedSystem is no hub and leads there");
-            output.Should().Contain("Destructed  [component; Game, flag]  (hub: read by 3, created by 1, destroyed by 1 — not expanded; use who-reads/lifecycle)");
+            // RequestPlacementSystem writes three components itself: a hub at this threshold too.
+            sections["2 steps out:"].Should().NotContain("OrphanRequest", "RequestPlacementSystem is a hub and is not walked through");
+            // DestroyDestructedSystem destroys six components, but only Destructed in its own code;
+            // the rest is inferred from what its entities are made of, so it is walked through.
+            sections["2 steps out:"].Should().Contain("TimeIsUp").And.Contain("ProcessingStoring");
+            new GraphQueries(FixtureProject.Graph, budget: 0, hubThreshold: 3).Query("DestroyDestructedSystem", depth: 1)
+                .Should().Contain("Destructed  [component; Game, flag]  (hub: read by 3, created by 3, destroyed by 1 — not expanded; use who-reads/lifecycle)");
             Links(output).Should().NotContain(l => l.Node == "PlaceFurnitureByRequestSystem", "a hub lists nothing of its own");
         }
 
@@ -191,7 +196,7 @@ namespace Entitas.Graph.Tests
             capped.Should().Contain("    … 1 more link: creates 1 — explain PlaceFurnitureByRequestSystem", "it has seven links");
             capped.Should().Contain("more nodes not shown — the answer is capped at ~60 tokens (--budget 0 prints everything).");
             new GraphQueries(FixtureProject.Graph, budget: 60, hubThreshold: 3).Query("furniture request")
-                .Should().Contain("\n  hubs not expanded: SelectSystem, Selected\n");
+                .Should().Contain("\n  hubs not expanded: Destructed, SelectSystem, ShopItem, Unpaid, Selected\n");
         }
 
         [Fact]

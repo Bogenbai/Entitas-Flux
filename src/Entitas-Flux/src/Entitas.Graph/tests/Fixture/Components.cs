@@ -18,6 +18,18 @@ namespace Sample
     [Game, Cleanup(CleanupMode.RemoveComponent)] public sealed class Tapped : IComponent { }
     [Input, Unique] public sealed class Pointer : IComponent { public int Value; }
 
+    // A shop: items are bought unpaid and paid on commit. Unpaid is [Watched], so the systems
+    // reacting to the payment hang off the system that removes it.
+    [Game] public sealed class ShopItem : IComponent { }
+    [Game, Watched] public sealed class Unpaid : IComponent { }
+    [Game] public sealed class ItemPurchasedEvent : IComponent { public int Value; }
+
+    // Flags that look never cleared and are not, or are on purpose.
+    [Game] public sealed class ProcessingStoring : IComponent { }  // set in the loop that marks the entity Destructed
+    [Game] public sealed class TimeIsUp : IComponent { }           // required by a group whose entities a helper marks Destructed
+    [Game] public sealed class Unboxed : IComponent { }            // a done marker: its setter filters it out with NoneOf
+    [Game] public sealed class Receipted : IComponent { }          // the same guard, but set in reaction to a [Watched] change
+
     // Findings the report must list.
     [Game] public sealed class Dead : IComponent { }              // read, never created
     [Game] public sealed class Unused : IComponent { }            // created, never read

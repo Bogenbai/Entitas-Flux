@@ -163,6 +163,8 @@ namespace Entitas.Graph.Analysis
                 if (!groups.TryGetValue(access.MatcherGroup!, out var shape))
                     groups[access.MatcherGroup!] = shape = new GroupShape();
                 shape.Add(access.Clause!, access.Component.Name);
+                if (access.Relation == Relation.Reacts && !shape.Changes.Contains(access.Component.Name))
+                    shape.Changes.Add(access.Component.Name);
             }
 
             // Destroy() on entities of a resolved group destroys what that group requires.
@@ -218,6 +220,11 @@ namespace Entitas.Graph.Analysis
 
             // Destroyers of an entity shape destroy every component created on that shape.
             foreach (var edge in InferDestroysFromShapes(context, accesses, destroys, groups))
+                AddEdge(edge);
+
+            // ...and what a loop marks for them (isDestructed = true) carries along.
+            var known = new HashSet<(string, string)>(edges.Values.Where(e => e.Relation == Relation.Destroys).Select(e => (e.Source, e.Target)));
+            foreach (var edge in InferDestroysFromMarking(context, accesses, destroys, groups, known))
                 AddEdge(edge);
 
             graph.Edges.AddRange(edges.Values);
@@ -403,6 +410,90 @@ namespace Entitas.Graph.Analysis
                 }
             }
         }
+
+        /// <summary>
+        /// Entities are also marked for a generic destroyer long after they were created: a loop
+        /// over a group sets <c>isProcessingStoring = true</c> and <c>isDestructed = true</c> on
+        /// the same entity, and a system destroying every Destructed entity destroys the flag
+        /// with it. So when the writes of one loop include what a destroyer requires (all of its
+        /// AllOf, the rest coming from the group the loop runs over), the destroyer is credited
+        /// with the other components those entities carry: the ones written in the loop, and the
+        /// ones the group requires (a helper marking <c>TimeIsUp</c> entities Destructed destroys
+        /// TimeIsUp). Nothing is inferred across loops, groups or systems: there the entities
+        /// marked are not known to be the ones carrying the flag. A component the loop also
+        /// removes is not credited, and neither is a pair the shapes already gave.
+        /// </summary>
+        static IEnumerable<GraphEdge> InferDestroysFromMarking(
+            BuildContext context,
+            List<Access> accesses,
+            List<DestroySite> destroys,
+            Dictionary<ISymbol, GroupShape> groups,
+            HashSet<(string Source, string Target)> known)
+        {
+            var loops = accesses
+                .Where(a => a.Loop != null && a.Component.ChangeOf == null && (a.Relation == Relation.Creates || a.Relation == Relation.Removes))
+                .GroupBy(a => a.Loop!)
+                .Select(loop =>
+                {
+                    var first = loop.First();
+                    var required = first.Group != null && groups.TryGetValue(first.Group, out var shape)
+                        ? shape.AllOf.Where(n => !shape.Changes.Contains(n) && !shape.NoneOf.Contains(n)).ToList()
+                        : new List<string>();
+                    return (
+                        By: first.Accessor.Label,
+                        Writes: loop.Where(a => a.Relation == Relation.Creates).Select(a => a.Component.Name).ToHashSet(StringComparer.Ordinal),
+                        Removes: loop.Where(a => a.Relation == Relation.Removes).Select(a => a.Component.Name).ToHashSet(StringComparer.Ordinal),
+                        Required: required);
+                })
+                .ToList();
+
+            // One edge per destroyer and component, however many loops mark it: on a real project
+            // dozens of systems mark entities requiring Id, and dozens of identical edges would
+            // bury the one that matters.
+            var found = new Dictionary<(string Source, string Target), (DestroySite Destroy, List<string> Through)>();
+            foreach (var destroy in destroys)
+            {
+                if (destroy.Group == null || !groups.TryGetValue(destroy.Group, out var target) || target.AllOf.Count == 0)
+                    continue;
+
+                foreach (var loop in loops)
+                {
+                    var marked = target.AllOf.Where(loop.Writes.Contains).OrderBy(n => n, StringComparer.Ordinal).ToList();
+                    if (marked.Count == 0)
+                        continue;
+
+                    var carried = new HashSet<string>(loop.Writes, StringComparer.Ordinal);
+                    carried.UnionWith(loop.Required);
+                    if (!target.AllOf.All(carried.Contains) || target.NoneOf.Any(carried.Contains))
+                        continue;
+
+                    foreach (var name in carried.Where(n => !target.AllOf.Contains(n) && !loop.Removes.Contains(n)))
+                    {
+                        var component = context.ComponentByName(name);
+                        if (component == null || known.Contains((destroy.Accessor.Id, component.Id)))
+                            continue;
+
+                        var key = (destroy.Accessor.Id, component.Id);
+                        if (!found.TryGetValue(key, out var entry))
+                            found[key] = entry = (destroy, new List<string>());
+                        entry.Through.Add(loop.Writes.Contains(name)
+                            ? $"marked {string.Join(" + ", marked)} by {loop.By} together with {name}"
+                            : $"marked {string.Join(" + ", marked)} by {loop.By}, whose group requires {name}");
+                    }
+                }
+            }
+
+            foreach (var pair in found)
+            {
+                var through = pair.Value.Through.Distinct().OrderBy(t => t, StringComparer.Ordinal).ToList();
+                yield return new GraphEdge
+                {
+                    Source = pair.Key.Source, Target = pair.Key.Target, Relation = Relation.Destroys, Via = "Destroy",
+                    Confidence = Confidence.Inferred, SourceFile = pair.Value.Destroy.File, Line = pair.Value.Destroy.Line,
+                    Through = through[0] + (through.Count > 1 ? $" (and {through.Count - 1} more)" : string.Empty)
+                };
+            }
+        }
     }
 
     // -- model used while building ------------------------------------------------------
@@ -467,6 +558,13 @@ namespace Entitas.Graph.Analysis
         public readonly List<string> AnyOf = new List<string>();
         public readonly List<string> NoneOf = new List<string>();
 
+        /// <summary>
+        /// [Watched] components whose XChanged marker the group matches. The marker is folded
+        /// into the component, so it also sits in AllOf — but an entity of the group carries the
+        /// marker, not necessarily the component (the change may have been its removal).
+        /// </summary>
+        public readonly List<string> Changes = new List<string>();
+
         public void Add(string clause, string component)
         {
             var list = clause switch
@@ -501,6 +599,9 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>The group whose foreach the written entity comes from.</summary>
         public ISymbol? Group;
+
+        /// <summary>That foreach: writes sharing it land on the same entities.</summary>
+        public string? Loop;
 
         /// <summary>For matcher reads: the field or local the group is assigned to, and the clause.</summary>
         public ISymbol? MatcherGroup;

@@ -390,7 +390,7 @@ Nodes are components (with their contexts, fields and `[Unique]`, `[Event]`, `[W
 | `reacts` | a read of a [`[Watched]`](#watched-attribute) component's `XChanged` marker |
 | `contains` | a feature's `Add(…)`, in registration order |
 
-Every edge is **EXTRACTED** (written in the system itself) or **INFERRED**. An inferred edge reached the system through code it calls: a query interface, a factory, a helper method up to four calls deep. Its `through` names that code. Destroys can be inferred from what an entity is made of, too: a generic `DestroyEventsSystem` that destroys every `Event` + `Ready` entity is credited with destroying each event created with the `Event` flag, once something marks those `Ready`.
+Every edge is **EXTRACTED** (written in the system itself) or **INFERRED**. An inferred edge reached the system through code it calls: a query interface, a factory, a helper method up to four calls deep. Its `through` names that code. Destroys can be inferred from what an entity is made of, too: a generic `DestroyEventsSystem` that destroys every `Event` + `Ready` entity is credited with destroying each event created with the `Event` flag, once something marks those `Ready`. So is what a loop marks for such a destroyer: a system that sets `isProcessingStoring` and `isDestructed` on the same entity in one loop has the generic `Destructed` destroyer credited with destroying `ProcessingStoring`, and with what the loop's group requires. That holds within one loop only, never across groups or systems.
 
 Features are walked from the roots, the features nobody registers. Every system gets its position in each root. The tool knows no names of yours: requests and events are recognised by suffix only (`*Request`, `*Event`; change them with `--request-suffix` and `--event-suffix`).
 
@@ -486,7 +486,7 @@ When the whole subgraph does not fit the budget, the walk follows only each node
 | `install` | Tells the project's AI assistant to use these commands: a short block in `CLAUDE.md` (and `AGENTS.md`), see [For AI coding assistants](#for-ai-coding-assistants). |
 | `uninstall` | Takes that block out again. |
 
-Names may drop the `Component` suffix. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
+Names may drop the `Component` suffix. The `XChanged` marker of a [`[Watched]`](#watched-attribute) component is no node of its own; its name stands for the component. `who-reads XChanged` lists the systems reacting to X's changes, `who-creates XChanged` whoever adds or removes X, `lifecycle XChanged` both in execution order, and `explain`/`path` take it as X. Wherever a system creates or removes a `[Watched]` component, `explain` and `query` name the systems reacting to it on that line (`removes Unpaid … → reacted to by …`), and `who-creates`, `who-reads` and `lifecycle` of the component list them at the top. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
 
 **Every answer is capped at about 2000 tokens** (`--budget`; `0` turns the cap off). Most answers are far below it: on a 2000-file project, `who-reads` of an event is ~400 tokens. But a component most of the code touches (an `Id`, a position) has hundreds of readers, and uncapped `who-reads` of one was ~23 000 tokens. An answer over the budget starts with a summary of its shape (by feature, by root, or by relation), lists the entries that fit, and says what it left out. Here the same answer is cut on purpose, with a tiny budget:
 ```text
@@ -561,7 +561,8 @@ An edge is its source, target and relation. A moved line, a read moved into a he
   - events without a consumer;
   - events destroyed by hand;
   - `[Watched]` components nobody reacts to;
-  - state flags set on existing entities and never cleared;
+  - state flags set on existing entities and never cleared (a flag set in the loop that marks its entity for a generic destroyer is destroyed with it, so it is not listed);
+  - flags set once on purpose, probably: the system setting them leaves them out of its own group with `NoneOf`, so each entity is marked once, the usual "done" marker. A setter that reacts to a `[Watched]` change stays in the list above, because the change comes again and the flag still holds the first outcome;
   - systems, or generated features such as `GameEventSystems`, that no feature registers;
   - `Destroy()` calls the tool could not trace to a group.
 
@@ -577,7 +578,7 @@ An assistant answering "who uses this component?" with grep reads every file tha
 | --- | --- |
 | `who-reads` or `lifecycle` of an event | ~350–400 |
 | `path` between two systems | ~110 |
-| `query` about a topic (`cart commit`): the connected piece of the graph | ~1 800 |
+| `query` about a topic (`cart commit`): the connected piece of the graph | ~1 950 |
 | `diff --ref` across one commit | ~250 |
 | The same question by grep, then reading the 8 files that mention the event | ~5 900 |
 | `GRAPH_REPORT.md`, once, for an overview | ~3 900 |

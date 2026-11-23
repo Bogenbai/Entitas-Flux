@@ -193,10 +193,10 @@ namespace Entitas.Graph.Output
         /// <summary>
         /// Which of a node's links survive a per-node cap, strongest first: to a seed; written in
         /// the system itself — a factory it calls can add forty components, none of which says
-        /// what the system does; to a request or event (the hand-offs between systems); to a node
-        /// whose name the words match, then one whose namespace does; to a node already in the
-        /// answer (it shows how the pieces connect); to a specific node before a hub-like one —
-        /// `creates Id` says little.
+        /// what the system does; a hand-off between systems (a request or event, or the change
+        /// of a [Watched] component that others react to); to a node whose name the words match,
+        /// then one whose namespace does; to a node already in the answer (it shows how the
+        /// pieces connect); to a specific node before a hub-like one — `creates Id` says little.
         /// </summary>
         static Comparer<SubgraphLink> Strength(Dictionary<string, SubgraphNode> reached) => Comparer<SubgraphLink>.Create((a, b) =>
         {
@@ -204,7 +204,7 @@ namespace Entitas.Graph.Output
             if (c != 0) return c;
             c = b.Extracted.CompareTo(a.Extracted);
             if (c != 0) return c;
-            c = (b.Other.Node.Role != null).CompareTo(a.Other.Node.Role != null);
+            c = b.HandOff.CompareTo(a.HandOff);
             if (c != 0) return c;
             c = b.Other.LabelScore.CompareTo(a.Other.LabelScore);
             if (c != 0) return c;
@@ -295,6 +295,8 @@ namespace Entitas.Graph.Output
                 var created = new SubgraphNode
                 {
                     Node = node,
+                    Reacted = node.Attributes.Contains("Watched") &&
+                              Flow(node.Id).Any(e => e.Relation == Relation.Reacts && e.Target == node.Id && Graph.Node(e.Source)?.Generated == false),
                     Score = facts.Score,
                     LabelScore = facts.LabelScore,
                     OtherWords = facts.OtherWords,
@@ -393,6 +395,9 @@ namespace Entitas.Graph.Output
         public bool Seed;
         public bool Hub;
 
+        /// <summary>A [Watched] component systems of the project react to: changing it hands off to them.</summary>
+        public bool Reacted;
+
         /// <summary>Walked through: a seed, or a node closer than the depth that is no hub.</summary>
         public bool Expanded;
 
@@ -423,5 +428,14 @@ namespace Entitas.Graph.Output
         }
 
         public bool Extracted => Edges.Any(e => e.Confidence == Confidence.Extracted);
+
+        /// <summary>
+        /// Data passed from one system to another: a request or event, or a write of a [Watched]
+        /// component someone reacts to (the reaction is the receiving end, also a hand-off).
+        /// </summary>
+        public bool HandOff =>
+            Other.Node.Role != null ||
+            Relation == Graph.Relation.Reacts ||
+            (Outgoing && Other.Reacted && Relation is Graph.Relation.Creates or Graph.Relation.Removes);
     }
 }

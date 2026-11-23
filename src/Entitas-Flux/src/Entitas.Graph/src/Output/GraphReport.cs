@@ -93,13 +93,42 @@ namespace Entitas.Graph.Output
                                       !In(c).Any(e => e.Relation == Relation.Reacts && graph.Node(e.Source)?.Generated == false))
                     .Select(c => $"- `{c.Label}` {c.SourceFile}:{c.Line}"));
 
+            var neverCleared = components
+                .Where(c => c.Flag && !c.Attributes.Contains("Unique") && !c.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal)) &&
+                            In(c).Any(e => e.Relation == Relation.Creates && e.Entity == "group") && Has(c, Relation.Reads) &&
+                            !Has(c, Relation.Removes, Relation.Destroys))
+                .ToList();
+
+            // A system that sets a flag on its group's entities and leaves the flag out of the
+            // group with NoneOf marks each entity once and then skips it: a "done" marker
+            // (RoomExpanded, GiftOpened), never cleared by design. Mixed in with the flags that
+            // really stick, they made the list read as noise. The NoneOf must be the setter's
+            // own (EXTRACTED, not through a query), and every setter on existing entities must
+            // have one — a second setter without the guard keeps the flag in the first list.
+            //
+            // Not when the setter reacts to a [Watched] change: a change comes again (a customer
+            // sits down a second time), and the NoneOf then freezes the first outcome — the
+            // stale-flag bug this list is for (SatAtTable: set on the first sitting, still set
+            // after the customer moved to a chair with no table).
+            var reacting = new HashSet<string>(graph.Edges.Where(e => e.Relation == Relation.Reacts && e.Confidence == Confidence.Extracted).Select(e => e.Source), StringComparer.Ordinal);
+            bool SetOnce(GraphNode c)
+            {
+                var setters = In(c).Where(e => e.Relation == Relation.Creates && e.Entity == "group").Select(e => e.Source).Distinct().ToList();
+                return setters.All(s => !reacting.Contains(s) &&
+                                        In(c).Any(e => e.Source == s && e.Relation == Relation.Filters && e.Confidence == Confidence.Extracted));
+            }
+
             Section(sb, itemsPerSection, "State flags that are never cleared",
                 "Flags set on existing entities (inside a foreach over a group) and read, but never removed, destroyed or [Cleanup] — " +
-                "once set they stay set, so every later frame sees them. Flags set while creating an entity (identity markers) are not listed.",
-                components.Where(c => c.Flag && !c.Attributes.Contains("Unique") && !c.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal)) &&
-                                      In(c).Any(e => e.Relation == Relation.Creates && e.Entity == "group") && Has(c, Relation.Reads) &&
-                                      !Has(c, Relation.Removes, Relation.Destroys))
-                    .Select(c => Line(c, In(c), Relation.Creates, "set by", graph)));
+                "once set they stay set, so every later frame sees them. Flags set while creating an entity (identity markers) are not listed, " +
+                "nor are flags their setter excludes with NoneOf (next section) — unless the setter reacts to a [Watched] change, which comes again while the flag stays from the first time.",
+                neverCleared.Where(c => !SetOnce(c)).Select(c => Line(c, In(c), Relation.Creates, "set by", graph)));
+
+            Section(sb, itemsPerSection, "Flags set once on purpose? (the setter filters them out with NoneOf)",
+                "Never cleared either, but every system setting them on existing entities also excludes them from its own group with NoneOf, " +
+                "so each entity is marked once and then skipped: the usual shape of a \"done\" marker. Usually deliberate; " +
+                "worth a look only if something expects the flag to go away again.",
+                neverCleared.Where(SetOnce).Select(c => Line(c, In(c), Relation.Creates, "set by", graph)));
 
             Section(sb, itemsPerSection, "Systems not registered in any feature",
                 "They exist but nothing adds them, so they never run (or are added outside a feature). A generated feature listed here " +

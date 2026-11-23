@@ -50,7 +50,7 @@ namespace Entitas.Graph.Tests
         {
             var output = Queries.SystemsOf("GameplayFeature");
 
-            output.Should().StartWith("GameplayFeature (root) — 11 systems");
+            output.Should().StartWith("GameplayFeature (root) — 20 systems");
             output.Split('\n').Select(l => l.Trim()).Should().ContainInOrder(
                 "1. MarkEventsReadySystem  [Execute]",
                 "2. FurnitureFeature (feature)",
@@ -78,7 +78,7 @@ namespace Entitas.Graph.Tests
 
             output.Should().Contain("registered: LateFeature #1");
             output.Should().Contain("runs under LateFeature at #1 via LateFeature");
-            output.Should().Contain("destroys (3):");
+            output.Should().Contain("destroys (4):");
         }
 
         [Fact]
@@ -100,7 +100,7 @@ namespace Entitas.Graph.Tests
             var tiny = new GraphQueries(FixtureProject.Graph, budget: 10);
 
             tiny.Lifecycle("Destructed").Should().Contain("  steps by root: GameplayFeature").And.Contain("  by feature: ");
-            tiny.SystemsOf("GameplayFeature").Should().Contain("nested features, largest: FurnitureFeature 8, GameCleanupSystems 1");
+            tiny.SystemsOf("GameplayFeature").Should().Contain("nested features, largest: ShopFeature 9, FurnitureFeature 8, GameCleanupSystems 1");
             tiny.Explain("PlaceFurnitureByRequestSystem").Should().Contain("  connections: creates 6, reads 2, registered by 1");
             tiny.Query("furniture").Should().Contain("; subgraph: ").And.Contain("more nodes not shown");
         }
