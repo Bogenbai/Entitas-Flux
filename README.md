@@ -443,6 +443,35 @@ GameplayFeature (root) — 11 systems
     …
 ```
 
+`query` answers a question in words with the connected piece of the graph around it, like Graphify's `query`. The nodes whose names match the words best are the seeds (`--limit`, default 5). From them it walks data flow two steps out (`--depth`, 1 to 4): a component leads to whoever creates, reads or destroys it, a system to the components it touches. Each node lists its links to the nodes after it, so every edge appears once, on the side nearer the seeds. Feature registration is not walked; it shows as the system's place. A hub (a node with more than 40 neighbours: an `Id`, a position, the `Event` flag) is reached but not walked through, and marked as such. Link lines name the file; a system's header carries its full path.
+```text
+$ entitas-graph query placed event --limit 1
+query "placed event": 4 nodes match; seeds: FurniturePlacedEvent (also: DestroyEventsSystem, Event, MarkEventsReadySystem)
+
+Seeds:
+  FurniturePlacedEvent  [component; Game, data, event]
+    created by PlaceFurnitureByRequestSystem  via Add  FurnitureSystems.cs:39
+    read by UnlockAchievementSystem  via AllOf  EventSystems.cs:15
+    destroyed by DestroyEventsSystem  via Destroy* (created with Event + FurniturePlacedEvent; Ready by MarkEventsReadySystem)  EventSystems.cs:54
+
+1 step out:
+  DestroyEventsSystem  [system; LateFeature #1, LateFeature order 1]  Assets/Systems/EventSystems.cs:41
+    reads Event  via AllOf  EventSystems.cs:48
+    …
+  PlaceFurnitureByRequestSystem  [system; FurnitureFeature #2, GameplayFeature order 3]  Assets/Systems/FurnitureSystems.cs:22
+    creates Event  via Flag* (CreateEntity.Event)  Infrastructure.cs:21
+    creates Health  via Add* (FurnitureFactory.CreateFurniture)  Infrastructure.cs:33
+    …
+    reads PlaceFurnitureRequest  via Matcher, Get  FurnitureSystems.cs:31
+  UnlockAchievementSystem  [system; GameplayFeature #3, GameplayFeature order 10]  Assets/Systems/EventSystems.cs:6
+    reads Ready  via AllOf  EventSystems.cs:16
+
+2 steps out:
+  Event  [component; Game, flag]
+  …
+```
+When the whole subgraph does not fit the budget, the walk follows only each node's strongest links: to a seed, written in the system itself rather than inferred through a factory, to a request or an event, to what the words name. So the part that fits is still one connected piece, and a `… N more links` line counts the rest. On a 2000-file project, `query furniture placement` lists five placement systems with the requests and events between them, then the components they share and who else reads those, in ~2000 tokens. Words that match nothing exit with 4 and the labels closest to them.
+
 | Command | Answers |
 | --- | --- |
 | `build` | Builds the graph and writes `graph.json`, `GRAPH_REPORT.md` and `graph.html`. |
@@ -451,7 +480,7 @@ GameplayFeature (root) — 11 systems
 | `systems-of <Feature>` | The systems a feature runs, in order. |
 | `explain <Name>` | One node and every connection it has. |
 | `path <A> <B>` | The shortest data-flow chain from A to B. |
-| `query <words…>` | Nodes matching the words, ranked, with a summary of their connections. |
+| `query <words…>` | The connected subgraph around the nodes the words match best: seeds first, then what is one and two data-flow steps away. |
 | `report` | Prints `GRAPH_REPORT.md`. |
 
 Names may drop the `Component` suffix. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
@@ -474,7 +503,8 @@ Selected — read by 4 (4 direct, 0 inferred)
 | `-o`, `--out <dir>` | Output folder (default: `entitas-graph-out` in the root — add it to `.gitignore`). |
 | `--request-suffix <s>`, `--event-suffix <s>` | How requests and events are recognised (default: `Request`, `Event`). |
 | `--budget <tokens>` | Cap each answer at about this many tokens (default: 2000; `0` = no cap). |
-| `--limit <n>` | Results for `query` (default: 20). |
+| `--limit <n>` | Seed nodes for `query` (default: 5). |
+| `--depth <n>` | Steps `query` walks from the seeds (1 to 4, default: 2). |
 | `--no-html` | Skip `graph.html`. |
 
 ### What it writes

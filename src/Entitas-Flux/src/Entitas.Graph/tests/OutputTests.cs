@@ -82,15 +82,6 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
-        public void Query_ranks_by_how_many_words_match()
-        {
-            var output = Queries.Query("furniture request", 3);
-
-            var best = output.Split('\n')[1];
-            (best.Contains("PlaceFurnitureRequest") || best.Contains("PlaceFurnitureByRequestSystem")).Should().BeTrue(best);
-        }
-
-        [Fact]
         public void An_answer_over_the_budget_starts_with_a_summary_and_says_what_it_left_out()
         {
             var full = Queries.WhoReads("Selected");
@@ -111,7 +102,7 @@ namespace Entitas.Graph.Tests
             tiny.Lifecycle("Destructed").Should().Contain("  steps by root: GameplayFeature").And.Contain("  by feature: ");
             tiny.SystemsOf("GameplayFeature").Should().Contain("nested features, largest: FurnitureFeature 8, GameCleanupSystems 1");
             tiny.Explain("PlaceFurnitureByRequestSystem").Should().Contain("  connections: creates 6, reads 2, registered by 1");
-            tiny.Query("furniture", 20).Should().Contain("more nodes not shown");
+            tiny.Query("furniture").Should().Contain("; subgraph: ").And.Contain("more nodes not shown");
         }
 
         [Fact]
@@ -122,6 +113,7 @@ namespace Entitas.Graph.Tests
             unlimited.Lifecycle("FurniturePlacedEvent").Should().Be(Queries.Lifecycle("FurniturePlacedEvent"));
             unlimited.WhoReads("Selected").Should().Be(Queries.WhoReads("Selected"));
             unlimited.SystemsOf("GameplayFeature").Should().NotContain("not shown");
+            unlimited.Query("furniture request").Should().Be(Queries.Query("furniture request"));
         }
 
         [Fact]

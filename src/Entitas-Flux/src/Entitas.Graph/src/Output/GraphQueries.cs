@@ -13,12 +13,12 @@ namespace Entitas.Graph.Output
             : base($"'{name}' matches {candidates.Count} nodes") => Candidates = candidates;
     }
 
-    /// <summary>A name that matched nothing (exit code 4), with the closest labels.</summary>
+    /// <summary>A name — or a query's words — that matched nothing (exit code 4), with the closest labels.</summary>
     public sealed class NodeNotFoundException : Exception
     {
         public IReadOnlyList<GraphNode> Suggestions { get; }
-        public NodeNotFoundException(string name, IReadOnlyList<GraphNode> suggestions)
-            : base($"no node named '{name}'") => Suggestions = suggestions;
+        public NodeNotFoundException(string name, IReadOnlyList<GraphNode> suggestions, string? message = null)
+            : base(message ?? $"no node named '{name}'") => Suggestions = suggestions;
     }
 
     /// <summary>
@@ -41,13 +41,33 @@ namespace Entitas.Graph.Output
         /// <summary>Sites listed per system in who-creates/who-reads, and items per relation in explain, while capped.</summary>
         const int SitesPerSource = 3, ItemsPerRelation = 25;
 
+        /// <summary>query: seeds and how many steps the walk goes from them.</summary>
+        public const int DefaultQuerySeeds = 5, DefaultQueryDepth = 2, MaxQueryDepth = 4;
+
+        /// <summary>
+        /// query: a node with more data-flow neighbours than this is a hub — reached, never walked
+        /// through. On a 2000-file project about 30 nodes are over it (Id, WorldPosition, the
+        /// Event and Destructed flags, spawners creating 50 components through a factory), and
+        /// walking through any of them turns a question about one feature into half the project.
+        /// </summary>
+        public const int DefaultHubThreshold = 40;
+
+        /// <summary>
+        /// query: links per node, tried in turn when the whole subgraph does not fit the budget.
+        /// Six still says what a system does (its request, its event, its own state) and leaves
+        /// room for eight to ten nodes past five seeds on a 2000-file project.
+        /// </summary>
+        static readonly int[] LinksPerNode = { 12, 8, 6 };
+
         readonly EcsGraph _graph;
         readonly int _budget;
+        readonly int _hubThreshold;
 
-        public GraphQueries(EcsGraph graph, int budget = DefaultBudget)
+        public GraphQueries(EcsGraph graph, int budget = DefaultBudget, int hubThreshold = DefaultHubThreshold)
         {
             _graph = graph;
             _budget = Math.Max(0, budget);
+            _hubThreshold = Math.Max(0, hubThreshold);
         }
 
         bool Capped => _budget > 0;
@@ -354,33 +374,176 @@ namespace Entitas.Graph.Output
             return path;
         }
 
-        /// <summary>Nodes matching the words (label or type name), best first, each with its connections summarised.</summary>
-        public string Query(string text, int limit)
+        /// <summary>
+        /// The connected piece of the graph a question is about, the way Graphify answers one: the
+        /// nodes the words match best are the seeds, a breadth-first walk over data flow gives the
+        /// rest (<see cref="QuerySubgraph"/> has the rules), and every node is listed with its links
+        /// to the nodes after it — seeds first, then one step out, two steps out. An assistant
+        /// asking "how does furniture placement work" gets the systems, the requests and events
+        /// between them and where each runs, in one call.
+        /// </summary>
+        public string Query(string text, int limit = DefaultQuerySeeds, int depth = DefaultQueryDepth)
         {
-            var terms = text.Split(new[] { ' ', ',', '.', '?' }, StringSplitOptions.RemoveEmptyEntries)
-                .Where(t => t.Length > 1)
-                .Select(t => t.ToLowerInvariant())
-                .ToArray();
-            if (terms.Length == 0)
-                return "Nothing to search for.\n";
+            var words = text.Trim();
+            depth = Math.Max(1, Math.Min(MaxQueryDepth, depth));
+            var subgraph = QuerySubgraph.Build(_graph, words, limit, depth, _hubThreshold, int.MaxValue);
 
-            var ranked = _graph.Nodes
-                .Select(n => (Node: n, Score: terms.Count(t => n.Label.ToLowerInvariant().Contains(t) || (n.FullName ?? string.Empty).ToLowerInvariant().Contains(t))))
-                .Where(x => x.Score > 0)
-                .OrderByDescending(x => x.Score)
-                .ThenByDescending(x => Degree(x.Node.Id))
-                .ThenBy(x => x.Node.Label, StringComparer.Ordinal)
-                .ToList();
+            // Like an unknown name: nothing on stdout that could pass for an answer, exit 4, and
+            // what the words come close to.
+            if (subgraph.Seeds.Count == 0)
+                throw new NodeNotFoundException(words, CloseTo(subgraph.Terms), subgraph.Terms.Count == 0
+                    ? $"nothing to search for in \"{words}\" (words need two letters or more)"
+                    : $"no node matches \"{words}\"");
 
-            var head = new[] { $"{ranked.Count} nodes match \"{text}\"{(ranked.Count > limit ? $"; showing {limit} (raise --limit for more)" : string.Empty)}" };
-            var entries = new List<string>();
-            foreach (var (node, _) in ranked.Take(limit))
+            var head = new[] { QueryHead(subgraph, words) };
+            var entries = QueryEntries(subgraph);
+
+            // Whole when it fits. Otherwise walked again following fewer links per node, the
+            // strongest, until it does — so that the part shown is still one connected piece and
+            // not the first seed's sixty links. Below the last step the budget cuts as usual.
+            foreach (var links in LinksPerNode)
             {
-                var relations = _graph.Outgoing(node.Id).GroupBy(e => e.Relation).Select(g => $"{g.Key} {g.Select(e => e.Target).Distinct().Count()}")
-                    .Concat(_graph.Incoming(node.Id).GroupBy(e => e.Relation).Select(g => $"{Passive(g.Key)} {g.Select(e => e.Source).Distinct().Count()}"));
-                entries.Add($"  {node.Label}  [{node.Kind}]  {string.Join(", ", relations)}  {node.SourceFile}{(node.Line > 0 ? ":" + node.Line : string.Empty)}\n");
+                if (!Capped || head.Sum(l => l.Length + Environment.NewLine.Length) + entries.Sum(e => e.Length) <= _budget * CharsPerToken)
+                    break;
+                subgraph = QuerySubgraph.Build(_graph, words, limit, depth, _hubThreshold, links);
+                entries = QueryEntries(subgraph);
             }
-            return Render(head, Array.Empty<string>, entries, "nodes");
+
+            return Render(head, () => QuerySummary(subgraph), entries, "nodes");
+        }
+
+        static string QueryHead(QuerySubgraph subgraph, string words)
+        {
+            const int alsoShown = 6;
+            var others = subgraph.Matches.Where(m => !m.Seed).ToList();
+            var also = others.Count == 0
+                ? string.Empty
+                : $" (also: {string.Join(", ", others.Take(alsoShown).Select(m => m.Node.Label))}{(others.Count > alsoShown ? $", … {others.Count - alsoShown} more" : string.Empty)})";
+            var matches = subgraph.Matches.Count;
+            return $"query \"{words}\": {matches} {(matches == 1 ? "node matches" : "nodes match")}; seeds: {string.Join(", ", subgraph.Seeds.Select(s => s.Node.Label))}{also}";
+        }
+
+        List<string> QueryEntries(QuerySubgraph subgraph)
+        {
+            var entries = new List<string>();
+            var distance = -1;
+            foreach (var node in subgraph.Nodes)
+            {
+                var entry = new StringBuilder();
+                if (node.Distance != distance)
+                {
+                    distance = node.Distance;
+                    entry.Append(distance == 0 ? "\nSeeds:\n" : $"\n{distance} step{(distance == 1 ? string.Empty : "s")} out:\n");
+                }
+
+                entry.AppendLine($"  {node.Node.Label}  [{Traits(node.Node)}]{QueryNote(node)}{DeclaredIn(node.Node)}");
+                var links = node.Links
+                    .OrderBy(l => Array.IndexOf(VerbOrder, l.Relation))
+                    .ThenBy(l => l.Outgoing ? 0 : 1)
+                    .ThenBy(l => l.Other.Position);
+                foreach (var link in links)
+                    entry.AppendLine($"    {Verb(link)} {link.Other.Node.Label}  via {Vias(link)}  {ShortLocation(link.Edges[0])}");
+                if (node.LeftOut.Count > 0)
+                    entry.AppendLine($"    … {node.LeftOut.Count} more link{(node.LeftOut.Count == 1 ? string.Empty : "s")}: {LinkCounts(node.LeftOut)} — explain {node.Node.Label}");
+                entries.Add(entry.ToString());
+            }
+            return entries;
+        }
+
+        static IEnumerable<string> QuerySummary(QuerySubgraph subgraph)
+        {
+            const int hubsShown = 8;
+            var capped = subgraph.LinksPerNode == int.MaxValue ? string.Empty : $", at most {subgraph.LinksPerNode} links per node";
+            var hubs = subgraph.Hubs.Select(h => h.Node.Label).ToList();
+            yield return $"  seeds {subgraph.Seeds.Count}; subgraph: {subgraph.Nodes.Count} nodes, {subgraph.LinkCount} edges, depth {subgraph.Depth}{capped}";
+            yield return "  hubs not expanded: " + (hubs.Count == 0
+                ? "none"
+                : string.Join(", ", hubs.Take(hubsShown)) + (hubs.Count > hubsShown ? $", … {hubs.Count - hubsShown} more" : string.Empty));
+        }
+
+        /// <summary>What a node is, as a query lists it: a system's place in the features, a component's contexts and role.</summary>
+        string Traits(GraphNode node) => node.Kind switch
+        {
+            NodeKind.Component => $"component; {ComponentTraits(node)}",
+            NodeKind.Feature when node.Placements.Count == 0 => node.Root ? "feature; root" : "feature; not registered",
+            _ when node.Kind == NodeKind.System || node.Placements.Count > 0 => $"{node.Kind}; {Placement(node)}",
+            _ => node.Kind
+        };
+
+        string QueryNote(SubgraphNode node)
+        {
+            // A feature only seeds when nothing else matches; it has no data flow to list.
+            if (node.Node.Kind == NodeKind.Feature)
+                return $"  (runs {CountSystems(node.Node.Id, new HashSet<string> { node.Node.Id })} systems — use systems-of {node.Node.Label})";
+            if (!node.Hub)
+                return string.Empty;
+            if (node.Node.Kind != NodeKind.Component)
+                return $"  (hub: touches {node.Neighbours} components — not expanded; use explain)";
+
+            var incoming = _graph.Incoming(node.Node.Id).ToList();
+            var counts = new[]
+                {
+                    ("read by", Distinct(incoming, Relation.Reads, Relation.Reacts, Relation.Filters)),
+                    ("created by", Distinct(incoming, Relation.Creates)),
+                    ("removed by", Distinct(incoming, Relation.Removes)),
+                    ("destroyed by", Distinct(incoming, Relation.Destroys))
+                }
+                .Where(c => c.Item2 > 0)
+                .Select(c => $"{c.Item1} {c.Item2}");
+            return $"  (hub: {string.Join(", ", counts)} — not expanded; use who-reads/lifecycle)";
+        }
+
+        static string Verb(SubgraphLink link) => link.Outgoing ? link.Relation : Passive(link.Relation);
+
+        /// <summary>
+        /// A query's lines name the file without its folders — on a real project the folders were
+        /// half of every answer. A system's or type's header carries the full path, and that file
+        /// is where nearly all of its lines point; anything else is one file-name search away.
+        /// </summary>
+        static string ShortLocation(GraphEdge edge) =>
+            edge.SourceFile == null ? string.Empty : $"{System.IO.Path.GetFileName(edge.SourceFile)}:{edge.Line}";
+
+        static string DeclaredIn(GraphNode node) =>
+            node.SourceFile != null && node.Kind is NodeKind.System or NodeKind.Type
+                ? $"  {node.SourceFile}{(node.Line > 0 ? ":" + node.Line : string.Empty)}"
+                : string.Empty;
+
+        /// <summary>How, with a * on an inferred edge and the code it was inferred through.</summary>
+        static string Vias(SubgraphLink link)
+        {
+            var vias = string.Join(", ", link.Edges.Select(e => e.Via + (e.Confidence == Confidence.Inferred ? "*" : string.Empty)).Distinct());
+            var through = link.Edges.Where(e => e.Through != null).Select(e => e.Through!).Distinct().ToList();
+            return through.Count == 0
+                ? vias
+                : $"{vias} ({string.Join("; ", through.Take(2))}{(through.Count > 2 ? $"; … {through.Count - 2} more" : string.Empty)})";
+        }
+
+        static string LinkCounts(IEnumerable<SubgraphLink> links) =>
+            string.Join(", ", links.GroupBy(Verb).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key} {g.Count()}"));
+
+        /// <summary>
+        /// For words that match nothing: the nodes containing the longest prefix (four letters at
+        /// least) of a word that does match — a typo seldom sits in the first four letters.
+        /// </summary>
+        List<GraphNode> CloseTo(IEnumerable<string> terms)
+        {
+            var found = new List<GraphNode>();
+            foreach (var term in terms)
+                for (var length = term.Length - 1; length >= 4; length--)
+                {
+                    var prefix = term.Substring(0, length);
+                    var hits = _graph.Nodes.Where(n => n.Label.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                    if (hits.Count == 0)
+                        continue;
+                    found.AddRange(hits);
+                    break;
+                }
+
+            return found.Distinct()
+                .OrderByDescending(n => Degree(n.Id))
+                .ThenBy(n => n.Label, StringComparer.Ordinal)
+                .Take(8)
+                .ToList();
         }
 
         // -- the budget ---------------------------------------------------------------------------
@@ -476,12 +639,14 @@ namespace Entitas.Graph.Output
                 : $"  — via {string.Join("; ", inferred)}";
         }
 
-        string Attributes(GraphNode node)
+        static string Attributes(GraphNode node) => $"  [{ComponentTraits(node)}]";
+
+        static string ComponentTraits(GraphNode node)
         {
             var parts = new List<string> { string.Join("/", node.Contexts), node.Flag ? "flag" : "data" };
             parts.AddRange(node.Attributes);
             if (node.Role != null) parts.Add(node.Role);
-            return $"  [{string.Join(", ", parts)}]";
+            return string.Join(", ", parts);
         }
 
         static int Count(IEnumerable<GraphEdge> edges, string confidence) => edges.Where(e => e.Confidence == confidence).Select(e => e.Source).Distinct().Count();
