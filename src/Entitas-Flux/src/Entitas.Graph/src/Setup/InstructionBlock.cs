@@ -33,9 +33,8 @@ namespace Entitas.Graph.Setup
             return string.Join("\n",
                 Begin,
                 "## ECS data flow",
-                "This is an Entitas project. To find who creates, reads, filters, removes or destroys a",
-                "component, what a feature runs and in what order, or how data gets from one system to",
-                "another, run entitas-graph from this file's folder instead of searching the code:",
+                "This is an Entitas project. To find who creates, reads, filters, removes or destroys a component, what a feature",
+                "runs and in what order, or how data gets from one system to another, run entitas-graph from this file's folder instead of searching the code:",
                 "",
                 $"    dotnet {tool} who-reads <Component>{rootOption}",
                 "",
@@ -45,6 +44,9 @@ namespace Entitas.Graph.Setup
                 "diff --commit <sha> (what one commit changed); diff --ref <branch> (changes since a branch, for reviewing it);",
                 $"report (= `{report}`, an overview worth reading once).",
                 "Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.",
+                // The graph is the map, the code the ground: an answer says where to look, and what it
+                // infers (links through calls, frames) or cannot see (DI, scenes) is checked there.
+                "Before changing code, open the files an answer names: links marked * and frames are inferred, and DI, scenes and prefabs are not in the graph.",
                 End);
         }
 

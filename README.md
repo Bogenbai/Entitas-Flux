@@ -651,9 +651,8 @@ With the Unity project in `src/cat-caffeine` and a manual install, the block rea
 ```md
 <!-- entitas-graph:begin -->
 ## ECS data flow
-This is an Entitas project. To find who creates, reads, filters, removes or destroys a
-component, what a feature runs and in what order, or how data gets from one system to
-another, run entitas-graph from this file's folder instead of searching the code:
+This is an Entitas project. To find who creates, reads, filters, removes or destroys a component, what a feature
+runs and in what order, or how data gets from one system to another, run entitas-graph from this file's folder instead of searching the code:
 
     dotnet src/cat-caffeine/Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component> -r src/cat-caffeine
 
@@ -663,6 +662,7 @@ flow <Request|System> (what happens after it: the systems it reaches, each in wh
 diff --commit <sha> (what one commit changed); diff --ref <branch> (changes since a branch, for reviewing it);
 report (= `src/cat-caffeine/entitas-graph-out/GRAPH_REPORT.md`, an overview worth reading once).
 Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.
+Before changing code, open the files an answer names: links marked * and frames are inferred, and DI, scenes and prefabs are not in the graph.
 <!-- entitas-graph:end -->
 ```
 

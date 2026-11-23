@@ -157,7 +157,9 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   `install` tells the project's AI assistant to use all this instead of grepping: a short
   block in `CLAUDE.md` in the repository root (and `AGENTS.md` when present) naming the tool
   by a path relative to that file — by glob for a UPM install, whose folder name changes
-  with every update — plus `entitas-graph-out/` in `.gitignore`. Re-running replaces the
+  with every update — plus `entitas-graph-out/` in `.gitignore`. The block also tells the
+  assistant to open the files an answer names before changing code, since links through calls
+  and frames are inferred and DI, scenes and prefabs are not in the graph. Re-running replaces the
   block and leaves the rest of the file alone, and `build` says when the block was written by
   another version; `uninstall` takes it out.
 

@@ -60,6 +60,7 @@ namespace Entitas.Graph.Tests
             foreach (var command in new[] { "who-creates", "who-reads", "lifecycle", "systems-of", "path", "explain", "query \"<words>\"", "diff --commit", "diff --ref", "report" })
                 block.Should().Contain(command);
             block.Should().Contain("~2000 tokens").And.Contain("Never read graph.json");
+            block.Should().Contain("Before changing code, open the files an answer names", "the graph is where to look, not a reason to skip the code");
         }
 
         [Fact]
