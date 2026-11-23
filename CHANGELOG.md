@@ -120,6 +120,17 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   project, build time unchanged). What the graph leaves out on purpose, or cannot know from
   the code, is listed in the README under *What it does not see*.
 
+  A jump nested in another `if` before a write makes the write conditional too:
+  `ForbidViewAttachByRequest` destroys its request only once `!(targetEntity != null &&
+  targetEntity.isLoadingView)`, and `flow` says it waits. A reaction is no longer presented as
+  certain when the call making the `[Watched]` change also takes off a component the reactor
+  needs: it is marked `(the same call may take off CatAnimator, which it needs)` and recorded
+  as `may_miss`, so detaching a view no longer reads as playing confetti. Lateness is decided
+  per call path: `added_late` means every way is late, the new `sometimes_late` that some are
+  (`(HueAnimator can arrive after an await)`), and `waits` counts only the systems that can add
+  the component to that entity — when some add it at once and others late, both are listed
+  (`added_by`, `late_by`) and the frame is unknown.
+
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and
   `#node=…` links, hover to fade what a node is not connected to (from the canvas or the side
