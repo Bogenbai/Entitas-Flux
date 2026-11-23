@@ -23,6 +23,10 @@ namespace Entitas.Graph
 
         static int Main(string[] args)
         {
+            // The Claude Code hook (through the sh wrapper): first, so it pays for nothing else.
+            if (args.Length == 1 && args[0] == ClaudeHook.Flag)
+                return ClaudeHookCheck.Run(Console.In, Console.Error);
+
             try
             {
                 var options = Options.Parse(args);

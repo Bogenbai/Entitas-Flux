@@ -283,18 +283,8 @@ namespace Entitas.Graph.Tests
         {
             if (OperatingSystem.IsWindows()) return; // Claude Code runs hooks through bash
 
-            Install();
-            (int Code, string Error) Hook(string call)
-            {
-                var start = new System.Diagnostics.ProcessStartInfo(RepoFile("entitas-graph")) { RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
-                start.ArgumentList.Add("--claude-hook");
-                using var process = System.Diagnostics.Process.Start(start)!;
-                process.StandardInput.Write(call);
-                process.StandardInput.Close();
-                var error = process.StandardError.ReadToEnd();
-                process.WaitForExit();
-                return (process.ExitCode, error);
-            }
+            // The real tool, this build's: the wrapper hands it every call that mentions the folder.
+            AssistantSetup.Install(_unity, None, gitignore: false, Path.Combine(AppContext.BaseDirectory, "entitas-graph.dll"));
             string Call(string tool, string input) => $"{{\"session_id\":\"s\",\"cwd\":\"{_repo}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"{tool}\",\"tool_input\":{input}}}";
             var output = $"{_repo}/src/game/entitas-graph-out";
 
@@ -302,13 +292,53 @@ namespace Entitas.Graph.Tests
             read.Code.Should().Be(2, "exit 2 blocks the call and hands stderr to Claude");
             read.Error.Should().Contain("./entitas-graph who-reads <Component>");
             Hook(Call("Bash", "{\"command\":\"cat src/game/entitas-graph-out/graph.json | head\"}")).Code.Should().Be(2);
-            Hook(Call("Bash", "{\"command\":\"wc -c src/game/entitas-graph-out/graph.html\"}")).Code.Should().Be(2);
+            Hook(Call("Bash", "{\"command\":\"head -c 4000 src/game/entitas-graph-out/graph.html\"}")).Code.Should().Be(2);
             Hook(Call("Grep", $"{{\"pattern\":\"Health\",\"path\":\"{output}\"}}")).Code.Should().Be(2, "a search there goes through graph.json");
 
             Hook(Call("Read", $"{{\"file_path\":\"{output}/GRAPH_REPORT.md\"}}")).Code.Should().Be(0, "the report is meant to be read");
             Hook(Call("Bash", "{\"command\":\"./entitas-graph diff src/game/entitas-graph-out/graph.json old.json\"}")).Code.Should().Be(0, "the tool reads it itself");
+            Hook(Call("Bash", "{\"command\":\"git commit -m \\\"Ignore entitas-graph-out/: graph.json is 1.4 M tokens\\\"\"}")).Code.Should().Be(0, "a message only names them");
+            Hook(Call("Bash", "{\"command\":\"gh pr create --body \\\"$(cat <<'EOF'\\nKeeps (entitas-graph-out/graph.json) out\\nEOF\\n)\\\"\"}")).Code.Should().Be(0);
             Hook(Call("Bash", "{\"command\":\"git status\"}")).Code.Should().Be(0);
             Hook(Call("Read", $"{{\"file_path\":\"{_repo}/src/game/Assets/Code/Health.cs\"}}")).Code.Should().Be(0);
+        }
+
+        [Fact]
+        public void The_hook_starts_dotnet_only_for_a_call_that_mentions_the_output_folder()
+        {
+            if (OperatingSystem.IsWindows()) return;
+
+            // A stand-in for dotnet that leaves a mark and stops everything.
+            var bin = Path.Combine(_repo, "bin");
+            var mark = Path.Combine(_repo, "dotnet-ran");
+            Directory.CreateDirectory(bin);
+            File.WriteAllText(Path.Combine(bin, "dotnet"), $"#!/bin/sh\ntouch \"{mark}\"\nexit 2\n");
+            Run("chmod", "+x", Path.Combine(bin, "dotnet"));
+            Install();
+            var git = "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}";
+            var graph = "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat entitas-graph-out/graph.json\"}}";
+
+            Hook(graph, bin).Code.Should().Be(0, "no tool installed yet: nothing decides, so nothing is stopped");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(_tool)!);
+            File.WriteAllText(_tool, string.Empty);
+            Hook(git, bin).Code.Should().Be(0);
+            File.Exists(mark).Should().BeFalse("a call that never mentions entitas-graph-out is settled in sh");
+            Hook(graph, bin).Code.Should().Be(2, "the tool's answer is the hook's");
+            File.Exists(mark).Should().BeTrue();
+        }
+
+        (int Code, string Error) Hook(string call, string? path = null)
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(RepoFile("entitas-graph")) { RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+            start.ArgumentList.Add("--claude-hook");
+            if (path != null) start.Environment["PATH"] = path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.StandardInput.Write(call);
+            process.StandardInput.Close();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return (process.ExitCode, error);
         }
 
         [Fact]

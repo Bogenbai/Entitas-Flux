@@ -20,7 +20,7 @@ namespace Entitas.Graph.Setup
         public const string Matcher = "Read|Grep|Glob|Bash";
         public const string File = ".claude/settings.json";
 
-        /// <summary>What the assistant reads when a call is stopped. Plain text for sh double quotes: no $, `, " or \.</summary>
+        /// <summary>What the assistant reads when a call is stopped (<see cref="ClaudeHookCheck"/> decides which).</summary>
         public const string Message =
             "entitas-graph: graph.json and graph.html are for programs and browsers (graph.json is about 1.4 M tokens on a 2000-file project). " +
             "Ask the graph instead: ./entitas-graph who-reads <Component>, who-creates, flow <Request|System>, explain <Name>, query 'words' " +
