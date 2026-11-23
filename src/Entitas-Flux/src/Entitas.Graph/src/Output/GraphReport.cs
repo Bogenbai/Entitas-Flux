@@ -14,7 +14,10 @@ namespace Entitas.Graph.Output
     /// </summary>
     public static class GraphReport
     {
-        public static string Build(EcsGraph graph)
+        /// <summary>Findings listed per section; the rest is counted. The diff passes no limit, so it compares every finding.</summary>
+        public const int ItemsPerSection = 60;
+
+        public static string Build(EcsGraph graph, int itemsPerSection = ItemsPerSection)
         {
             var sb = new StringBuilder();
             var components = graph.Nodes.Where(n => n.Kind == NodeKind.Component && !n.Generated).OrderBy(n => n.Label, StringComparer.Ordinal).ToList();
@@ -56,41 +59,41 @@ namespace Entitas.Graph.Output
 
             sb.AppendLine("## Findings");
             sb.AppendLine();
-            Section(sb, "Components nobody reads",
+            Section(sb, itemsPerSection, "Components nobody reads",
                 "Created somewhere, but no group, accessor or [Watched] reaction ever looks at them.",
                 components.Where(c => Has(c, Relation.Creates) && !Has(c, Relation.Reads, Relation.Reacts, Relation.Filters)).Select(c => Line(c, In(c), Relation.Creates, "created by", graph)));
 
-            Section(sb, "Components read but never created",
+            Section(sb, itemsPerSection, "Components read but never created",
                 "Something waits for them, no code makes them — created from data (component lists in prefabs or configs added through AddComponent at runtime), in another assembly, or dead.",
                 components.Where(c => Has(c, Relation.Reads, Relation.Reacts) && !Has(c, Relation.Creates) && !c.Attributes.Contains("Unique")).Select(c => Line(c, In(c), Relation.Reads, "read by", graph)));
 
             var requestSuffix = graph.Metadata.RequestSuffix;
             var eventSuffix = graph.Metadata.EventSuffix;
-            Section(sb, $"Requests without a handler (`*{requestSuffix}`)",
+            Section(sb, itemsPerSection, $"Requests without a handler (`*{requestSuffix}`)",
                 "Created, but no system picks them up.",
                 components.Where(c => c.Role == "request" && Has(c, Relation.Creates) && !Has(c, Relation.Reads)).Select(c => Line(c, In(c), Relation.Creates, "created by", graph)));
 
-            Section(sb, $"Requests nobody destroys or removes (`*{requestSuffix}`)",
+            Section(sb, itemsPerSection, $"Requests nobody destroys or removes (`*{requestSuffix}`)",
                 "Handled, but neither destroyed nor removed — a handler should get rid of the request it processed, or it is processed again next frame.",
                 components.Where(c => c.Role == "request" && Has(c, Relation.Reads) && !Has(c, Relation.Destroys, Relation.Removes)).Select(c => Line(c, In(c), Relation.Reads, "handled by", graph)));
 
-            Section(sb, $"Events without a consumer (`*{eventSuffix}`)",
+            Section(sb, itemsPerSection, $"Events without a consumer (`*{eventSuffix}`)",
                 "Created, but nothing reads them.",
                 components.Where(c => c.Role == "event" && Has(c, Relation.Creates) && !Has(c, Relation.Reads, Relation.Reacts)).Select(c => Line(c, In(c), Relation.Creates, "created by", graph)));
 
-            Section(sb, $"Events destroyed by hand (`*{eventSuffix}`)",
+            Section(sb, itemsPerSection, $"Events destroyed by hand (`*{eventSuffix}`)",
                 "A system destroys entities of a group that names the event itself; events are usually destroyed once, generically, after everyone had a chance to read them.",
                 components.Where(c => c.Role == "event")
                     .SelectMany(c => In(c).Where(e => e.Relation == Relation.Destroys && e.Confidence == Confidence.Extracted)
                         .Select(e => $"- `{c.Label}` destroyed by `{Name(e.Source)}` at {e.SourceFile}:{e.Line}")));
 
-            Section(sb, "[Watched] components nobody reacts to",
+            Section(sb, itemsPerSection, "[Watched] components nobody reacts to",
                 "Each one costs a generated cleanup system; nothing of yours reads its Changed marker.",
                 components.Where(c => c.Attributes.Contains("Watched") &&
                                       !In(c).Any(e => e.Relation == Relation.Reacts && graph.Node(e.Source)?.Generated == false))
                     .Select(c => $"- `{c.Label}` {c.SourceFile}:{c.Line}"));
 
-            Section(sb, "State flags that are never cleared",
+            Section(sb, itemsPerSection, "State flags that are never cleared",
                 "Flags set on existing entities (inside a foreach over a group) and read, but never removed, destroyed or [Cleanup] — " +
                 "once set they stay set, so every later frame sees them. Flags set while creating an entity (identity markers) are not listed.",
                 components.Where(c => c.Flag && !c.Attributes.Contains("Unique") && !c.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal)) &&
@@ -98,7 +101,7 @@ namespace Entitas.Graph.Output
                                       !Has(c, Relation.Removes, Relation.Destroys))
                     .Select(c => Line(c, In(c), Relation.Creates, "set by", graph)));
 
-            Section(sb, "Systems not registered in any feature",
+            Section(sb, itemsPerSection, "Systems not registered in any feature",
                 "They exist but nothing adds them, so they never run (or are added outside a feature). A generated feature listed here " +
                 "(GameCleanupSystems, GameWatchedCleanupSystems, GameEventSystems) means its [Cleanup], [Watched] or [Event] systems never run.",
                 systems.Where(s => s.RegisteredIn.Count == 0 && !s.Generated)
@@ -106,14 +109,14 @@ namespace Entitas.Graph.Output
                     .OrderBy(s => s.Label)
                     .Select(s => $"- `{s.Label}`{(s.Kind == NodeKind.Feature ? " (generated feature)" : string.Empty)} {s.SourceFile}:{s.Line}"));
 
-            Section(sb, "Destroy() calls not traced to a group",
+            Section(sb, itemsPerSection, "Destroy() calls not traced to a group",
                 "The destroyed entity does not come from a foreach over a group, so what it destroys is unknown here.",
                 graph.Metadata.UnresolvedDestroys.OrderBy(u => u.File).ThenBy(u => u.Line).Select(u => $"- `{Name(u.Source)}` at {u.File}:{u.Line}"));
 
             return sb.ToString();
         }
 
-        static void Section(StringBuilder sb, string title, string explanation, IEnumerable<string> lines)
+        static void Section(StringBuilder sb, int limit, string title, string explanation, IEnumerable<string> lines)
         {
             var items = lines.ToList();
             sb.AppendLine($"### {title} — {items.Count}");
@@ -126,10 +129,10 @@ namespace Entitas.Graph.Output
             }
             else
             {
-                foreach (var line in items.Take(60))
+                foreach (var line in items.Take(limit))
                     sb.AppendLine(line);
-                if (items.Count > 60)
-                    sb.AppendLine($"- … and {items.Count - 60} more");
+                if (items.Count > limit)
+                    sb.AppendLine($"- … and {items.Count - limit} more");
             }
             sb.AppendLine();
         }

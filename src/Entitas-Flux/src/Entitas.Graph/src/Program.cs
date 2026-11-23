@@ -36,6 +36,12 @@ namespace Entitas.Graph
                     return Ok;
                 }
 
+                if (options.Command == "diff")
+                {
+                    Console.Write(Diff(options));
+                    return Ok;
+                }
+
                 var graph = LoadOrBuild(options);
                 var queries = new GraphQueries(graph, options.Budget);
                 var output = options.Command switch
@@ -93,6 +99,8 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  path <A> <B>                The shortest data-flow chain from A to B.");
             Console.Error.WriteLine("  query <words…>              The connected subgraph around the nodes the words match best.");
             Console.Error.WriteLine("  report                      Print GRAPH_REPORT.md (findings).");
+            Console.Error.WriteLine("  diff <old> [<new>]          What changed in the data flow between two graph.json (new: the current project).");
+            Console.Error.WriteLine("  diff --ref <git-ref>        The same, against the project at a branch or commit.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  -r, --root <dir>            Unity project root (default: current directory).");
             Console.Error.WriteLine("  -p, --project <csproj>      The project declaring the contexts (default: found under the root).");
@@ -103,6 +111,7 @@ namespace Entitas.Graph
             Console.Error.WriteLine("      --limit <n>             Seed nodes for query (default: 5).");
             Console.Error.WriteLine("      --depth <n>             Steps query walks from the seeds (1-4, default: 2).");
             Console.Error.WriteLine("      --no-html               Skip graph.html on build.");
+            Console.Error.WriteLine("      --ref <git-ref>         For diff: build the old graph at this commit (git archive; the checkout is not touched).");
             Console.Error.WriteLine();
             Console.Error.WriteLine("Queries reuse graph.json and rebuild it first when a source file is newer. An answer over");
             Console.Error.WriteLine("the budget starts with a summary by feature and says how much it left out.");
@@ -119,33 +128,7 @@ namespace Entitas.Graph
             if (project.MissingSourceFiles.Count > 0)
                 Console.Error.WriteLine($"note: {Path.GetFileName(csproj)} lists {project.MissingSourceFiles.Count} file(s) that no longer exist — let Unity regenerate it if something seems missing.");
 
-            var compilation = ProjectLoader.BuildCompilation(csproj, project);
-
-            // A reference whose file is gone (no Library/ yet, a csproj from another machine) is
-            // dropped by the loader; without Entitas.dll nothing is a component and the graph
-            // would come out empty instead of wrong-looking.
-            if (compilation.GetTypeByMetadataName("Entitas.IComponent") == null)
-                throw new InvalidOperationException(
-                    $"{Path.GetFileName(csproj)} does not reference a readable Entitas.dll, so no component can be recognised. " +
-                    "Open the project in Unity once (it fills Library/ and rewrites the .csproj files), then run again.");
-
-            // File mode with a csproj Unity has not rewritten since the last generation: take
-            // every generated file in the output folder, or part of the API would be missing.
-            var generationOptions = Entitas.SourceGenerator.EntitasGenerators.ReadOptions(compilation);
-            if (generationOptions.Output == Entitas.SourceGenerator.GenerationOutput.Files &&
-                Entitas.SourceGenerator.GeneratedFiles.OutputDirectory(compilation, generationOptions, options.Root) is { } outputDirectory)
-            {
-                var complete = GenerationHost.WithGeneratedFiles(project, outputDirectory);
-                if (complete.SourceFiles.Count != project.SourceFiles.Count)
-                    compilation = ProjectLoader.BuildCompilation(csproj, complete);
-            }
-
-            var graph = GraphBuilder.Build(compilation, options.Root, new GraphOptions
-            {
-                RequestSuffix = options.RequestSuffix,
-                EventSuffix = options.EventSuffix
-            });
-            graph.Metadata.ToolVersion = Version();
+            var graph = BuildGraph(csproj, project, options.Root, options);
             graph.Metadata.BuiltAtCommit = GitHead(options.Root);
             graph.Metadata.BuildMilliseconds = stopwatch.ElapsedMilliseconds;
 
@@ -162,6 +145,94 @@ namespace Entitas.Graph
                 $"Graph of {graph.Metadata.Project}: {Get(counts, NodeKind.Component)} components, {Get(counts, NodeKind.System)} systems, " +
                 $"{Get(counts, NodeKind.Feature)} features, {Get(counts, NodeKind.Type)} other types, {graph.Edges.Count} edges " +
                 $"in {graph.Metadata.BuildMilliseconds} ms → {Relative(options.Out, options.Root)}");
+            return graph;
+        }
+
+        /// <summary>
+        /// The graph of one version of the project: the csproj's references and defines with the
+        /// given sources, rooted at <paramref name="root"/> (the Unity root, or a snapshot of it).
+        /// Writes nothing, so it builds the old side of a diff as well as the current graph.
+        /// </summary>
+        static EcsGraph BuildGraph(string csproj, ProjectLoader.ProjectInfo project, string root, Options options)
+        {
+            var compilation = ProjectLoader.BuildCompilation(csproj, project);
+
+            // A reference whose file is gone (no Library/ yet, a csproj from another machine) is
+            // dropped by the loader; without Entitas.dll nothing is a component and the graph
+            // would come out empty instead of wrong-looking.
+            if (compilation.GetTypeByMetadataName("Entitas.IComponent") == null)
+                throw new InvalidOperationException(
+                    $"{Path.GetFileName(csproj)} does not reference a readable Entitas.dll, so no component can be recognised. " +
+                    "Open the project in Unity once (it fills Library/ and rewrites the .csproj files), then run again.");
+
+            // File mode with a csproj Unity has not rewritten since the last generation: take
+            // every generated file in the output folder, or part of the API would be missing.
+            var generationOptions = Entitas.SourceGenerator.EntitasGenerators.ReadOptions(compilation);
+            if (generationOptions.Output == Entitas.SourceGenerator.GenerationOutput.Files &&
+                Entitas.SourceGenerator.GeneratedFiles.OutputDirectory(compilation, generationOptions, root) is { } outputDirectory)
+            {
+                var complete = GenerationHost.WithGeneratedFiles(project, outputDirectory);
+                if (complete.SourceFiles.Count != project.SourceFiles.Count)
+                    compilation = ProjectLoader.BuildCompilation(csproj, complete);
+            }
+
+            var graph = GraphBuilder.Build(compilation, root, new GraphOptions
+            {
+                RequestSuffix = options.RequestSuffix,
+                EventSuffix = options.EventSuffix
+            });
+            graph.Metadata.ToolVersion = Version();
+            return graph;
+        }
+
+        // -- comparing ----------------------------------------------------------------------
+
+        static string Diff(Options options)
+        {
+            EcsGraph old, current;
+            string oldLabel, currentLabel = "working tree";
+            if (options.Ref != null)
+            {
+                if (options.Positional.Count > 0)
+                    throw new UsageException("diff takes --ref <git-ref> or graph files, not both");
+                current = LoadOrBuild(options);
+                old = BuildAtRef(options, options.Ref);
+                oldLabel = options.Ref;
+            }
+            else
+            {
+                oldLabel = options.Arg(0);
+                old = Load(oldLabel);
+                if (options.Positional.Count > 1)
+                {
+                    currentLabel = options.Arg(1);
+                    current = Load(currentLabel);
+                }
+                else
+                {
+                    current = LoadOrBuild(options);
+                }
+            }
+
+            return GraphDiff.Compare(old, current).Render(oldLabel, currentLabel, options.Budget);
+        }
+
+        static EcsGraph Load(string path) =>
+            File.Exists(path) ? EcsGraph.FromJson(File.ReadAllText(path)) : throw new UsageException($"graph not found: {Path.GetFullPath(path)}");
+
+        /// <summary>The graph of the project as it is at a commit, built from a temporary snapshot of its sources.</summary>
+        static EcsGraph BuildAtRef(Options options, string gitRef)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var csproj = FindProject(options);
+            using var snapshot = RefSnapshot.Extract(options.Root, ProjectLoader.ParseProject(csproj), gitRef);
+            var graph = BuildGraph(csproj, snapshot.Project, snapshot.Root, options);
+            graph.Metadata.BuiltAtCommit = snapshot.Commit;
+            graph.Metadata.BuildMilliseconds = stopwatch.ElapsedMilliseconds;
+            Console.Error.WriteLine(
+                $"Graph at {gitRef} ({snapshot.Commit.Substring(0, Math.Min(10, snapshot.Commit.Length))}) from {snapshot.Project.SourceFiles.Count} files: " +
+                $"{Path.GetFileName(csproj)} lists {snapshot.DroppedFiles} the commit does not have, the commit has {snapshot.AddedFiles} it does not list " +
+                $"(generated, or deleted since) — {graph.Metadata.BuildMilliseconds} ms");
             return graph;
         }
 
@@ -263,6 +334,7 @@ namespace Entitas.Graph
             public int Depth = GraphQueries.DefaultQueryDepth;
             public int Budget = GraphQueries.DefaultBudget;
             public bool Html = true;
+            public string? Ref;
 
             public string Out => OutOverride ?? Path.Combine(Root, "entitas-graph-out");
 
@@ -314,6 +386,10 @@ namespace Entitas.Graph
                             break;
                         case "--no-html":
                             options.Html = false;
+                            break;
+                        case "--ref":
+                            if (++i >= args.Length) return null;
+                            options.Ref = args[i];
                             break;
                         case "-h": case "--help":
                             return null;

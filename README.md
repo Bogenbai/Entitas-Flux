@@ -482,6 +482,7 @@ When the whole subgraph does not fit the budget, the walk follows only each node
 | `path <A> <B>` | The shortest data-flow chain from A to B. |
 | `query <words…>` | The connected subgraph around the nodes the words match best: seeds first, then what is one and two data-flow steps away. |
 | `report` | Prints `GRAPH_REPORT.md`. |
+| `diff <old.json> [<new.json>]`, `diff --ref <git-ref>` | What changed in the data flow between two versions: the edges each component gained and lost, systems added, removed and moved, findings. See [below](#comparing-two-versions--diff). |
 
 Names may drop the `Component` suffix. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
 
@@ -506,6 +507,42 @@ Selected — read by 4 (4 direct, 0 inferred)
 | `--limit <n>` | Seed nodes for `query` (default: 5). |
 | `--depth <n>` | Steps `query` walks from the seeds (1 to 4, default: 2). |
 | `--no-html` | Skip `graph.html`. |
+| `--ref <git-ref>` | For `diff`: build the old graph from this branch or commit (through `git archive`; the checkout is not touched). |
+
+### Comparing two versions — diff
+A code review shows which files changed. It does not show that three systems stopped reading one event and now read another. `diff` shows that: the edges each component gained and lost, the systems added, removed or moved, and the report findings that appeared or went away.
+```bash
+entitas-graph diff --ref main              # the working tree against a branch or commit
+entitas-graph diff old.json [new.json]     # two saved graphs; new defaults to the current project
+```
+
+`--ref` builds the old graph from that commit's sources. They are taken with `git archive` into a temporary folder, which is deleted afterwards. Your checkout, index and stashes stay as they are, and nothing is written into the project. The `.csproj` lists today's files, so the tool maps it to the commit. It drops the files the commit does not have yet. It adds the files the commit had and that are gone now, when they sat in or below a folder of the same assembly (no `.asmdef` and no `Editor` folder in between). References and defines come from today's `.csproj` and `Library/`. On a 2000-file project a `diff --ref` takes about 4 s, or 6 s when the current graph has to be rebuilt as well.
+
+Here a production project is compared with the parent of a commit that made three statistics systems count purchases instead of placements:
+```text
+$ entitas-graph diff --ref 49904c1d^
+old: 49904c1d^ (commit 3afbaa9cc5)
+new: working tree (commit 0e8a4184c4)
+nodes: none added or removed
+edges: reads +3 −8
+6 components changed · 0 registrations moved · findings unchanged
+
+Components (6):
+  FurnitureAddedToCafeEvent  −3
+    − read by UpdateFurniturePlacedStatSystem (AllOf)
+    − read by UpdatePlantsPlacedStatSystem (AllOf, Get)
+    − read by UpdateWallDecorationsPlacedStatSystem (AllOf, Get)
+  ShopPurchaseEvent  +3
+    + read by UpdateFurniturePlacedStatSystem (AllOf, Get)
+    + read by UpdatePlantsPlacedStatSystem (AllOf, Get)
+    + read by UpdateWallDecorationsPlacedStatSystem (AllOf, Get)
+  Id  −2
+    − read by UpdatePlantsPlacedStatSystem (EntityIndex)
+    − read by UpdateWallDecorationsPlacedStatSystem (EntityIndex)
+  …
+```
+
+An edge is its source, target and relation. A moved line, a read moved into a helper or a different `via` is not a change. Components with the most changes come first. A `*` marks an inferred edge, followed by what it went through. Systems, features and other types are listed as `+ X  FurnitureFeature #5`, `− Y  (was FurnitureFeature #7)` and `~ Z: FurnitureFeature #3 → #4`. A system counts as moved only when its features changed or its order among its siblings did. Inserting one system renumbers every system after it, so the merely renumbered are counted on one line, not listed. The diff goes through the same token budget as every other answer. A cut diff names everything that changed right after the counts.
 
 ### What it writes
 - **`graph.json`**: node-link JSON in the shape Graphify uses (`nodes`, `links` with `source`, `target`, `relation`, `confidence`, `source_file`, `source_location`), plus Entitas fields: `via` (`Add`, `AllOf`, `Flag`…), `context`, `through`, `order` for a feature's systems, `placements` for a system's position under each root. `graph` holds the schema version, the commit it was built at and the conventions used.

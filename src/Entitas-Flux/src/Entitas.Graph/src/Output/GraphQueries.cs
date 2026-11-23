@@ -553,7 +553,7 @@ namespace Entitas.Graph.Output
         /// whole entries as fit (at least one) and a line saying what was left out. Entries carry
         /// their own line breaks, so a multi-line entry is never cut in half.
         /// </summary>
-        string Render(IReadOnlyList<string> head, Func<IEnumerable<string>> summary, IReadOnlyList<string> entries, string noun)
+        internal string Render(IReadOnlyList<string> head, Func<IEnumerable<string>> summary, IReadOnlyList<string> entries, string noun)
         {
             var sb = new StringBuilder();
             foreach (var line in head)
