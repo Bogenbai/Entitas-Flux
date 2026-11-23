@@ -78,7 +78,11 @@ One line turns the same generator into ordinary `.cs` files: for external tools,
 Turn on debug hooks and put one breakpoint in a handler. Every `Add`/`Replace` of the component you care about stops there, and the call stack shows which system did it.
 ```cs
 [assembly: EntitasGeneration(DebugHooks = true)]
-EntitasDebugHooks.OnReplace = (entity, index, value) => { if (index == GameComponentsLookup.Health) { /* breakpoint */ } };
+
+EntitasDebugHooks.OnReplace = (entity, index, value) =>
+{
+    if (index == GameComponentsLookup.Health) { /* breakpoint here */ }
+};
 ```
 → [Debug hooks](https://github.com/Bogenbai/Entitas-Flux/wiki/Debug-Hooks)
 
