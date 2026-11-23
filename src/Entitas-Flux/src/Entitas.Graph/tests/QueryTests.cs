@@ -17,12 +17,13 @@ namespace Entitas.Graph.Tests
         {
             var head = Queries.Query("furniture request").Split('\n')[0];
 
-            // Both words: the system before the component (more edges). One word: Furniture says
-            // nothing else; the rest say one more word each and go by the edges written in them.
+            // Both words: the system before the component (more edges). One word: RequestPlacementSystem
+            // creates PlaceFurnitureRequest, so its code says "furniture" too; Furniture says nothing
+            // else; the rest say one more word each and go by the edges written in them.
             // CountFurnitureSystem reads Furniture only through IFurnitureQuery, and an inferred
             // edge breaks no tie, so FurnitureFactory goes first.
             head.Should().Be("query \"furniture request\": 10 nodes match; " +
-                             "seeds: PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, Furniture, RequestPlacementSystem, FurnitureFactory " +
+                             "seeds: PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, RequestPlacementSystem (creates PlaceFurnitureRequest), Furniture, FurnitureFactory " +
                              "(also: FurnitureFeature, FurniturePlacedEvent, FurnitureQuery, CountFurnitureSystem, OrphanRequest)");
             Queries.Query("furniture request", limit: 2).Should().Contain("; seeds: PlaceFurnitureByRequestSystem, PlaceFurnitureRequest (also: ");
         }
@@ -33,7 +34,8 @@ namespace Entitas.Graph.Tests
             // "placement" is Place in PlaceFurnitureByRequestSystem and Placed in FurniturePlacedEvent:
             // as text it matched only RequestPlacementSystem.
             Queries.Query("furniture placement").Split('\n')[0].Should().StartWith(
-                "query \"furniture placement\": 9 nodes match; seeds: PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, FurniturePlacedEvent, RequestPlacementSystem, Furniture ");
+                "query \"furniture placement\": 9 nodes match; seeds: PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, FurniturePlacedEvent, " +
+                "RequestPlacementSystem (creates PlaceFurnitureRequest), Furniture ");
 
             // The start of a word still finds it; the middle of one does not ("cat" found Indicator).
             Queries.Query("furn").Should().Contain("seeds: Furniture, PlaceFurnitureByRequestSystem, ");
@@ -64,9 +66,11 @@ namespace Entitas.Graph.Tests
 
             // The readers of WorkerHiredEvent match both words, as the event does, and would take
             // four of the five seeds; the request and its handler say only "hire". As seeds the
-            // readers say nothing the event does not: the event lists them one step out.
+            // readers say nothing the event does not: the event lists them one step out. The
+            // handler's code says "worker" too — it creates Worker and the event — so it goes
+            // before Worker, which says only that.
             output.Split('\n')[0].Should().Be("query \"hire worker\": 16 nodes match; " +
-                                              "seeds: WorkerHiredEvent, Worker, HireByRequestSystem, HireRequest, HireWindow " +
+                                              "seeds: WorkerHiredEvent, HireByRequestSystem (creates WorkerHiredEvent, Worker), Worker, HireRequest, HireWindow " +
                                               "(also: IncrementWorkersHiredStatSystem, SendWorkerHiredAnalyticsSystem, AddClothesToWardrobeOnWorkerHiredSystem, " +
                                               "UnlockHireFirstWorkerAchievementSystem, WorkersQuery, WorkerFiredEvent, … 5 more)");
             Sections(output)["1 step out:"].Should().Contain(new[]
@@ -85,7 +89,8 @@ namespace Entitas.Graph.Tests
 
             // The reader that adds clothes has "wardrobe", which the event lacks: it seeds, ahead of the event.
             new GraphQueries(graph, budget: 0).Query("wardrobe worker hired").Should()
-                .StartWith("query \"wardrobe worker hired\": 17 nodes match; seeds: AddClothesToWardrobeOnWorkerHiredSystem, WorkerHiredEvent, Worker, ");
+                .StartWith("query \"wardrobe worker hired\": 17 nodes match; seeds: AddClothesToWardrobeOnWorkerHiredSystem, WorkerHiredEvent, " +
+                           "HireByRequestSystem (creates WorkerHiredEvent, Worker), Worker, ");
 
             // WorkersQuery outranks the event on edges and is picked first; the event takes its slot
             // when it comes, so the rule does not hang on which of the two won the tie.
@@ -95,10 +100,59 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_system_whose_code_writes_the_words_its_name_lacks_seeds_before_components_saying_one_word()
+        {
+            var output = new GraphQueries(OrderPayment(), budget: 0).Query("order paid");
+
+            // The handler says only "order", like Order and Ordered, which say nothing else and
+            // used to take the last two seeds. What it creates says "paid", and the head says so. The readers
+            // named after the event still get no seed, and neither does SendOrderCompletedAnalyticsSystem,
+            // whose group collects the event — it says no word the event does not.
+            output.Split('\n')[0].Should().Be("query \"order paid\": 16 nodes match; seeds: " +
+                                              "OrderIsPaidEvent, PaidForOrdersNode, Paid, PayForOrdersByRequestSystem (creates OrderIsPaidEvent, Paid), Order " +
+                                              "(also: RequestTaskProgressOnOrderPaidSystem, GrantVipGemOnOrderPaidSystem, MarkVipServedOnOrderPaidSystem, " +
+                                              "SendOrderCompletedAnalyticsSystem, Ordered, InitializeOrdersSystem, … 5 more)");
+            Links(output).Should().Contain(("OrderIsPaidEvent", "created by", "PayForOrdersByRequestSystem"))
+                .And.Contain(("PayForOrdersByRequestSystem", "reads", "PayForProcessedOrdersRequest"));
+        }
+
+        [Fact]
+        public void A_write_through_a_factory_says_nothing_of_the_words()
+        {
+            var head = new GraphQueries(OrderPayment(), budget: 0).Query("order paid", limit: 7).Split('\n')[0];
+
+            // InitializeOrdersSystem says as much as the handler and has as many edges written in
+            // it, but it sets Paid only through OrderFactory.CreateOrder, and the factory sets it
+            // on every order it builds: neither goes before a component saying one word.
+            head.Should().Contain(", Paid, PayForOrdersByRequestSystem (creates OrderIsPaidEvent, Paid), Order, Ordered, InitializeOrdersSystem (also: ")
+                .And.Contain(", SendOrderCompletedAnalyticsSystem, OrderFactory, ");
+            head.Should().NotContain("InitializeOrdersSystem (creates").And.NotContain("OrderFactory (creates");
+        }
+
+        [Fact]
+        public void A_generic_destroyer_gains_nothing_from_the_events_it_destroys()
+        {
+            var queries = new GraphQueries(OrderPayment(), budget: 0);
+            var head = queries.Query("paid events", limit: 3).Split('\n')[0];
+
+            // DestroyEventsSystem says "events" and is credited with destroying OrderIsPaidEvent,
+            // which says "paid" — inferred, as it is credited with every event created with the
+            // Event flag. What a system destroys does not count: only what its group collects,
+            // Event and Ready, which say nothing new. It stays behind Event and Paid.
+            head.Should().Be("query \"paid events\": 10 nodes match; seeds: OrderIsPaidEvent, Event, Paid " +
+                             "(also: RequestTaskProgressOnOrderPaidSystem, GrantVipGemOnOrderPaidSystem, MarkVipServedOnOrderPaidSystem, " +
+                             "DestroyEventsSystem, MarkEventsReadySystem, CustomerServedEvent, … 1 more)");
+
+            // Nor is destroying a write where the destroy is written in the system: the handler
+            // consumes the request it destroys, and is credited with reading it.
+            queries.Query("order processed").Split('\n')[0].Should().Contain("seeds: PayForProcessedOrdersRequest, PayForOrdersByRequestSystem (reads PayForProcessedOrdersRequest), ");
+        }
+
+        [Fact]
         public void A_feature_seeds_only_when_nothing_else_matches()
         {
             // FurnitureFeature outranks Furniture by degree, but it has no data flow to walk.
-            Queries.Query("furniture request").Should().Contain("seeds: PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, Furniture,");
+            Queries.Query("furniture request").Should().Contain(", Furniture, FurnitureFactory (also: FurnitureFeature, ");
             Queries.Query("LateFeature").Should().Contain("seeds: LateFeature").And.Contain("LateFeature  [feature; root]  (runs 2 systems — use systems-of LateFeature)");
         }
 
@@ -354,6 +408,78 @@ namespace Entitas.Graph.Tests
             Edge(query, Relation.Reads, hired);
             foreach (var component in new[] { worker, id, Node(NodeKind.Component, "Game.Cats.Salary"), Node(NodeKind.Component, "Game.Cats.Mood"), Node(NodeKind.Component, "Game.Cats.Energy"), Node(NodeKind.Component, "Game.Cats.Skill") })
                 Edge(query, Relation.Reads, component);
+            return graph;
+        }
+
+        /// <summary>
+        /// What made `query order paid` leave out the system where orders get paid on a 2000-file
+        /// project, in miniature. PayForOrdersByRequestSystem says "order" but not "paid" (Pay is
+        /// another word); it creates OrderIsPaidEvent and sets the Paid flag. Order and Ordered say
+        /// "order" and nothing else, and much of the code reads them. Readers named after the event
+        /// react to it. InitializeOrdersSystem sets Paid only through OrderFactory, which sets it on
+        /// every order. DestroyEventsSystem destroys every event created with the Event flag.
+        /// </summary>
+        static EcsGraph OrderPayment()
+        {
+            var graph = new EcsGraph();
+            string Node(string kind, string fullName, string? role = null) => AddNode(graph, kind, fullName, role);
+            void Edge(string source, string relation, string target, string? through = null) => AddEdge(graph, source, relation, target, through);
+
+            var order = Node(NodeKind.Component, "Game.Orders.Order");
+            var ordered = Node(NodeKind.Component, "Game.Orders.Ordered");
+            var paid = Node(NodeKind.Component, "Game.Orders.Paid");
+            var typeId = Node(NodeKind.Component, "Game.Orders.OrderTypeId");
+            var request = Node(NodeKind.Component, "Game.Orders.PayForProcessedOrdersRequest", "request");
+            var orderPaid = Node(NodeKind.Component, "Game.Orders.OrderIsPaidEvent", "event");
+            var served = Node(NodeKind.Component, "Game.Orders.CustomerServedEvent", "event");
+            var currency = Node(NodeKind.Component, "Game.Wallet.ChangeCurrencyRequest", "request");
+            var id = Node(NodeKind.Component, "Game.Common.Id");
+            var @event = Node(NodeKind.Component, "Game.Events.Event");
+            var ready = Node(NodeKind.Component, "Game.Common.Ready");
+
+            var pay = Node(NodeKind.System, "Game.Orders.PayForOrdersByRequestSystem");
+            foreach (var component in new[] { request, order, typeId })
+                Edge(pay, Relation.Reads, component);
+            Edge(pay, Relation.Destroys, request);
+            foreach (var component in new[] { orderPaid, paid, served, currency })
+                Edge(pay, Relation.Creates, component);
+            Edge(pay, Relation.Creates, @event, "CreateEntity.Event");
+            Edge(Node(NodeKind.System, "Game.Serving.FinishServingSystem"), Relation.Creates, request);
+
+            foreach (var reader in new[] { "CarryTraySystem", "RefreshTraySnapshotsSystem", "ValidateTraySystem", "DestructTraysOnMissingProviderSystem" })
+                Edge(Node(NodeKind.System, "Game.Serving." + reader), Relation.Reads, order);
+            foreach (var reader in new[] { "StartPatienceSystem", "RefreshCatSnapshotsSystem" })
+                Edge(Node(NodeKind.System, "Game.Cats." + reader), Relation.Reads, ordered);
+            Edge(Node(NodeKind.Type, "Game.Behaviour.PaidForOrdersNode"), Relation.Reads, paid);
+
+            var factory = Node(NodeKind.Type, "Game.Orders.OrderFactory");
+            var initialize = Node(NodeKind.System, "Game.Orders.InitializeOrdersSystem");
+            foreach (var component in new[] { order, typeId, id, paid })
+            {
+                Edge(factory, Relation.Creates, component);
+                Edge(initialize, Relation.Creates, component, "OrderFactory.CreateOrder");
+            }
+            foreach (var setting in new[] { "OrdersConfig", "MenuConfig", "PriceConfig", "LevelConfig", "ShiftConfig", "CafeConfig", "SeatConfig", "QueueConfig" })
+                Edge(initialize, Relation.Reads, Node(NodeKind.Component, "Game.Config." + setting));
+
+            foreach (var reader in new[]
+                     {
+                         "Game.Tasks.RequestTaskProgressOnOrderPaidSystem", "Game.Vip.GrantVipGemOnOrderPaidSystem",
+                         "Game.Vip.MarkVipServedOnOrderPaidSystem", "Game.Analytics.SendOrderCompletedAnalyticsSystem"
+                     })
+                Edge(Node(NodeKind.System, reader), Relation.Reads, orderPaid);
+
+            var destroy = Node(NodeKind.System, "Game.Events.DestroyEventsSystem");
+            foreach (var component in new[] { @event, ready })
+            {
+                Edge(destroy, Relation.Reads, component);
+                Edge(destroy, Relation.Destroys, component);
+            }
+            Edge(destroy, Relation.Destroys, orderPaid, "created with Event + OrderIsPaidEvent; Ready by MarkEventsReadySystem");
+            Edge(destroy, Relation.Destroys, served, "created with Event + CustomerServedEvent; Ready by MarkEventsReadySystem");
+            var mark = Node(NodeKind.System, "Game.Events.MarkEventsReadySystem");
+            Edge(mark, Relation.Reads, @event);
+            Edge(mark, Relation.Creates, ready);
             return graph;
         }
 

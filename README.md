@@ -443,10 +443,10 @@ GameplayFeature (root) — 20 systems
     …
 ```
 
-`query` answers a question in words with the connected piece of the graph around it, like Graphify's `query`. The nodes whose names match the words best are the seeds (`--limit`, default 5). Names are matched word by word, by stem, so `placement` finds `PlaceFurnitureByRequestSystem` and `FurniturePlacedEvent`, `cat` does not find `Indicator`, and words like `how`, `does` and `on` are skipped. A word in the name counts for more than one in the namespace, which every system of a feature shares. Among names that match equally, the one with the fewest other words wins (`PlaceFurnitureByRequestSystem` before `EndFurniturePlacementOnBuildModeStopSystem`), then the one with more edges written in its own code. A reader of an event already among the seeds gets no seed of its own unless it matches a word the event does not; it is one step out from the event anyway. So on a 2000-file project, `query hire worker` seeds `WorkerHiredEvent` together with `HireRequest` and `HireByRequestSystem`, where hiring starts, and not the three systems named after the event, such as `SendWorkerHiredAnalyticsSystem`. From the seeds it walks data flow two steps out (`--depth`, 1 to 4): a component leads to whoever creates, reads or destroys it, a system to the components it touches. Each node lists its links to the nodes after it, so every edge appears once, on the side nearer the seeds. Feature registration is not walked; it shows as the system's place. A hub is a node with more than 40 neighbours over edges written in the code: an `Id`, a position, a factory. It is reached but not walked through, and marked as such. Inferred edges do not count toward a hub, because a system whose factory call adds 50 components is often the very system the question is about. Link lines name the file; a system's header carries its full path.
+`query` answers a question in words with the connected piece of the graph around it, like Graphify's `query`. The nodes whose names match the words best are the seeds (`--limit`, default 5). Names are matched word by word, by stem, so `placement` finds `PlaceFurnitureByRequestSystem` and `FurniturePlacedEvent`, `cat` does not find `Indicator`, and words like `how`, `does` and `on` are skipped. A word in the name counts for more than one in the namespace, which every system of a feature shares. Among names that match equally, a system whose own code names the words its name lacks comes first: it creates or removes a component named with them, or, a weaker sign, its groups collect one. So `query order paid` seeds `PayForOrdersByRequestSystem`, whose name says only "orders" but which creates `OrderIsPaidEvent` and sets `Paid`, and the head says why: `PayForOrdersByRequestSystem (creates OrderIsPaidEvent, Paid)`. Only the system's own lines count, and only components whose own names have the words: not what a factory or a query does for it, not a factory itself (it sets every component of what it builds), not a hub such as `Cat`, and not what it destroys, so a generic `DestroyEventsSystem` gains nothing from the events it is credited with. Then the name with the fewest other words wins (`PlaceFurnitureByRequestSystem` before `EndFurniturePlacementOnBuildModeStopSystem`), then the one with more edges written in its own code. A reader of an event already among the seeds gets no seed of its own unless its name matches a word the event does not; it is one step out from the event anyway. So on a 2000-file project, `query hire worker` seeds `WorkerHiredEvent` together with `HireRequest` and `HireByRequestSystem`, where hiring starts, and not the three systems named after the event, such as `SendWorkerHiredAnalyticsSystem`. From the seeds it walks data flow two steps out (`--depth`, 1 to 4): a component leads to whoever creates, reads or destroys it, a system to the components it touches. Each node lists its links to the nodes after it, so every edge appears once, on the side nearer the seeds. Feature registration is not walked; it shows as the system's place. A hub is a node with more than 40 neighbours over edges written in the code: an `Id`, a position, a factory. It is reached but not walked through, and marked as such. Inferred edges do not count toward a hub, because a system whose factory call adds 50 components is often the very system the question is about. Link lines name the file; a system's header carries its full path.
 ```text
 $ entitas-graph query placed event --limit 1
-query "placed event": 9 nodes match; seeds: FurniturePlacedEvent (also: RequestPlacementSystem, Event, DestroyEventsSystem, PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, MarkEventsReadySystem, … 2 more)
+query "placed event": 9 nodes match; seeds: FurniturePlacedEvent (also: PlaceFurnitureByRequestSystem, RequestPlacementSystem, Event, DestroyEventsSystem, PlaceFurnitureRequest, MarkEventsReadySystem, … 2 more)
 
 Seeds:
   FurniturePlacedEvent  [component; Game, data, event]
@@ -455,14 +455,14 @@ Seeds:
     destroyed by DestroyEventsSystem  via Destroy* (created with Event + FurniturePlacedEvent; Ready by MarkEventsReadySystem)  EventSystems.cs:54
 
 1 step out:
-  DestroyEventsSystem  [system; LateFeature #1, LateFeature order 1]  Assets/Systems/EventSystems.cs:41
-    reads Event  via AllOf  EventSystems.cs:48
-    …
   PlaceFurnitureByRequestSystem  [system; FurnitureFeature #2, GameplayFeature order 3]  Assets/Systems/FurnitureSystems.cs:22
     creates Event  via Flag* (CreateEntity.Event)  Infrastructure.cs:21
     creates Health  via Add* (FurnitureFactory.CreateFurniture)  Infrastructure.cs:33
     …
     reads PlaceFurnitureRequest  via Matcher, Get  FurnitureSystems.cs:31
+  DestroyEventsSystem  [system; LateFeature #1, LateFeature order 1]  Assets/Systems/EventSystems.cs:41
+    reads Event  via AllOf  EventSystems.cs:48
+    …
   UnlockAchievementSystem  [system; GameplayFeature #3, GameplayFeature order 10]  Assets/Systems/EventSystems.cs:6
     reads Ready  via AllOf  EventSystems.cs:16
 

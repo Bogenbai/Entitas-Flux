@@ -525,8 +525,15 @@ namespace Entitas.Graph.Output
                 ? string.Empty
                 : $" (also: {string.Join(", ", others.Take(alsoShown).Select(m => m.Node.Label))}{(others.Count > alsoShown ? $", … {others.Count - alsoShown} more" : string.Empty)})";
             var matches = subgraph.Matches.Count;
-            return $"query \"{words}\": {matches} {(matches == 1 ? "node matches" : "nodes match")}; seeds: {string.Join(", ", subgraph.Seeds.Select(s => s.Node.Label))}{also}";
+            return $"query \"{words}\": {matches} {(matches == 1 ? "node matches" : "nodes match")}; seeds: {string.Join(", ", subgraph.Seeds.Select(SeedLabel))}{also}";
         }
+
+        /// <summary>
+        /// A seed that won its place by what its code writes or collects says so: its name alone
+        /// has fewer of the words than the components beside it, and an assistant reading
+        /// "PayForOrdersByRequestSystem" for "order paid" should see why it is there.
+        /// </summary>
+        static string SeedLabel(SubgraphNode seed) => seed.Witnesses == null ? seed.Node.Label : $"{seed.Node.Label} ({seed.Witnesses})";
 
         List<string> QueryEntries(QuerySubgraph subgraph)
         {
