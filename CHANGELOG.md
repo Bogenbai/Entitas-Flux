@@ -86,7 +86,8 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   visits and does other work there (`consumed_by_removal` in `graph.json`); cleanup-phase
   removers, "done" flags and components that mirror one the loop skips are left out, and
   requests consumed only under a condition keep needing their suffix, which the report now
-  lists. `flow`, `query` and `explain` follow
+  lists. A `goto` that lands on the `Destroy()` skips nothing; a component only a frame-end
+  sweep destroys (a tick made every frame) is a one-frame signal, not a request. `flow`, `query` and `explain` follow
   them in projects without `*Request`/`*Event`, and a matching suffix still wins; only the
   report's four request/event sections stay name-based, since a request nobody handles can't
   be found by structure. A `when:`-style helper is read from its body (`if (gate) apply(self);`),
@@ -114,7 +115,8 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   rings around the node — and is framed by measuring the nodes with their labels. In a narrow
   window the frame leaves room for the legend and the search list stays on screen; long
   conditions wrap; without a link the page opens on the overview, which says why that node is
-  drawn; a page opened in a background tab draws itself when it is shown.
+  drawn; a page opened in a background tab draws itself when it is shown. Stacked under the
+  panel, the ring is flattened to the stage so its labels stay readable.
 
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
