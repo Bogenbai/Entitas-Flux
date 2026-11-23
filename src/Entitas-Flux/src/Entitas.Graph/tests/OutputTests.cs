@@ -276,6 +276,19 @@ namespace Entitas.Graph.Tests
             html.IndexOf("frame(id)", settled, StringComparison.Ordinal).Should().BeGreaterThan(settled);
             html.Should().Contain("network.getBoundingBox(n)", "a scope of one or two steps frames the node with its neighbours, labels included");
             html.Should().Contain("network.once('afterDrawing', () => frame(id))", "a label's size is known only once it has been drawn");
+            html.Should().Contain("$('legend').offsetHeight", "in a narrow window the legend is a box over the canvas, so the frame leaves room for it");
+            html.Should().Contain("document.addEventListener('visibilitychange'", "a page opened in a hidden tab draws nothing until it is shown");
+        }
+
+        [Fact]
+        public void Graph_html_without_a_link_opens_on_the_overview()
+        {
+            var html = GraphHtml.Build(FixtureProject.Graph);
+
+            // With no #node= the page picks a node to draw; the panel must say why that node,
+            // not leave it looking like a link the reader followed.
+            html.Should().Contain("if (!linked) showOverview(start);");
+            html.Should().Contain("'busiest event'");
         }
 
         [Fact]
