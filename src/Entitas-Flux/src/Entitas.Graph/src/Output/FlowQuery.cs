@@ -456,7 +456,7 @@ namespace Entitas.Graph.Output
 
             static string Since(FlowStep step) => step.Since is { } since ? $" [+{since}]" : string.Empty;
 
-            /// <summary>", destroys it only once target.hasHueAnimator (HueAnimator is added only after an await)": the message waits.</summary>
+            /// <summary>", destroys it only once target.hasHueAnimator (HueAnimator can arrive after an await)": the message waits.</summary>
             static string Until(FlowStep step) => step.Until is { } until
                 ? $", {until.Verb} it only once {until.Condition}" + (until.Late != null ? $" ({until.Late})" : string.Empty)
                 : string.Empty;

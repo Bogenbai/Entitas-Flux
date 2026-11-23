@@ -1520,6 +1520,7 @@ namespace Entitas.Graph.Analysis
 
             if (_model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method)
                 return;
+            var passedFrom = _result.Arguments.Count;
             _origins.Visit(invocation, method, _result);
 
             if (name == "Destroy" && invocation.ArgumentList.Arguments.Count == 0 && IsEntity(method.ContainingType))
@@ -1580,7 +1581,8 @@ namespace Entitas.Graph.Analysis
                 _result.Calls.Add(new CallSite
                 {
                     Caller = caller, Callee = callee, Condition = ConditionOf(invocation), Syntax = invocation, Within = OuterLoop(invocation),
-                    Late = Suspended(invocation)
+                    Late = Suspended(invocation),
+                    Group = _result.Arguments.Count == passedFrom + 1 ? _result.Arguments[passedFrom].Origin.Group : null
                 });
             else
                 _result.CalledOutsideMethods.Add(callee);

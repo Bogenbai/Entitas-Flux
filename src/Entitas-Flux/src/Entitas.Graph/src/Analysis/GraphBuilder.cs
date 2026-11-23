@@ -310,11 +310,9 @@ namespace Entitas.Graph.Analysis
                     .Where(n => n.Kind == NodeKind.Component &&
                                 (n.MessageRole != null || n.TransientRemovedBy.Count > 0 || n.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal))))
                     .Select(n => n.Label), StringComparer.Ordinal);
-                Waits.Mark(context, creations, accesses, calls, handOffs, edges);
-                var late = Waits.AddedLate(context, creations, accesses, calls);
-                foreach (var node in graph.Nodes)
-                    if (node.Kind == NodeKind.Component && late.TryGetValue(node.Label, out var how))
-                        node.AddedLate = how;
+                var lateness = new Lateness(context, creations, accesses, calls, results.SelectMany(r => r.CalledOutsideMethods));
+                Waits.Mark(context, creations, lateness, accesses, handOffs, edges);
+                Waits.MarkAddedLate(lateness, accesses, graph.Nodes);
             }
 
             graph.Edges.AddRange(edges.Values);
@@ -1069,6 +1067,13 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>As <see cref="Access.Late"/>: the call may be made only after the caller was suspended.</summary>
         public string? Late;
+
+        /// <summary>
+        /// When the call passes one entity, and that one is the variable of a foreach over a group:
+        /// the group. What the callee does it does to that group's entities, and it never runs
+        /// when the group requires a component nothing adds (<see cref="Lateness"/>).
+        /// </summary>
+        public ISymbol? Group;
     }
 
     sealed class RegistrationSite

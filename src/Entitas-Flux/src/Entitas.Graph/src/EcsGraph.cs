@@ -102,12 +102,19 @@ namespace Entitas.Graph
         public bool ConsumedByRemoval;
 
         /// <summary>
-        /// "after an await" or "after a yield": every write of it on an entity that already
-        /// exists may run only after one (a view's asset loaded, then its registrars add
+        /// "after an await" or "after a yield": every way to every write of it on an entity that
+        /// already exists passes one (a view's asset loaded, then its registrars add
         /// HueAnimator). What a reader waiting on it — `if (target.hasHueAnimator)` — waits for
         /// has no frame.
         /// </summary>
         public string? AddedLate;
+
+        /// <summary>
+        /// "after an await" or "after a yield" when that is so of some ways to its writes on
+        /// existing entities and not of others (a view placed in the scene sets up its entity at
+        /// once): it can arrive late, and a reader waiting on it has no frame either.
+        /// </summary>
+        public string? SometimesLate;
 
         /// <summary>For an event by structure: the consumed markers it is created with (Event, Pulse), whose destroyers take it along.</summary>
         public List<string> CarriedBy = new List<string>();
@@ -260,8 +267,15 @@ namespace Entitas.Graph
         /// <summary>"after an await", "after a yield" or "outside the systems": when some way it arrives can be, so no frame is certain.</summary>
         public string? Added;
 
-        /// <summary>Otherwise: the systems adding it to existing entities, one of which the reader waits for.</summary>
+        /// <summary>
+        /// The systems adding it to existing entities at once: one of which the reader waits for
+        /// when <see cref="Added"/> is null; with it, those adding it at once while
+        /// <see cref="LateBy"/> add it late.
+        /// </summary>
         public List<string> AddedBy = new List<string>();
+
+        /// <summary>When some systems add it at once and these only on ways past an await or a yield (<see cref="Added"/>): those.</summary>
+        public List<string> LateBy = new List<string>();
     }
 
     public sealed class GraphMetadata
@@ -385,6 +399,7 @@ namespace Entitas.Graph
                         if (n.ConsumedBy.Count > 0) WriteStrings(w, "consumed_by", n.ConsumedBy);
                         if (n.ConsumedByRemoval) w.WriteBoolean("consumed_by_removal", true);
                         if (n.AddedLate != null) w.WriteString("added_late", n.AddedLate);
+                        if (n.SometimesLate != null) w.WriteString("sometimes_late", n.SometimesLate);
                         if (n.CarriedBy.Count > 0) WriteStrings(w, "carried_by", n.CarriedBy);
                     }
                     if (n.Interfaces.Count > 0) WriteStrings(w, "interfaces", n.Interfaces);
@@ -467,6 +482,7 @@ namespace Entitas.Graph
                             w.WriteString("needs", wait.Needs);
                             if (wait.Added != null) w.WriteString("added", wait.Added);
                             if (wait.AddedBy.Count > 0) WriteStrings(w, "added_by", wait.AddedBy);
+                            if (wait.LateBy.Count > 0) WriteStrings(w, "late_by", wait.LateBy);
                             w.WriteEndObject();
                         }
                         w.WriteEndArray();
@@ -534,6 +550,7 @@ namespace Entitas.Graph
                     Message = Str(n, "message"),
                     ConsumedByRemoval = Bool(n, "consumed_by_removal"),
                     AddedLate = Str(n, "added_late"),
+                    SometimesLate = Str(n, "sometimes_late"),
                     Root = Bool(n, "root")
                 };
                 node.Contexts.AddRange(Strs(n, "contexts"));
@@ -572,6 +589,7 @@ namespace Entitas.Graph
                     {
                         var wait = new ReaderWait { System = Str(x, "system") ?? string.Empty, Needs = Str(x, "needs") ?? string.Empty, Added = Str(x, "added") };
                         wait.AddedBy.AddRange(Strs(x, "added_by"));
+                        wait.LateBy.AddRange(Strs(x, "late_by"));
                         waits.Add(wait);
                     }
 

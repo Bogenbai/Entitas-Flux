@@ -31,6 +31,7 @@ namespace Entitas.Graph.Analysis
         readonly Dictionary<IMethodSymbol, List<ArgumentSite>> _passed = new Dictionary<IMethodSymbol, List<ArgumentSite>>(SymbolEqualityComparer.Default);
         readonly Dictionary<string, List<IMethodSymbol>> _reach = new Dictionary<string, List<IMethodSymbol>>(StringComparer.Ordinal);
         readonly Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> _runs = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        readonly Dictionary<IMethodSymbol, List<IMethodSymbol>> _targets = new Dictionary<IMethodSymbol, List<IMethodSymbol>>(SymbolEqualityComparer.Default);
 
         /// <summary>The project's call sites by the method making them.</summary>
         public readonly Dictionary<IMethodSymbol, List<CallSite>> Callees;
@@ -176,7 +177,7 @@ namespace Entitas.Graph.Analysis
                 return reached;
 
             var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            var frontier = roots.SelectMany(r => Callees[r]).SelectMany(c => _context.Dispatch(new[] { c.Callee })).ToList();
+            var frontier = roots.SelectMany(r => Callees[r]).SelectMany(c => Targets(c.Callee)).ToList();
             for (var depth = 0; depth < _context.Options.MaxCallDepth && frontier.Count > 0; depth++)
             {
                 var next = new List<IMethodSymbol>();
@@ -186,11 +187,19 @@ namespace Entitas.Graph.Analysis
                         continue;
                     reached.Add(method);
                     if (Callees.TryGetValue(method, out var further))
-                        next.AddRange(further.SelectMany(c => _context.Dispatch(new[] { c.Callee })));
+                        next.AddRange(further.SelectMany(c => Targets(c.Callee)));
                 }
                 frontier = next;
             }
             return reached;
+        }
+
+        /// <summary>Where a call to the method can land (<see cref="BuildContext.Dispatch"/>), worked out once per method.</summary>
+        public List<IMethodSymbol> Targets(IMethodSymbol callee)
+        {
+            if (!_targets.TryGetValue(callee, out var targets))
+                _targets[callee] = targets = _context.Dispatch(new[] { callee }).ToList();
+            return targets;
         }
 
         /// <summary>
@@ -258,6 +267,33 @@ namespace Entitas.Graph.Analysis
                 keys.AddRange(found);
             }
             return keys;
+        }
+
+        /// <summary>
+        /// The groups whose foreach the entity comes from, following a parameter to what the
+        /// callers in the system's reach pass, as <see cref="Resolve"/> does; null when some way
+        /// ends anywhere else (an entity made, one an index finds, one from a field).
+        /// </summary>
+        public List<ISymbol>? Groups(EntityOrigin origin, Func<IMethodSymbol, bool> inTree, HashSet<(IMethodSymbol, int)> visiting)
+        {
+            if (origin.Group != null)
+                return new List<ISymbol> { origin.Group };
+            if (origin.Method == null || CalledBack(origin.Method))
+                return null;
+            if (!visiting.Add((origin.Method, origin.Parameter)))
+                return new List<ISymbol>();
+
+            var groups = new List<ISymbol>();
+            var any = false;
+            if (_passed.TryGetValue(origin.Method, out var all))
+                foreach (var site in all.Where(s => s.Parameter == origin.Parameter && inTree(s.Caller)))
+                {
+                    if (Groups(site.Origin, inTree, visiting) is not { } found)
+                        return null;
+                    any = true;
+                    groups.AddRange(found);
+                }
+            return any ? groups : null;
         }
 
         /// <summary>A creation and every factory call handing its entity back, outward: the entity is whatever the outermost one made of it.</summary>

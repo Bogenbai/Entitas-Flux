@@ -279,7 +279,9 @@ namespace Entitas.Graph.Output
         /// otherwise and nobody takes it unconditionally: until it holds, the message stays and
         /// is read again every frame. ChangeHueByRequestSystem destroys its request only once
         /// `target.hasHueAnimator`, which a new piece of furniture gets after its view loads.
-        /// With the take: destroys, removes or takes; and what of the condition may arrive late.
+        /// With the take: destroys, removes or takes; and what of the condition arrives only late
+        /// (graph.json `added_late`), or can (`sometimes_late`: a view placed in the scene is set
+        /// up at once, one loaded from an asset after an await).
         ///
         /// A condition on a component the taker sets itself is its own bookkeeping, no wait:
         /// UnlockPerkByRequestSystem marks every request isProcessed, then destroys those that are.
@@ -301,9 +303,9 @@ namespace Entitas.Graph.Output
             var verbs = consuming.Select(e => e.Relation).Distinct().ToList();
             var verb = verbs.Count > 1 ? "takes" : verbs[0] == Relation.Destroys ? "destroys" : "removes";
             var late = asked
-                .Select(name => _graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Component && n.Label == name && n.AddedLate != null))
+                .Select(name => _graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Component && n.Label == name && (n.AddedLate ?? n.SometimesLate) != null))
                 .Where(n => n != null)
-                .Select(n => $"{n!.Label} is added only {n.AddedLate}")
+                .Select(n => n!.AddedLate != null ? $"{n.Label} is added only {n.AddedLate}" : $"{n.Label} can arrive {n.SometimesLate}")
                 .ToList();
             return (condition, verb, late.Count == 0 ? null : string.Join("; ", late));
         }
@@ -808,11 +810,15 @@ namespace Entitas.Graph.Output
             // (graph.json `waits`): it sees the entity once a system adds that, at the earliest
             // after that system's next run. Added after an await, outside the systems, or by
             // systems after which it would see it in different frames, and no frame is certain.
+            // When some systems add it at once and others late, the late ones are named.
             foreach (var wait in WaitsOf(producer, component, system))
             {
                 var needs = wait.Component.Label;
                 if (wait.Added != null)
-                    return (null, FlowFrame.Unknown($"waits for {needs}, added {wait.Added}"), null, 0);
+                    return (null, FlowFrame.Unknown($"waits for {needs}, added {wait.Added}" +
+                                                    (wait.LateBy.Count == 0 ? string.Empty
+                                                        : $" by {wait.LateBy[0].Label}" + (wait.LateBy.Count > 1 ? $" or {wait.LateBy.Count - 1} more" : string.Empty))),
+                        null, 0);
 
                 int? seen = null;
                 FlowTime? latest = null;
@@ -850,7 +856,8 @@ namespace Entitas.Graph.Output
         /// What <paramref name="system"/> waits for on the entities <paramref name="producer"/>
         /// makes the component on: what every one of its creates of it records (graph.json
         /// `waits`), since the system may see it through any of them. Added after an await or
-        /// outside the systems when one of them says so; otherwise every setter any names.
+        /// outside the systems when one of them says so — by the late systems they name when
+        /// every such one names them (others add it at once); otherwise every setter any names.
         /// </summary>
         List<FlowWait> WaitsOf(GraphNode producer, GraphNode component, GraphNode system)
         {
@@ -873,8 +880,11 @@ namespace Entitas.Graph.Output
                     var setters = added != null
                         ? new List<GraphNode>()
                         : all.SelectMany(w => w!.AddedBy).Distinct(StringComparer.Ordinal).Select(id => _graph.Node(id)).OfType<GraphNode>().ToList();
+                    var late = added != null && all.All(w => w!.Added != added || w.LateBy.Count > 0)
+                        ? all.Where(w => w!.Added == added).SelectMany(w => w!.LateBy).Distinct(StringComparer.Ordinal).Select(id => _graph.Node(id)).OfType<GraphNode>().ToList()
+                        : new List<GraphNode>();
                     if (added != null || setters.Count > 0)
-                        waits.Add(new FlowWait(node, added, setters));
+                        waits.Add(new FlowWait(node, added, setters, late));
                 }
             }
 
@@ -1276,19 +1286,21 @@ namespace Entitas.Graph.Output
     /// <summary>
     /// A component a taker's groups require that the producer's new entity is made without
     /// (graph.json `waits`): how it arrives, after an await or outside the systems, or the
-    /// systems adding it.
+    /// systems adding it; with the late ones named when others add it at once.
     /// </summary>
     internal sealed class FlowWait
     {
         public readonly GraphNode Component;
         public readonly string? Added;
         public readonly IReadOnlyList<GraphNode> Setters;
+        public readonly IReadOnlyList<GraphNode> LateBy;
 
-        public FlowWait(GraphNode component, string? added, IReadOnlyList<GraphNode> setters)
+        public FlowWait(GraphNode component, string? added, IReadOnlyList<GraphNode> setters, IReadOnlyList<GraphNode> lateBy)
         {
             Component = component;
             Added = added;
             Setters = setters;
+            LateBy = lateBy;
         }
     }
 

@@ -1,16 +1,16 @@
 namespace Harbor
 {
     /// <summary>
-    /// Holds a moored craft with grapples, each told which gantry it belongs to. The craft is a
-    /// field set by Hold: a grapple reaches it through its gantry, so which entity a grapple's
+    /// Holds a moored craft with grapples, each told which derrick it belongs to. The craft is a
+    /// field set by Hold: a grapple reaches it through its derrick, so which entity a grapple's
     /// write lands on is no parameter anybody passes.
     /// </summary>
-    public sealed class Gantry
+    public sealed class Derrick
     {
         readonly IGrapple[] _grapples;
         PortEntity _craft;
 
-        public Gantry(params IGrapple[] grapples) => _grapples = grapples;
+        public Derrick(params IGrapple[] grapples) => _grapples = grapples;
 
         public PortEntity Craft => _craft;
 
@@ -19,7 +19,7 @@ namespace Harbor
             _craft = craft;
             foreach (IGrapple grapple in _grapples)
             {
-                if (grapple.Gantry == this)
+                if (grapple.Derrick == this)
                     grapple.Latch();
             }
         }
@@ -28,7 +28,7 @@ namespace Harbor
         {
             foreach (IGrapple grapple in _grapples)
             {
-                if (grapple.Gantry == this)
+                if (grapple.Derrick == this)
                     grapple.Unlatch();
             }
             _craft = null;
@@ -39,16 +39,16 @@ namespace Harbor
     // latches and unlatches by an override two steps from the call.
     public interface IGrapple
     {
-        Gantry Gantry { get; }
+        Derrick Derrick { get; }
         void Latch();
         void Unlatch();
     }
 
     public abstract class Grapple : IGrapple
     {
-        public Gantry Owner;
+        public Derrick Owner;
 
-        public Gantry Gantry => Owner;
+        public Derrick Derrick => Owner;
 
         public PortEntity Gripped => Owner != null ? Owner.Craft : null;
 
@@ -65,10 +65,10 @@ namespace Harbor
 
     public static class Moorings
     {
-        /// <summary>Lets the gantry go, darkens the slipway the craft leaves and casts the hawser off.</summary>
+        /// <summary>Lets the derrick go, darkens the slipway the craft leaves and casts the hawser off.</summary>
         public static void Unmoor(this PortEntity craft, PortEntity slipway)
         {
-            craft.gantryLink.Value.LetGo();
+            craft.derrickLink.Value.LetGo();
             slipway.RemoveFloodlight();
             craft.RemoveHawser();
         }
@@ -89,14 +89,14 @@ namespace Harbor
     /// <summary>The mooring master's panel: a craft is moored with its hawser, spool and light, then held; a slipway is lit.</summary>
     public sealed class MooringPanel
     {
-        public void OnMoorPressed(Gantry gantry)
+        public void OnMoorPressed(Derrick derrick)
         {
             PortEntity craft = Make.Blank();
             craft.AddHawser(0);
             craft.AddSpool(1);
             craft.AddFloodlight(1);
-            craft.AddGantryLink(gantry);
-            gantry.Hold(craft);
+            craft.AddDerrickLink(derrick);
+            derrick.Hold(craft);
         }
 
         public void OnSlipwayBuilt(int number) => Make.Blank().AddSlipway(number).AddFloodlight(5);

@@ -137,4 +137,59 @@ namespace Harbor
                     check.Destroy();
         }
     }
+
+    /// <summary>Deploys a probe with a holo kit — no asset, no Hologram yet — due for launch.</summary>
+    public sealed class DeployKitProbesSystem : IExecuteSystem
+    {
+        public void Execute()
+        {
+            PortEntity probe = Make.Blank();
+            probe.isProbe = true;
+            probe.isHoloKit = true;
+            probe.isLaunchDue = true;
+        }
+    }
+
+    /// <summary>Deploys a probe with a hologram's asset and a holo kit: the projector or the kit mounts its Hologram.</summary>
+    public sealed class DeployDualProbesSystem : IExecuteSystem
+    {
+        public void Execute()
+        {
+            PortEntity probe = Make.Blank();
+            probe.isProbe = true;
+            probe.AddHoloAsset("dual");
+            probe.isHoloKit = true;
+            probe.isLaunchDue = true;
+        }
+    }
+
+    /// <summary>Mounts the Hologram of every probe with a kit at once, with the emitter the projector uses after its await.</summary>
+    public sealed class MountKitHologramsSystem : IExecuteSystem
+    {
+        readonly IGroup<PortEntity> _kits;
+
+        public MountKitHologramsSystem(PortContext port) =>
+            _kits = port.GetGroup(PortMatcher.AllOf(PortMatcher.HoloKit).NoneOf(PortMatcher.Hologram));
+
+        public void Execute()
+        {
+            foreach (PortEntity probe in _kits.GetEntities())
+                new HoloEmitter().Mount(probe);
+        }
+    }
+
+    /// <summary>Fits the lens of every probe on a gantry at once; nothing puts a probe on one, so it never does.</summary>
+    public sealed class FitGantryLensesSystem : IExecuteSystem
+    {
+        readonly IFitting _lens = new LensFitting();
+        readonly IGroup<PortEntity> _docked;
+
+        public FitGantryLensesSystem(PortContext port) => _docked = port.GetGroup(PortMatcher.AllOf(PortMatcher.Probe, PortMatcher.Gantry));
+
+        public void Execute()
+        {
+            foreach (PortEntity probe in _docked.GetEntities())
+                _lens.Fit(probe);
+        }
+    }
 }

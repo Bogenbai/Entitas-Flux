@@ -133,7 +133,7 @@ namespace Entitas.Graph.Tests
             // Unmooring lets the gantry go, whose magnetic grapple — reached through IGrapple and the
             // abstract Grapple — takes the Lodestone off the craft its gantry holds, then casts the
             // Hawser off. AlignLodestonesSystem needs the Lodestone, but that the grapple's craft
-            // is the one unmoored holds only by how Gantry is used: it stays, marked.
+            // is the one unmoored holds only by how Derrick is used: it stays, marked.
             var output = Queries.Flow("UnmoorCraftsSystem");
             Lines(output).Should().ContainInOrder(
                 "by calling Moorings.Unmoor: removes 3 (Hawser, Floodlight, Lodestone)  (if craft.hawser.Value <= 0)  Moorings.cs:72",
@@ -186,6 +186,39 @@ namespace Entitas.Graph.Tests
             Waits("DeployProbesSystem", "LaunchDue").Should().Be("LaunchProbesSystem needs Hologram: after an await");
             Waits("DeployProbesSystem", "PingDue").Should().Be("PingProbesSystem needs Charge: by ChargeProbesSystem");
             Waits("RedeployProbesSystem", "LaunchDue").Should().BeEmpty();
+        }
+
+        [Fact]
+        public void How_a_launcher_waits_for_the_hologram_depends_on_which_mounters_can_serve_its_probe()
+        {
+            // HoloEmitter.Mount runs after the projector's await when ProjectHologramsSystem gets
+            // there, and at once when MountKitHologramsSystem does. Which of them can mount the
+            // Hologram of a probe is up to its loop's group: the projector's needs a HoloAsset,
+            // the kit mounter's a HoloKit, and only probes being deployed get either.
+            string Waits(string system) => string.Join("; ", Edges(system, Relation.Creates, "LaunchDue").Single().Waits
+                .Select(w => $"{Label(w.System)} needs {Label(w.Needs)}: {w.Added ?? "-"}, at once by [{string.Join(", ", w.AddedBy.Select(Label))}], " +
+                             $"late by [{string.Join(", ", w.LateBy.Select(Label))}]"));
+            string Launch(string producer) => Lines(Queries.Flow(producer)).Single(l => l.StartsWith("read+removed by LaunchProbesSystem", StringComparison.Ordinal));
+
+            // An asset and no kit: only the projector, after its await.
+            Waits("DeployProbesSystem").Should().Be("LaunchProbesSystem needs Hologram: after an await, at once by [], late by []");
+
+            // A kit and no asset: only the kit mounter, at once — the launcher's frame follows from its order.
+            Waits("DeployKitProbesSystem").Should().Be("LaunchProbesSystem needs Hologram: -, at once by [MountKitHologramsSystem], late by []");
+            Launch("DeployKitProbesSystem").Should().Be(
+                "read+removed by LaunchProbesSystem  #19 (Probes)  next frame (waits for Hologram from MountKitHologramsSystem #35) [+1]  ProbeSystems.cs:65");
+
+            // Both: whichever mounts first, so no frame — and the late one is named.
+            Waits("DeployDualProbesSystem").Should().Be(
+                "LaunchProbesSystem needs Hologram: after an await, at once by [MountKitHologramsSystem], late by [ProjectHologramsSystem]");
+            Launch("DeployDualProbesSystem").Should().Be(
+                "read+removed by LaunchProbesSystem  #19 (Probes)  frame unknown (waits for Hologram, added after an await by ProjectHologramsSystem)  ProbeSystems.cs:65");
+
+            // In graph.json, and back.
+            var json = Graph.ToJson();
+            json.Should().Contain("\"added_by\": [\n            \"system:Harbor.MountKitHologramsSystem\"\n          ],\n          \"late_by\": [\n            \"system:Harbor.ProjectHologramsSystem\"\n          ]");
+            json.Should().Contain("\"sometimes_late\": \"after an await\"");
+            EcsGraph.FromJson(json).ToJson().Should().Be(json);
         }
 
         [Fact]
@@ -288,16 +321,20 @@ namespace Entitas.Graph.Tests
         public void An_order_destroyed_only_once_its_ship_shows_a_hologram_waits_and_what_follows_has_no_count()
         {
             // BeamToShipsSystem destroys its order only `if (ship != null && ship.hasHologram)`,
-            // and the projector mounts a Hologram only after its await: the order sits there.
-            Node("Hologram").AddedLate.Should().Be("after an await", "RedeployProbesSystem adds one too, but on a probe it is making");
+            // and a Hologram can come after the projector's await: the order sits there.
+            Node("Hologram").AddedLate.Should().BeNull("MountKitHologramsSystem mounts one at once, with the emitter the projector uses");
+            Node("Hologram").SometimesLate.Should().Be("after an await", "ProjectHologramsSystem's way to the emitter passes the projector's await");
             Node("Charge").AddedLate.Should().BeNull("ChargeProbesSystem adds it the ordinary way");
-            Node("Lens").AddedLate.Should().Be("after an await", "IFitting.Fit lands in LensFitting through the abstract Fitting");
+            Node("Charge").SometimesLate.Should().BeNull();
+            Node("Lens").AddedLate.Should().Be("after an await",
+                "IFitting.Fit lands in LensFitting through the abstract Fitting; FitGantryLensesSystem fits one at once, but in a loop over a Gantry nothing adds");
+            Node("Lens").SometimesLate.Should().BeNull();
             Edges("ProjectHologramsSystem", Relation.Creates, "Lens").Should().ContainSingle(e => e.Confidence == Confidence.Inferred,
                 "the call graph follows IFitting.Fit through the abstract Fitting to LensFitting's override too");
 
             var lines = Lines(Queries.Flow("BeamOrder"));
             lines.Should().Contain(l => l.StartsWith("read+destroyed by BeamToShipsSystem", StringComparison.Ordinal) &&
-                                        l.Contains("[+0], destroys it only once ship != null && ship.hasHologram (Hologram is added only after an await)  "));
+                                        l.Contains("[+0], destroys it only once ship != null && ship.hasHologram (Hologram can arrive after an await)  "));
             // What it hands on happens the frame the ship has one, which no order tells: no [+N].
             lines.Should().Contain(l => l.StartsWith("read+removed by RepaintHullsSystem", StringComparison.Ordinal) && !l.Contains("[+"));
             Queries.Flow("DockingOrder").Should().NotContain("only once", "DockShipsSystem destroys every order");

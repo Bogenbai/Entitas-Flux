@@ -10,7 +10,7 @@ namespace Harbor
 
         public UnmoorCraftsSystem(PortContext port)
         {
-            _moored = port.GetGroup(PortMatcher.AllOf(PortMatcher.Hawser, PortMatcher.GantryLink));
+            _moored = port.GetGroup(PortMatcher.AllOf(PortMatcher.Hawser, PortMatcher.DerrickLink));
             _slipways = port.GetGroup(PortMatcher.AllOf(PortMatcher.Slipway, PortMatcher.Floodlight));
         }
 

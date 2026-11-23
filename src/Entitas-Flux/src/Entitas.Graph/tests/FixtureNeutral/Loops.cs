@@ -69,7 +69,7 @@ namespace Harbor
         }
     }
 
-    /// <summary>Probes are charged, deployed, projected, then launched and pinged; the quay's systems come last, so the order numbers before them stay.</summary>
+    /// <summary>Probes are charged, deployed, projected, then launched and pinged; then those with holo kits, the quay's systems and the moorings, last, so the order numbers before them stay.</summary>
     public sealed class Probes : Feature
     {
         public Probes(Contexts contexts)
@@ -88,12 +88,18 @@ namespace Harbor
             Add(new SlackenMooringsSystem(contexts.port));
             Add(new HaulKeelsSystem(contexts.signal, contexts.port));
 
-            // Moorings, last, so that nothing above moves.
+            // Moorings.
             Add(new UnmoorCraftsSystem(contexts.port));
             Add(new SlackenHawsersSystem(contexts.port));
             Add(new AlignLodestonesSystem(contexts.port));
             Add(new ReelSpoolsSystem(contexts.port));
             Add(new DimFloodlightsSystem(contexts.port));
+
+            // Holo kits.
+            Add(new DeployKitProbesSystem());
+            Add(new DeployDualProbesSystem());
+            Add(new MountKitHologramsSystem(contexts.port));
+            Add(new FitGantryLensesSystem(contexts.port));
         }
     }
 

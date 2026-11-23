@@ -86,9 +86,14 @@ namespace Harbor
     // magnetic one takes the Lodestone off again — darkens the slipway left behind and casts the
     // Hawser off. Slackening a hawser pulled too far snaps the Spool off instead of paying out.
     [Port, Watched] public sealed class Hawser : IComponent { public int Value; }
-    [Port] public sealed class GantryLink : IComponent { public Gantry Value; }
+    [Port] public sealed class DerrickLink : IComponent { public Derrick Value; }
     [Port] public sealed class Lodestone : IComponent { public int Value; }   // AlignLodestonesSystem needs it; unmooring takes it off through a grapple
     [Port] public sealed class Spool : IComponent { public int Value; }       // ReelSpoolsSystem needs it; unmooring leaves it, slackening takes it off and returns
     [Port] public sealed class Floodlight : IComponent { public int Value; }  // DimFloodlightsSystem needs it; unmooring takes it off the slipway, not the craft
     [Port] public sealed class Slipway : IComponent { public int Value; }
+    // A probe deployed with a holo kit gets its Hologram at once, from the emitter the projector
+    // uses after its await; one deployed with the kit and an asset, either way. No probe is ever
+    // put on a Gantry: the loop fitting lenses there never runs.
+    [Port] public sealed class HoloKit : IComponent { }
+    [Port] public sealed class Gantry : IComponent { }
 }

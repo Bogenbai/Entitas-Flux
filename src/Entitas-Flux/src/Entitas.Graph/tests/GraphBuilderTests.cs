@@ -1156,6 +1156,109 @@ namespace Entitas.Graph.Tests
             untraced.Edges.Should().OnlyContain(e => e.Waits.Count == 0);
         }
 
+        const string Binding = @"
+            [Game] public sealed class SeeRequest : IComponent { }
+
+            public static class Make
+            {
+                public static GameContext Game;
+                public static GameEntity New() => Game.CreateEntity();
+            }
+
+            // Keeps the entity it is given in a field and adds C to it there, as a view does: the
+            // entity written is not traced, so the binders' own loops say which entities get C.
+            public sealed class Holder
+            {
+                GameEntity _held;
+                public void Hold(GameEntity e) { _held = e; _held.isC = true; }
+            }
+
+            public static class Tags
+            {
+                public static void TagH(GameEntity e) => e.isH = true;
+                public static void TagI(GameEntity e) => e.isI = true;
+            }
+
+            public sealed class Loader
+            {
+                readonly Holder _holder = new Holder();
+                public Action<GameEntity> OnTap = Tags.TagH;
+
+                public async System.Threading.Tasks.Task LoadAsync(GameEntity e)
+                {
+                    await System.Threading.Tasks.Task.Yield();
+                    _holder.Hold(e);
+                    Tags.TagH(e);
+                    Tags.TagI(e);
+                }
+
+                public void LoadNow(GameEntity e) => _holder.Hold(e);
+            }
+
+            // D marks what the late binder serves, E what the one binding at once serves.
+            public sealed class LateBindSystem : IExecuteSystem
+            {
+                readonly Loader _loader = new Loader();
+                readonly IGroup<GameEntity> _unbound;
+                public LateBindSystem(GameContext game) => _unbound = game.GetGroup(GameMatcher.AllOf(GameMatcher.D).NoneOf(GameMatcher.C));
+                public void Execute() { foreach (GameEntity e in _unbound.GetEntities()) _ = _loader.LoadAsync(e); }
+            }
+
+            public sealed class BindSystem : IExecuteSystem
+            {
+                readonly Loader _loader = new Loader();
+                readonly IGroup<GameEntity> _unbound;
+                public BindSystem(GameContext game) => _unbound = game.GetGroup(GameMatcher.AllOf(GameMatcher.E).NoneOf(GameMatcher.C));
+                public void Execute() { foreach (GameEntity e in _unbound.GetEntities()) _loader.LoadNow(e); }
+            }
+
+            public sealed class AskLateSystem : IExecuteSystem
+            {
+                public void Execute() { GameEntity e = Make.New(); e.isD = true; e.isSeeRequest = true; }
+            }
+
+            public sealed class AskNowSystem : IExecuteSystem
+            {
+                public void Execute() { GameEntity e = Make.New(); e.isE = true; e.isSeeRequest = true; }
+            }
+
+            public sealed class AskBothSystem : IExecuteSystem
+            {
+                public void Execute() { GameEntity e = Make.New(); e.isD = true; e.isE = true; e.isSeeRequest = true; }
+            }
+
+            public sealed class SeeSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public SeeSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.SeeRequest, GameMatcher.C));
+                public void Execute() { foreach (GameEntity e in _asked.GetEntities()) e.isSeeRequest = false; }
+            }";
+
+        [Fact]
+        public void A_component_added_late_on_some_ways_and_at_once_on_others_is_late_only_for_the_entities_the_late_ways_serve()
+        {
+            var graph = Snippet(Binding);
+            string Waits(string system) => string.Join("; ", graph.Edges
+                .Single(e => e.Source == "system:" + system && e.Target == "component:SeeRequest" && e.Relation == Relation.Creates)
+                .Waits.Select(w => $"{w.Needs.Split(':')[1]}: {w.Added ?? "-"}, at once by [{string.Join(", ", w.AddedBy.Select(s => s.Split(':')[1]))}], " +
+                                   $"late by [{string.Join(", ", w.LateBy.Select(s => s.Split(':')[1]))}]"));
+
+            // Holder.Hold writes on a field: the loop each binder passes its entity from decides.
+            Waits("AskLateSystem").Should().Be("C: after an await, at once by [], late by []");
+            Waits("AskNowSystem").Should().Be("C: -, at once by [BindSystem], late by []");
+            Waits("AskBothSystem").Should().Be("C: after an await, at once by [BindSystem], late by [LateBindSystem]");
+
+            // C is late on one binder's way only; I only ever comes after the await; TagH is also
+            // handed out as a delegate, which may run it at any time, so H is not late only.
+            Node(graph, "C").AddedLate.Should().BeNull();
+            Node(graph, "C").SometimesLate.Should().Be("after an await");
+            Node(graph, "I").AddedLate.Should().Be("after an await");
+            Node(graph, "H").AddedLate.Should().BeNull("Tags.TagH is handed out to OnTap too");
+            Node(graph, "H").SometimesLate.Should().Be("after an await");
+        }
+
+        static GraphNode Node(EcsGraph graph, string component) => graph.Nodes.Single(n => n.Id == "component:" + component);
+
         static string? ConditionIn(EcsGraph graph, string system, string relation, string component) =>
             graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;
 
