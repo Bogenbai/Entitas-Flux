@@ -81,7 +81,12 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   None of it depends on a project's naming. Requests and events are recognised by what
   happens to their entities as well as by name: a component whose every holder a reader's
   loop destroys (directly, or by marking it for a sweeper) is a request; one created only with
-  such a consumed marker and read on its own is an event. `flow`, `query` and `explain` follow
+  such a consumed marker and read on its own is an event. A request put on an entity that lives
+  on (a cat asked to leave) counts too when its handler's loop takes it off every entity it
+  visits and does other work there (`consumed_by_removal` in `graph.json`); cleanup-phase
+  removers, "done" flags and components that mirror one the loop skips are left out, and
+  requests consumed only under a condition keep needing their suffix, which the report now
+  lists. `flow`, `query` and `explain` follow
   them in projects without `*Request`/`*Event`, and a matching suffix still wins; only the
   report's four request/event sections stay name-based, since a request nobody handles can't
   be found by structure. A `when:`-style helper is read from its body (`if (gate) apply(self);`),
