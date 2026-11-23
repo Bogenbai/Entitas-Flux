@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 namespace Entitas.SourceGenerator.Cli
 {
@@ -16,6 +18,16 @@ namespace Entitas.SourceGenerator.Cli
 
         /// <summary>Only report whether the files are current; write nothing.</summary>
         public bool check;
+
+        /// <summary>
+        /// Components renamed in the IDE (<see cref="RenameReport.key"/>) the user chose to
+        /// update the usages of. Any other rename found is reported as pending in
+        /// <see cref="AssemblyReport.rename"/>, and nothing is written for its assembly.
+        /// </summary>
+        public List<string> applyRenames = new List<string>();
+
+        /// <summary>Renames the user chose to regenerate without updating the usages of.</summary>
+        public List<string> ignoreRenames = new List<string>();
 
         public List<RequestedAssembly> assemblies = new List<RequestedAssembly>();
     }
@@ -72,6 +84,9 @@ namespace Entitas.SourceGenerator.Cli
         /// <summary>Check mode: what is out of date, empty when current.</summary>
         public string stale = string.Empty;
 
+        /// <summary>A component renamed in the IDE; <see cref="RenameReport.key"/> is empty when there is none.</summary>
+        public RenameReport rename = new RenameReport();
+
         public static AssemblyReport From(AssemblyResult result, string projectRoot)
         {
             var report = new AssemblyReport
@@ -95,7 +110,61 @@ namespace Entitas.SourceGenerator.Cli
             report.errors.AddRange(result.Errors);
             report.warnings.AddRange(result.Warnings);
             report.componentFiles.AddRange(result.ComponentFiles);
+
+            if (result.Rename is { } rename)
+            {
+                report.rename = new RenameReport
+                {
+                    key = rename.Key,
+                    oldName = rename.OldClassName,
+                    newName = rename.NewClassName,
+                    state = rename.Outcome switch
+                    {
+                        RenameOutcome.Pending => "pending",
+                        RenameOutcome.Applied => "applied",
+                        RenameOutcome.Ignored => "ignored",
+                        _ => "unused"
+                    },
+                    usages = rename.UsageCount
+                };
+
+                var files = rename.Outcome == RenameOutcome.Applied
+                    ? rename.EditedFiles
+                    : rename.Files.Select(file => Path.GetFullPath(file.Path));
+                report.rename.files.AddRange(files.Select(path => GeneratedFileWriter.Relative(path, projectRoot)).Distinct());
+                report.rename.identifiers.AddRange(rename.UsedIdentifiers.Select(pair => $"{pair.Old} -> {pair.New}"));
+                report.rename.warnings.AddRange(rename.Warnings);
+            }
+
             return report;
         }
+    }
+
+    /// <summary>
+    /// A component renamed in the IDE (Shift+F6 on the class), recognised from the generated
+    /// files that still declared its old API.
+    /// </summary>
+    public sealed class RenameReport
+    {
+        /// <summary>Identifies the rename in <see cref="GenerationRequest.applyRenames"/>; empty when none was found.</summary>
+        public string key = string.Empty;
+
+        /// <summary>Class names: HealthComponent → HpComponent.</summary>
+        public string oldName = string.Empty;
+        public string newName = string.Empty;
+
+        /// <summary>"pending" (nothing written), "applied", "ignored", or "unused" (nothing used the old API).</summary>
+        public string state = string.Empty;
+
+        /// <summary>Usages of the old generated API: to update, or updated.</summary>
+        public int usages;
+
+        /// <summary>Files holding them, project-relative.</summary>
+        public List<string> files = new List<string>();
+
+        /// <summary>"AddHealth -> AddHp", the most used first.</summary>
+        public List<string> identifiers = new List<string>();
+
+        public List<string> warnings = new List<string>();
     }
 }

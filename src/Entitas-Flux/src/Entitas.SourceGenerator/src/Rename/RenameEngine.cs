@@ -72,10 +72,11 @@ namespace Entitas.SourceGenerator.Rename
             var newSources = EntitasGenerators.Generate(renamedCompilation);
 
             var warnings = new List<string>();
-            var substitutions = Substitutions(target, oldClassName, newClassName, oldBare, newBare);
+            var oldDeclarations = Declarations(oldSources);
+            var substitutions = Substitutions(target.ToDisplayString(), oldClassName, newClassName, oldBare, newBare);
             var nameMap = BuildNameMap(
-                DeclaredNames(oldSources),
-                DeclaredNames(newSources),
+                oldDeclarations.Names,
+                Declarations(newSources).Names,
                 substitutions,
                 warnings);
 
@@ -83,7 +84,9 @@ namespace Entitas.SourceGenerator.Rename
             // in the generated diff — it is always part of the rename.
             nameMap[oldClassName] = newClassName;
 
-            var files = CollectEdits(compilation, target, oldSources, nameMap, substitutions, options, warnings);
+            var files = CollectEdits(
+                compilation, target, oldClassName, oldSources, nameMap, substitutions, options, warnings,
+                rewriteGeneratedFiles: true);
 
             var declarationFiles = target.DeclaringSyntaxReferences
                 .Select(r => r.SyntaxTree.FilePath)
@@ -102,9 +105,84 @@ namespace Entitas.SourceGenerator.Rename
                 Files = files,
                 Warnings = warnings,
                 DeclaringAssemblyName = compilation.AssemblyName ?? string.Empty,
-                GeneratedTypeNames = DeclaredTypeNames(oldSources)
+                GeneratedTypeNames = oldDeclarations.TypeNames
             };
         }
+
+        /// <summary>
+        /// Plans the half of a rename an IDE leaves undone in file mode
+        /// (<c>Output = GenerationOutput.Files</c>). Shift+F6 on the component class renamed
+        /// it and every reference to the type — the ones inside the generated files included —
+        /// but not the members the generator derives from its name: the generated files on
+        /// disk still declare <c>AddHealth</c>, <c>hasHealth</c>, <c>GameMatcher.Health</c>, …
+        /// and the rest of the code still uses them.
+        ///
+        /// <paramref name="component"/> already carries its new name. The identifier map is the
+        /// same diff <see cref="CreatePlan"/> builds, from <paramref name="oldSources"/> (what
+        /// the generator produces while the class is called <paramref name="oldClassName"/>)
+        /// and <paramref name="newSources"/> (what it produces now). Usages resolve against the generated files on disk, which still
+        /// declare the old names. Those files are not part of the plan: regenerating replaces
+        /// them anyway.
+        ///
+        /// Returns null when the generated files no longer declare any of the old names — the
+        /// derived API was already renamed (by [RenameTo], entitas-rename or the Rename
+        /// Component window) and only regeneration is left to do.
+        /// </summary>
+        public static RenamePlan? CreatePlanForRenamedComponent(
+            Compilation compilation,
+            INamedTypeSymbol component,
+            string oldClassName,
+            IReadOnlyList<GeneratedSource> oldSources,
+            IReadOnlyList<GeneratedSource> newSources,
+            RenameOptions? options = null)
+        {
+            options ??= new RenameOptions();
+
+            var newClassName = component.Name;
+            var oldBare = oldClassName.RemoveComponentSuffix();
+            var newBare = newClassName.RemoveComponentSuffix();
+            if (oldBare.Length == 0 || newBare.Length == 0 || oldBare == newBare)
+                throw new RenameException($"'{oldClassName}' and '{newClassName}' do not name two different components.");
+
+            var newFullName = component.ToDisplayString();
+            if (!newFullName.EndsWith(newClassName, StringComparison.Ordinal))
+                throw new RenameException($"cannot work out the old full name of {newFullName}.");
+            var oldFullName = newFullName.Substring(0, newFullName.Length - newClassName.Length) + oldClassName;
+
+            var warnings = new List<string>();
+            var oldDeclarations = Declarations(oldSources);
+            var substitutions = Substitutions(oldFullName, oldClassName, newClassName, oldBare, newBare);
+            var nameMap = BuildNameMap(
+                oldDeclarations.Names,
+                Declarations(newSources).Names,
+                substitutions,
+                warnings);
+
+            var generatedTrees = GeneratedFiles.FindGeneratedTrees(compilation);
+            if (!generatedTrees.Any(tree => DeclaresAny(tree, nameMap)))
+                return null;
+
+            var files = CollectEdits(
+                compilation, component, oldClassName, oldSources, nameMap, substitutions, options, warnings,
+                rewriteGeneratedFiles: false);
+
+            return new RenamePlan
+            {
+                OldFullTypeName = oldFullName,
+                OldClassName = oldClassName,
+                NewClassName = newClassName,
+                ContextNames = ContextNamesOf(compilation, component),
+                NameMap = nameMap,
+                Files = files,
+                Warnings = warnings,
+                DeclaringAssemblyName = compilation.AssemblyName ?? string.Empty,
+                GeneratedTypeNames = oldDeclarations.TypeNames
+            };
+        }
+
+        static bool DeclaresAny(SyntaxTree tree, IReadOnlyDictionary<string, string> names) =>
+            tree.GetRoot().DescendantNodes(node => node is not BlockSyntax && node is not ArrowExpressionClauseSyntax)
+                .Any(node => DeclaredIdentifier(node) is { } identifier && names.ContainsKey(identifier.ValueText));
 
         /// <summary>Applies a planned edit set to a file's text.</summary>
         public static string Apply(string originalText, FileEdits file)
@@ -278,13 +356,13 @@ namespace Entitas.SourceGenerator.Rename
         /// the class name itself, each in both casings.
         /// </summary>
         static (string From, string To)[] Substitutions(
-            INamedTypeSymbol target,
+            string oldFullName,
             string oldClassName,
             string newClassName,
             string oldBare,
             string newBare)
         {
-            var oldFlat = target.ToDisplayString().ToComponentName(false);
+            var oldFlat = oldFullName.ToComponentName(false);
             var newFlat = oldFlat.Length > oldBare.Length
                 ? oldFlat.Substring(0, oldFlat.Length - oldBare.Length) + newBare
                 : newBare;
@@ -359,10 +437,14 @@ namespace Entitas.SourceGenerator.Rename
             return map;
         }
 
-        /// <summary>Type names the generator declares — the anchor for recognising this API elsewhere.</summary>
-        static HashSet<string> DeclaredTypeNames(IReadOnlyList<GeneratedSource> sources)
+        /// <summary>
+        /// The names the generated sources declare (members included), and the type names
+        /// among them — the anchor for recognising this API in other assemblies.
+        /// </summary>
+        static (HashSet<string> Names, HashSet<string> TypeNames) Declarations(IReadOnlyList<GeneratedSource> sources)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
+            var typeNames = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var source in sources)
             {
@@ -373,33 +455,11 @@ namespace Entitas.SourceGenerator.Rename
                     {
                         case BaseTypeDeclarationSyntax type:
                             names.Add(type.Identifier.ValueText);
+                            typeNames.Add(type.Identifier.ValueText);
                             break;
                         case DelegateDeclarationSyntax @delegate:
                             names.Add(@delegate.Identifier.ValueText);
-                            break;
-                    }
-                }
-            }
-
-            return names;
-        }
-
-        static HashSet<string> DeclaredNames(IReadOnlyList<GeneratedSource> sources)
-        {
-            var names = new HashSet<string>(StringComparer.Ordinal);
-
-            foreach (var source in sources)
-            {
-                var root = CSharpSyntaxTree.ParseText(source.Content).GetRoot();
-                foreach (var node in root.DescendantNodes())
-                {
-                    switch (node)
-                    {
-                        case BaseTypeDeclarationSyntax type:
-                            names.Add(type.Identifier.ValueText);
-                            break;
-                        case DelegateDeclarationSyntax @delegate:
-                            names.Add(@delegate.Identifier.ValueText);
+                            typeNames.Add(@delegate.Identifier.ValueText);
                             break;
                         case MethodDeclarationSyntax method:
                             names.Add(method.Identifier.ValueText);
@@ -421,19 +481,25 @@ namespace Entitas.SourceGenerator.Rename
                 }
             }
 
-            return names;
+            return (names, typeNames);
         }
 
         // -- usage rewriting --------------------------------------------------
 
+        /// <param name="oldClassName">The class name the derived names come from — the
+        /// target's own name, unless an IDE already renamed it.</param>
+        /// <param name="rewriteGeneratedFiles">File mode: also rename the declarations in the
+        /// generated files on disk (false when regeneration is about to replace them).</param>
         static IReadOnlyList<FileEdits> CollectEdits(
             Compilation compilation,
             INamedTypeSymbol target,
+            string oldClassName,
             IReadOnlyList<GeneratedSource> generatedSources,
             IReadOnlyDictionary<string, string> nameMap,
             (string From, string To)[] substitutions,
             RenameOptions options,
-            List<string> warnings)
+            List<string> warnings,
+            bool rewriteGeneratedFiles)
         {
             // In file mode the generated code is already in the compilation, as real files:
             // resolve against those (adding a second copy would make every generated
@@ -458,7 +524,7 @@ namespace Entitas.SourceGenerator.Rename
             // itself, e.g. `Health` / `health`); these are only rewritten when the
             // semantic model confirms where they come from.
             var ambiguous = new HashSet<string>(
-                substitutions.Where(s => s.From != target.Name).Select(s => s.From),
+                substitutions.Where(s => s.From != oldClassName).Select(s => s.From),
                 StringComparer.Ordinal);
 
             // Symbols resolved through `semanticCompilation` are different instances
@@ -470,6 +536,14 @@ namespace Entitas.SourceGenerator.Rename
 
             foreach (var tree in compilation.SyntaxTrees)
             {
+                // A generated file on disk also DECLARES the derived members (AddHealth,
+                // hasHealth, GameMatcher.Health, …). Every name in the map is, by
+                // construction, one the generator stops declaring for this component, so in
+                // our own files each such declaration is renamed along with its usages.
+                var isGeneratedFile = onDisk.Count > 0 && generatedPaths.Contains(tree.FilePath);
+                if (isGeneratedFile && !rewriteGeneratedFiles)
+                    continue;
+
                 var text = tree.GetText().ToString();
                 if (!nameMap.Keys.Any(name => text.IndexOf(name, StringComparison.Ordinal) >= 0))
                     continue;
@@ -477,12 +551,6 @@ namespace Entitas.SourceGenerator.Rename
                 var model = semanticCompilation.GetSemanticModel(tree);
                 var root = tree.GetRoot();
                 var edits = new List<TextEdit>();
-
-                // A generated file on disk also DECLARES the derived members (AddHealth,
-                // hasHealth, GameMatcher.Health, …). Every name in the map is, by
-                // construction, one the generator stops declaring for this component, so in
-                // our own files each such declaration is renamed along with its usages.
-                var isGeneratedFile = onDisk.Count > 0 && generatedPaths.Contains(tree.FilePath);
 
                 foreach (var node in root.DescendantNodes())
                 {
@@ -499,15 +567,18 @@ namespace Entitas.SourceGenerator.Rename
                             TryRewriteUsage(name, model, targetDisplay, generatedPaths, nameMap, ambiguous, tree, edits, warnings);
                             break;
 
-                        // The component's own declaration (and its constructors).
-                        case BaseTypeDeclarationSyntax type when type.Identifier.ValueText == target.Name:
+                        // The component's own declaration (and its constructors) — unless an
+                        // IDE renamed it already, and the map has no entry for it.
+                        case BaseTypeDeclarationSyntax type when type.Identifier.ValueText == target.Name &&
+                                                                 nameMap.TryGetValue(target.Name, out var renamedType):
                             if (model.GetDeclaredSymbol(type)?.ToDisplayString() == targetDisplay)
-                                edits.Add(Edit(tree, type.Identifier, nameMap[target.Name]));
+                                edits.Add(Edit(tree, type.Identifier, renamedType));
                             break;
 
                         case ConstructorDeclarationSyntax constructor
-                            when constructor.Identifier.ValueText == target.Name:
-                            edits.Add(Edit(tree, constructor.Identifier, nameMap[target.Name]));
+                            when constructor.Identifier.ValueText == target.Name &&
+                                 nameMap.TryGetValue(target.Name, out var renamedConstructor):
+                            edits.Add(Edit(tree, constructor.Identifier, renamedConstructor));
                             break;
 
                         // A user method implementing a generated interface member — the

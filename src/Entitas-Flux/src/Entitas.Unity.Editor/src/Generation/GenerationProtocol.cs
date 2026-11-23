@@ -14,6 +14,13 @@ namespace Entitas.Unity.Editor.Generation
     {
         public string projectRoot = string.Empty;
         public bool check;
+
+        /// <summary>Renames (<see cref="RenameReport.key"/>) the user chose to update the usages of.</summary>
+        public List<string> applyRenames = new List<string>();
+
+        /// <summary>Renames the user chose to regenerate without updating.</summary>
+        public List<string> ignoreRenames = new List<string>();
+
         public List<RequestedAssembly> assemblies = new List<RequestedAssembly>();
     }
 
@@ -48,6 +55,24 @@ namespace Entitas.Unity.Editor.Generation
         public List<string> warnings = new List<string>();
         public List<string> componentFiles = new List<string>();
         public string stale = string.Empty;
+        public RenameReport rename = new RenameReport();
+    }
+
+    /// <summary>A component renamed in the IDE whose old generated API code still used; key is empty when none.</summary>
+    [Serializable]
+    sealed class RenameReport
+    {
+        public string key = string.Empty;
+        public string oldName = string.Empty;
+        public string newName = string.Empty;
+
+        /// <summary>"pending" (nothing was written), "applied", "ignored" or "unused".</summary>
+        public string state = string.Empty;
+
+        public int usages;
+        public List<string> files = new List<string>();
+        public List<string> identifiers = new List<string>();
+        public List<string> warnings = new List<string>();
     }
 
     /// <summary>What the last run learned, kept in Library/ so automatic runs know when to fire.</summary>

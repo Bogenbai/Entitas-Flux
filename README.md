@@ -137,7 +137,7 @@ One component name fans out into `entity.isCanAttack`, `GameMatcher.CanAttack`, 
 [RenameTo("AbleToAttack")]
 [Game] public class CanAttack : IComponent { }
 ```
-`Alt+Enter` on the attribute → *"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"*, or *Tools → Entitas → Rename Component…* in Unity. See [Renaming a component](#renaming-a-component).
+`Alt+Enter` on the attribute → *"Rename component 'CanAttack' to 'AbleToAttack' and update all usages"*, or *Tools → Entitas → Rename Component…* in Unity. With [generated files](#generated-code-as-files--output--generationoutputfiles), Shift+F6 on the class works too: regeneration recognises the rename and offers to update the usages. See [Renaming a component](#renaming-a-component).
 
 ### Defines
 `ENTITAS_DISABLE_REACTIVITY` - partially disables Entitas' default reactivity. Gives small performance boost.
@@ -278,6 +278,8 @@ dotnet Assets/Entitas/Entitas/Tools~/entitas-gen.dll --check                    
 | `-r`, `--root <dir>` | Unity project root (default: current directory). |
 | `-p`, `--project <csproj>` | Generate for this project only. Default: every project that declares a context. |
 | `--check` | Write nothing; exit 1 when a generated file is missing, outdated or no longer generated. |
+| `--apply-renames` | A component was [renamed in the IDE](#shiftf6-then-regenerate--file-mode-only) and code still uses its old generated API: update those usages, then regenerate. Without it (or the next option) such a rename is printed, nothing is written, and the exit code is 1. |
+| `--ignore-renames` | Regenerate anyway, leaving those usages to break. |
 | `-v`, `--verbose` | List every file written or deleted, and where the time went. |
 
 Any .NET 6 or newer runs it. Inside Unity, batchmode works too:
@@ -314,7 +316,7 @@ EntitasDebugHooks.OnReplace = (entity, index, value) =>
 - A `null` handler costs a single null-check. **Turn `DebugHooks` off for release builds.**
 
 ## Renaming a component
-One component name fans out into a lot of generated API: `GameMatcher.CanAttack`, `entity.isCanAttack`, `AddCanAttack`, `ReplaceCanAttack`, `SafeRemoveCanAttack`, `CanAttackChanged`, `IAnyCanAttackListener` and the views implementing its `OnAnyCanAttack`… An IDE rename of the class (Shift+F6, F2) changes the class and leaves all of those behind — in either output mode, since the generated names come from the component's name. So rename the **component**, with one of the three fronts below. They share one engine, so they agree on the result:
+One component name fans out into a lot of generated API: `GameMatcher.CanAttack`, `entity.isCanAttack`, `AddCanAttack`, `ReplaceCanAttack`, `SafeRemoveCanAttack`, `CanAttackChanged`, `IAnyCanAttackListener` and the views implementing its `OnAnyCanAttack`… An IDE rename of the class (Shift+F6, F2) changes the class and leaves all of those behind, since the generated names come from the component's name. So rename the **component**, with one of the fronts below — or, with `Output = GenerationOutput.Files`, rename the class in the IDE and let [regeneration finish the job](#shiftf6-then-regenerate--file-mode-only). They share one engine, so they agree on the result:
 
 ```cs
 // before                                    // after
@@ -358,6 +360,17 @@ With a manual install the tool is at `Assets/Entitas/Entitas/Tools~/entitas-rena
 | `-p`, `--project <csproj>` | Use this csproj instead of searching for one. |
 | `-s`, `--include-strings` | Also rewrite occurrences in string literals and comments. |
 | `-k`, `--keep-file-name` | Don't rename the component's `.cs` file. |
+
+### Shift+F6, then regenerate — file mode only
+With `Output = GenerationOutput.Files`, a plain IDE rename of the component class is enough. The IDE renames the class and every reference to the type — the ones inside the generated files included — but those files still declare the old API (`isCanAttack`, `GameMatcher.CanAttack`, `IAnyCanAttackListener`, …), and your code still uses it. Regeneration notices before it deletes them: a generated file about to go that already references the renamed class gives the rename away. The guess is then checked by generating as if the class still had its old name, which has to reproduce the generated files on disk exactly. Then it asks:
+
+- **In Unity** — automatic generation, or *Tools → Entitas → Generate* — a dialog: *"Component 'CanAttack' looks renamed to 'AbleToAttack' — update usages of isCanAttack, CanAttack, …?"*
+  - **Update usages** rewrites them, in every assembly that references this one, and regenerates — all before Unity compiles anything.
+  - **Regenerate only** regenerates without; those usages stop compiling.
+  - **Not now** leaves everything as it is, and that assembly's generation waits for an answer: automatic generation logs a warning instead of asking again this session, *Tools → Entitas → Generate* asks again.
+- **From a terminal**, `entitas-gen` prints the rename and every usage, writes nothing and exits 1. Re-run it with `--apply-renames` to update the usages and regenerate, or `--ignore-renames` to regenerate without.
+
+Nothing is rewritten silently, nor when the guess is ambiguous: two components renamed before one regeneration, or a rename together with a component added or deleted. Generation then goes ahead as it always did and says so in a warning, and the old names are left to you — rename one component at a time (automatic generation does, one save at a time). A component deleted and another written from scratch is not a rename. A rename nothing uses is just regenerated, without a question. The component's own file is the IDE's business (Rider offers to rename it along with the class).
 
 ### Worth knowing
 - **The attribute is inert.** Generation ignores it, so the project keeps compiling between marking a component and applying the rename. Mark five components today, rename them tomorrow.
