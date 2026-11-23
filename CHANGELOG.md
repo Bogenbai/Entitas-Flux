@@ -11,6 +11,42 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-23
+
+### Fixed
+- **The Claude Code hook stopped commands that only named `graph.json`.** It matched the
+  call's text, so a `git commit -m` whose message mentioned `entitas-graph-out/` and
+  `graph.json` was blocked, and so was a PR body, a note written through a heredoc, a Bash
+  call whose description named the file, or a Grep for the folder's name across the project.
+  The wrapper still settles every call that never mentions `entitas-graph-out` in plain sh,
+  without starting dotnet; the rest now go to the tool (about 100 ms), which reads a Bash
+  command word by word. A quoted sentence or a heredoc body is text unless an interpreter
+  (python, jq, node…) runs it, commands that never print a file (`ls`, `du`, `wc`, `git`,
+  `open`…) pass — `open graph.html` is what the file is for — and `grep`/`rg` given the
+  folder still reads it. Run `./entitas-graph install` once after updating: the old wrapper
+  keeps deciding in sh until then, and `build` says so.
+- **The editor's images shipped in neither the archive nor the package.** The hierarchy
+  icons and the header of the Entitas preferences are found by asset label; a project that
+  came from the original Entitas still had its own copies, a new one had none. Both now carry
+  them — the archive with the original `.meta` files, so an existing copy is replaced by the
+  same asset, the package with guids of its own.
+
+### Changed
+- **A manual install needs no hand-labelling.** The archive's analyzers come with their
+  `.meta`: the `RoslynAnalyzer` label and no platform. Without it Unity imported the source
+  generator as an ordinary plugin and nothing was generated — a fresh project failed on
+  `[Game]` — unless both DLLs were labelled by hand, as the installation guide asked. The
+  other DLLs still come without one: Unity's defaults are right for them, and an existing
+  install keeps its own guids, through which prefabs reference `EntityLink`.
+- **`Sherlog.dll` moved to `Assets/Entitas/Sherlog/` in the archive**, where the original
+  Entitas distribution keeps it, so copying the archive over such an install replaces it
+  instead of adding an identical second copy in `DesperateDevs/` (which Unity tolerates;
+  delete it if an earlier archive left it there). The package keeps it where it was.
+- Verified in Unity 6000.3.6f1 on three new projects: a manual install, the archive copied
+  over an install that came from the original Entitas, and the UPM package — its first run
+  in a real project. Each compiles, generates, loads the editor assemblies and finds the
+  images; the 0.6.0 archive installed by hand does not compile.
+
 ## [0.6.0] - 2026-11-23
 
 ### Added
@@ -549,7 +585,8 @@ First release of the fork.
 - **Safe component removal** — `SafeRemoveX()` instead of guarding every `RemoveX()`.
 - **Searchable component dropdown** in the Unity inspector.
 
-[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Bogenbai/Entitas-Flux/compare/v0.4.0...v0.4.1
