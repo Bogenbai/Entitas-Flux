@@ -239,8 +239,11 @@
     .brand .product, .brand .sep { display: none; }
     .search { min-width: 0; }
   }
+  /* Stacked, the graph gets a slice of the height: the legend strip goes (Filters is the
+     legend too) and the panel takes less, or the ring is drawn too small for its labels. */
   @media (max-width: 900px) {
-    main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 45%; }
+    main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 40%; }
+    .legend-line { display: none; }
     .inspector { border-left: 0; border-top: 1px solid var(--border); }
     .stats { display: none; }
   }
@@ -460,8 +463,48 @@
     // Now, on the settled positions — and again once drawn, when every label's size is known.
     // Not only after drawing: a background tab draws nothing, and the view stayed where the
     // first, pre-layout frame had put it (a node at the bottom of the ring cut at the edge).
-    if (pendingFrame) { const id = pendingFrame; pendingFrame = null; frame(id); network.once('afterDrawing', () => frame(id)); network.redraw(); }
+    if (pendingFrame) {
+      const id = pendingFrame; pendingFrame = null;
+      if (scope !== 'all') flatten();
+      frame(id); network.once('afterDrawing', () => frame(id)); network.redraw();
+    }
   });
+
+  // What the nodes take with their labels, and the part of the stage free for them.
+  function extent(ids) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    ids.forEach(n => {
+      const b = network.getBoundingBox(n);
+      if (!b) return;
+      x0 = Math.min(x0, b.left); x1 = Math.max(x1, b.right); y0 = Math.min(y0, b.top); y1 = Math.max(y1, b.bottom);
+    });
+    return isFinite(x0) ? { x0, y0, x1, y1, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) } : null;
+  }
+  function room() {
+    // The toolbar above and the legend below wrap onto more lines in a narrow window: leave
+    // the room they really take, or the legend sits on the nodes at the bottom of the ring.
+    const stage = $('network'), side = 28;
+    const top = $('stage').querySelector('.float.top-left').offsetHeight + 24;
+    const bottom = Math.max($('legend').offsetHeight, $('status').offsetHeight + 5) + 24;
+    return { top, bottom, width: Math.max(1, stage.clientWidth - 2 * side), height: Math.max(1, stage.clientHeight - top - bottom) };
+  }
+
+  // A settled ring is round, and in a short, wide stage — a narrow window stacks the panel
+  // under the graph — it was shrunk to fit the height until vis-network stopped drawing the
+  // labels (under 5 px). Flatten it to the stage's shape instead, by moving the nodes only:
+  // the labels keep their size, and the sides of the ring, where labels sit one above the
+  // other, are flattened least. Never below 55%, or the top and bottom rows would touch.
+  function flatten() {
+    const ids = nodes.getIds();
+    const box = ids.length > 2 && extent(ids);
+    if (!box) return;
+    const free = room();
+    if (free.height / box.h >= 1) return;  // it fits at full size: frame() goes no closer than 1 anyway
+    const f = Math.max(0.55, (free.height / box.h) / (free.width / box.w));
+    if (f > 0.95) return;
+    const pos = network.getPositions(ids), cy = (box.y0 + box.y1) / 2;
+    ids.forEach(id => network.moveNode(id, pos[id].x, cy + (pos[id].y - cy) * f));
+  }
 
   // With a scope of one or two steps the view holds the node and its neighbours, labels
   // included, in the part of the stage the toolbar above and the legend below leave free;
@@ -473,22 +516,12 @@
     if (scope === 'all') { network.focus(id, { scale: 1.1, animation: { duration: 400 } }); return; }
     const ids = nodes.getIds();
     if (!ids.length) return;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    ids.forEach(n => {
-      const b = network.getBoundingBox(n);
-      if (!b) return;
-      x0 = Math.min(x0, b.left); x1 = Math.max(x1, b.right); y0 = Math.min(y0, b.top); y1 = Math.max(y1, b.bottom);
-    });
-    if (!isFinite(x0)) { network.fit(); return; }
-    // The toolbar above and the legend below wrap onto more lines in a narrow window: leave
-    // the room they really take, or the legend sits on the nodes at the bottom of the ring.
-    const stage = $('network'), side = 28;
-    const top = $('stage').querySelector('.float.top-left').offsetHeight + 24;
-    const bottom = $('legend').offsetHeight + 24;
-    const width = Math.max(1, stage.clientWidth - 2 * side), height = Math.max(1, stage.clientHeight - top - bottom);
+    const box = extent(ids);
+    if (!box) { network.fit(); return; }
+    const { top, bottom, width, height } = room();
     // No closer than 1: around a node with two neighbours, labels would grow past readable.
-    const scale = Math.min(width / Math.max(1, x1 - x0), height / Math.max(1, y1 - y0), 1);
-    network.moveTo({ position: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 - (top - bottom) / 2 / scale }, scale });
+    const scale = Math.min(width / box.w, height / box.h, 1);
+    network.moveTo({ position: { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 - (top - bottom) / 2 / scale }, scale });
   }
 
   function visibleIds() {

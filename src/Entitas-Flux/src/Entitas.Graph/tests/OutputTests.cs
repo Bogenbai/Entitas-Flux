@@ -278,6 +278,12 @@ namespace Entitas.Graph.Tests
             html.Should().Contain("network.once('afterDrawing', () => frame(id))", "a label's size is known only once it has been drawn");
             html.Should().Contain("$('legend').offsetHeight", "in a narrow window the legend is a box over the canvas, so the frame leaves room for it");
             html.Should().Contain("document.addEventListener('visibilitychange'", "a page opened in a hidden tab draws nothing until it is shown");
+
+            // A narrow window stacks the panel under the graph: a round ring shrunk to that short
+            // stage fell under vis-network's 5 px label threshold, so it is flattened to fit instead.
+            html.IndexOf("if (scope !== 'all') flatten();", settled, StringComparison.Ordinal).Should().BeGreaterThan(settled);
+            html.Should().Contain("ids.forEach(id => network.moveNode(id, pos[id].x, cy + (pos[id].y - cy) * f));", "only the nodes move, so the labels keep their size");
+            html.Should().Contain(".legend-line { display: none; }", "stacked, the legend strip gives its room to the graph; Filters is the legend too");
         }
 
         [Fact]
