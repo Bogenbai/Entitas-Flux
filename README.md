@@ -431,6 +431,24 @@ RequestPlacementSystem → UnlockAchievementSystem: 4 hops
   FurniturePlacedEvent --read by--> UnlockAchievementSystem  [EXTRACTED] via AllOf  Assets/Systems/EventSystems.cs:15
 ```
 
+`flow` answers "what happens after X" in one call. From a component it starts at the systems taking it, from a system at what that system writes. It follows hand-offs: a request or an event to the systems reading it, the change of a [`[Watched]`](#watched-attribute) component to the systems reacting to its `XChanged` marker, and a component no entity keeps (`[Cleanup]`, or taken off every entity) to its readers. A reacting system whose group leaves the component out (`NoneOf`) takes its removal only, so an add does not reach it, and the answer counts it instead. State a system writes, and hubs like `Id` or `Event`, are listed on an `also, not followed` line. Each system and component is expanded once and referred to after that. `--depth` counts system hops (default 4, at most 8).
+
+Every step says when its system sees the data, counted from the system above it under one root feature: `same frame` when it runs after that system, `next frame` when it runs before it. A cleanup system runs after every execute system of its root, whatever its number. A reader whose group also requires `Ready`, which `MarkEventsReadySystem` adds to every event at the start of the next frame, waits for it; the tool takes that from the event's inferred destroy (`created with Event + X; Ready by MarkEventsReadySystem`). A step is `frame unknown` when its system runs under another root, when the start is created outside the systems (by a window, say), or when a system in between may remove the data first. It is `never sees it` when the generated cleanup clears a `[Watched]` marker before the reacting system runs. `[+N]` adds the frames up from the step marked `[+0]`. Each hand-off also says where it ends: who destroys or removes it, which cleanup clears the marker, or that nothing does. Under a system, writes in its own code come before those through a factory (`*`), and hand-offs that lead further come before those that end with their takers. Takers that hand nothing on (a sound, a statistic) come last; over the budget, those share one line per hand-off. A system that runs under several roots is followed under the first, and the others are noted only where a frame differs.
+```text
+$ entitas-graph flow CommitCartSystem
+flow CommitCartSystem  [system; ShopFeature #4, GameplayFeature order 15] — 3 systems, 2 hops; frames under GameplayFeature
+  each frame is counted from the system above; [+N]: frames after the step marked [+0]
+CommitCartSystem  #15 (ShopFeature) [+0]  Assets/Systems/ShopSystems.cs:55
+  removes Unpaid  [Watched → UnpaidChanged]  ShopSystems.cs:64
+    reacted to by SendPurchaseEventOnPaidSystem  #16 (ShopFeature)  same frame [+0]  ShopSystems.cs:75
+      creates ItemPurchasedEvent  [event]  ShopSystems.cs:83
+        read by CountPurchasesSystem  #17 (ShopFeature)  next frame (waits for Ready from MarkEventsReadySystem #1) [+1]  ShopSystems.cs:94
+        ends: destroyed by DestroyEventsSystem*  LateFeature #1  (created with Event + ItemPurchasedEvent; Ready by MarkEventsReadySystem)  EventSystems.cs:54
+      also, not followed: creates Receipted, Event*
+    ends: UnpaidChanged cleared by RemoveUnpaidChangedGameSystem  not in any feature, generated
+```
+On a 2000-file project, `flow CommitCartRequest` takes ~1 900 tokens. It shows the payment reaching the wallet the next frame, because `ChangeCurrencyByRequestSystem` runs at #187 and the cart is committed at #200. The purchase events follow in the same frame, through the systems reacting to `Unpaid`. The coins-spent statistic is updated two frames after the commit.
+
 `systems-of` lists what a feature runs, in order, with nested features expanded:
 ```text
 $ entitas-graph systems-of GameplayFeature
@@ -480,6 +498,7 @@ When the whole subgraph does not fit the budget, the walk follows only each node
 | `systems-of <Feature>` | The systems a feature runs, in order. |
 | `explain <Name>` | One node and every connection it has. |
 | `path <A> <B>` | The shortest data-flow chain from A to B. |
+| `flow <Component\|System>` | What happens after it: the systems its requests, events and `[Watched]` changes reach, as a tree, each step labelled same frame, next frame or frame unknown. |
 | `query <words…>` | The connected subgraph around the nodes the words match best: seeds first, then what is one and two data-flow steps away. |
 | `report` | Prints `GRAPH_REPORT.md`. |
 | `diff <old.json> [<new.json>]`, `diff --ref <git-ref>` | What changed in the data flow between two versions: the edges each component gained and lost, systems added, removed and moved, findings. See [below](#comparing-two-versions--diff). |
@@ -508,7 +527,7 @@ Selected — read by 4 (4 direct, 0 inferred)
 | `--request-suffix <s>`, `--event-suffix <s>` | How requests and events are recognised (default: `Request`, `Event`). |
 | `--budget <tokens>` | Cap each answer at about this many tokens (default: 2000; `0` = no cap). |
 | `--limit <n>` | Seed nodes for `query` (default: 5). |
-| `--depth <n>` | Steps `query` walks from the seeds (1 to 4, default: 2). |
+| `--depth <n>` | Steps `query` walks from the seeds (1 to 4, default: 2); system hops `flow` follows (1 to 8, default: 4). |
 | `--no-html` | Skip `graph.html`. |
 | `--ref <git-ref>` | For `diff`: build a side from this branch or commit (through `git archive`; the checkout is not touched). Once: the old side, against the working tree. Twice: old, then new. |
 | `--commit <commit>` | For `diff`: the commit's first parent against the commit. |
@@ -580,6 +599,7 @@ An assistant answering "who uses this component?" with grep reads every file tha
 | `who-reads` or `lifecycle` of an event | ~350–400 |
 | `path` between two systems | ~110 |
 | `query` about a topic (`cart commit`): the connected piece of the graph | ~1 950 |
+| `flow` of a request (`CommitCartRequest`): every system after it, with its frame | ~1 900 |
 | `diff --ref` across one commit | ~250 |
 | The same question by grep, then reading the 8 files that mention the event | ~5 900 |
 | `GRAPH_REPORT.md`, once, for an overview | ~3 900 |
@@ -606,6 +626,7 @@ another, run entitas-graph from this file's folder instead of searching the code
 
 Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;
 explain <Name>; query "<words>" (the connected subgraph around the matching nodes);
+flow <Request|System> (what happens after it: the systems it reaches, each in which frame);
 diff --commit <sha> (what one commit changed); diff --ref <branch> (changes since a branch, for reviewing it);
 report (= `src/cat-caffeine/entitas-graph-out/GRAPH_REPORT.md`, an overview worth reading once).
 Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.

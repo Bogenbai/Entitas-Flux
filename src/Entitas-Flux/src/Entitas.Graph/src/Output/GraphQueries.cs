@@ -31,7 +31,7 @@ namespace Entitas.Graph.Output
     /// root — so the shape of a hub survives the cut — lists what fits, and says how much is
     /// left out. A budget of 0 prints everything.
     /// </summary>
-    public sealed class GraphQueries
+    public sealed partial class GraphQueries
     {
         public const int DefaultBudget = 2000;
 

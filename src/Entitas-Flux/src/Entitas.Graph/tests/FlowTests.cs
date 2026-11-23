@@ -1,0 +1,257 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Entitas.Graph.Output;
+using FluentAssertions;
+using Xunit;
+
+namespace Entitas.Graph.Tests
+{
+    /// <summary>`flow`: the chain after a component or system, frames, hubs, references, the budget — on the Fixture/ project.</summary>
+    public class FlowTests
+    {
+        static readonly GraphQueries Queries = new GraphQueries(FixtureProject.Graph);
+
+        [Fact]
+        public void A_request_leads_to_its_handler_the_event_it_raises_and_that_event_s_reader()
+        {
+            var output = Queries.Flow("PlaceFurnitureRequest");
+
+            output.Should().StartWith("flow PlaceFurnitureRequest  [Game, data, request] — 2 systems, 2 hops; frames under GameplayFeature\n");
+            Lines(output).Should().ContainInOrder(
+                "created by RequestPlacementSystem #2 (FurnitureFeature) [+0]  FurnitureSystems.cs:17",
+                "read by PlaceFurnitureByRequestSystem  #3 (FurnitureFeature)  same frame [+0]  FurnitureSystems.cs:31",
+                "creates FurniturePlacedEvent  [event]  FurnitureSystems.cs:39",
+                "read by UnlockAchievementSystem  #10  next frame (waits for Ready from MarkEventsReadySystem #1) [+1]  EventSystems.cs:15",
+                "ends: destroyed by DestroyEventsSystem*  LateFeature #1  (created with Event + FurniturePlacedEvent; Ready by MarkEventsReadySystem)  EventSystems.cs:54",
+                "ends: destroyed by DestroyDestructedSystem*  LateFeature #2  (created with PlaceFurnitureRequest; Destructed by PlaceFurnitureByRequestSystem)  EventSystems.cs:68");
+
+            // Indented as a tree: the event under its producer, its reader under the event.
+            Indent(output, "read by PlaceFurnitureByRequestSystem").Should().Be(2);
+            Indent(output, "creates FurniturePlacedEvent").Should().Be(4);
+            Indent(output, "read by UnlockAchievementSystem").Should().Be(6);
+        }
+
+        [Fact]
+        public void A_system_s_flow_starts_at_its_own_writes_and_says_where_a_request_ends()
+        {
+            var output = Queries.Flow("RequestPlacementSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "RequestPlacementSystem  #2 (FurnitureFeature) [+0]  Systems/FurnitureSystems.cs:6",
+                "creates PlaceFurnitureRequest  [request]  FurnitureSystems.cs:17",
+                "read by PlaceFurnitureByRequestSystem  #3 (FurnitureFeature)  same frame [+0]  FurnitureSystems.cs:31",
+                "creates OrphanRequest  [request]  FurnitureSystems.cs:18",
+                "ends: nothing removes or destroys it");
+        }
+
+        [Fact]
+        public void Removing_a_watched_component_hands_off_to_the_systems_reacting_to_its_marker()
+        {
+            var output = Queries.Flow("CommitCartSystem");
+
+            // The hop assistants missed: nothing connects CommitCartSystem to the reaction but the
+            // [Watched] marker, and the event the reaction raises is read the next frame.
+            Lines(output).Should().ContainInOrder(
+                "CommitCartSystem  #15 (ShopFeature) [+0]  Systems/ShopSystems.cs:55",
+                "removes Unpaid  [Watched → UnpaidChanged]  ShopSystems.cs:64",
+                "reacted to by SendPurchaseEventOnPaidSystem  #16 (ShopFeature)  same frame [+0]  ShopSystems.cs:75",
+                "creates ItemPurchasedEvent  [event]  ShopSystems.cs:83",
+                "read by CountPurchasesSystem  #17 (ShopFeature)  next frame (waits for Ready from MarkEventsReadySystem #1) [+1]  ShopSystems.cs:94",
+                "ends: UnpaidChanged cleared by RemoveUnpaidChangedGameSystem  not in any feature, generated");
+        }
+
+        [Fact]
+        public void An_add_does_not_reach_reactors_that_leave_the_component_out()
+        {
+            // SendPurchaseEventOnPaidSystem reacts to UnpaidChanged with NoneOf(Unpaid): the purchase,
+            // not the item going into the cart.
+            var output = Queries.Flow("BuyItemSystem");
+
+            output.Should().NotContain("reacted to by");
+            Lines(output).Should().Contain("also, not followed: creates ShopItem, Unpaid (its 1 reactor takes the other change)");
+
+            // Asked about Unpaid itself, the reaction counts from the system that removes it.
+            Lines(Queries.Flow("Unpaid")).Should().ContainInOrder(
+                "changed by 2 [+0]: BuyItemSystem #12 (ShopFeature), CommitCartSystem #15 (ShopFeature)",
+                "reacted to by SendPurchaseEventOnPaidSystem  #16 (ShopFeature)  same frame [+0]  ShopSystems.cs:75");
+        }
+
+        [Fact]
+        public void A_taker_ordered_before_its_producer_sees_it_the_next_frame()
+        {
+            // DeselectSystem (#7) removes Selected; HighlightOnSelectedSystem (#6) reacts to it, and
+            // in the fixture nothing clears SelectedChanged in between.
+            Lines(Queries.Flow("DeselectSystem")).Should().Contain(
+                "reacted to by HighlightOnSelectedSystem  #6 (FurnitureFeature)  next frame [+1]  FurnitureSystems.cs:84");
+        }
+
+        [Fact]
+        public void Hubs_are_listed_not_walked()
+        {
+            var output = new GraphQueries(FixtureProject.Graph, hubThreshold: 1).Flow("PlaceFurnitureRequest");
+
+            Lines(output).Should().Contain(l => l.StartsWith("also, not followed: creates ", StringComparison.Ordinal) &&
+                                                l.Contains("Event* (hub)") && l.Contains("FurniturePlacedEvent (hub)"));
+            output.Should().NotContain("UnlockAchievementSystem", "FurniturePlacedEvent is a hub at this threshold, so its reader is not reached");
+        }
+
+        [Fact]
+        public void A_node_shown_before_is_referred_to_not_expanded_again()
+        {
+            var output = Queries.Flow("SelectSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "creates Selected  [transient, Watched → SelectedChanged]  FurnitureSystems.cs:71",
+                "read+removed by DeselectSystem  #7 (FurnitureFeature)  same frame [+0]  FurnitureSystems.cs:100",
+                "removes Selected  [Watched → SelectedChanged]  FurnitureSystems.cs:105  (see above)");
+            Lines(output).Count(l => l.Contains(" Selected  [")).Should().Be(2);
+
+            // Reached twice, expanded where it is first reached in the walk, referred to elsewhere.
+            var furniture = Lines(Queries.Flow("Furniture"));
+            furniture.Count(l => l.Contains(" HighlightOnSelectedSystem  ")).Should().Be(2);
+            furniture.Count(l => l.Contains(" HighlightOnSelectedSystem  ") && l.EndsWith("(see below)", StringComparison.Ordinal)).Should().Be(1);
+        }
+
+        [Fact]
+        public void Depth_counts_system_hops()
+        {
+            var output = Queries.Flow("RequestPlacementSystem", depth: 1);
+
+            Lines(output).Should().Contain("… taken by 1 more system, past --depth 1");
+            output.Should().NotContain("UnlockAchievementSystem");
+            output.Should().StartWith("flow RequestPlacementSystem  [system; FurnitureFeature #1, GameplayFeature order 2] — 2 systems, 1 hop;");
+        }
+
+        [Fact]
+        public void An_answer_over_the_budget_names_every_branch_in_its_summary()
+        {
+            var output = new GraphQueries(FixtureProject.Graph, budget: 60).Flow("RequestPlacementSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "flow: 3 systems, 3 hand-offs, 2 hops",
+                "PlaceFurnitureRequest → PlaceFurnitureByRequestSystem, UnlockAchievementSystem; then FurniturePlacedEvent",
+                "OrphanRequest → no system takes it");
+            output.Should().Contain("more lines not shown — the answer is capped at ~60 tokens (--budget 0 prints everything).");
+            Queries.Flow("RequestPlacementSystem").Should().NotContain("not shown", "the default budget fits every fixture flow");
+        }
+
+        [Fact]
+        public void The_marker_s_name_stands_for_the_component_and_a_feature_is_no_start()
+        {
+            Lines(Queries.Flow("SelectedChanged")).Should().Contain(
+                "SelectedChanged is Selected's [Watched] marker: shown are the systems reacting to Selected's changes.");
+            Queries.Flow("GameplayFeature").Should().StartWith("GameplayFeature is a feature: flow follows data from a component or a system");
+        }
+
+        [Fact]
+        public void The_install_block_names_flow_and_stays_short()
+        {
+            var block = Setup.InstructionBlock.Build("/repo", "/repo/game", "/repo/game/Assets/Entitas/Entitas/Tools~/entitas-graph.dll", "/repo");
+
+            block.Should().Contain("flow <Request|System>");
+            block.Split('\n').Length.Should().BeLessOrEqualTo(15);
+        }
+
+        // -- frames the fixture cannot show without moving every order in it -----------------------
+
+        [Fact]
+        public void A_reactor_running_before_the_change_never_sees_it_when_the_cleanup_clears_the_marker_first()
+        {
+            var output = new GraphQueries(Frames(), budget: 0).Flow("ProducerSystem");
+
+            // The generated cleanup is ordered #3 but runs in the Cleanup phase, after every Execute.
+            Lines(output).Should().Contain("reacted to by LateReactorSystem  #20  same frame [+0]  Code.cs:4");
+            Lines(output).Should().Contain(l => l.StartsWith("reacted to by EarlyReactorSystem  #5  never sees it (RemoveWorkChangedSystem #3 clears WorkChanged first)", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void Another_root_or_a_remover_in_between_leaves_the_frame_unknown()
+        {
+            var lines = Lines(new GraphQueries(Frames(), budget: 0).Flow("ProducerSystem"));
+
+            lines.Should().Contain(l => l.StartsWith("read+destroyed by HandlerSystem  #30  same frame [+0]", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by AfterHandlerSystem  #40  frame unknown (HandlerSystem #30 may destroy it first)", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by OtherRootSystem  OtherRoot #1  frame unknown (runs under OtherRoot, not MainRoot)", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void A_cleanup_system_runs_after_every_execute_system_whatever_its_number()
+        {
+            var lines = Lines(new GraphQueries(Frames(), budget: 0).Flow("SweepSystem"));
+
+            lines.Should().Contain(l => l.StartsWith("read by FirstSystem  #1  next frame [+1]", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by LateSweepSystem  #4, Cleanup  same frame [+0]", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// One root, MainRoot, and a second, OtherRoot. ProducerSystem (#10) removes the [Watched]
+        /// Work and creates WorkRequest: a reactor runs before it (#5), one after (#20), and the
+        /// generated cleanup is #3 but a cleanup system; HandlerSystem (#30) destroys the request
+        /// before AfterHandlerSystem (#40) reads it; OtherRootSystem reads it under the other root.
+        /// SweepSystem, a cleanup system at #2, creates SweepRequest, read by an execute system at
+        /// #1 and a cleanup system at #4.
+        /// </summary>
+        static EcsGraph Frames()
+        {
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "MainRoot", Label = "MainRoot", Kind = NodeKind.Feature, Root = true });
+            graph.Nodes.Add(new GraphNode { Id = "OtherRoot", Label = "OtherRoot", Kind = NodeKind.Feature, Root = true });
+            var work = Component(graph, "Work", "Watched");
+            var request = Component(graph, "WorkRequest", role: "request");
+            var sweep = Component(graph, "SweepRequest", role: "request");
+
+            var producer = System(graph, "ProducerSystem", "MainRoot", 10);
+            Edge(graph, producer, Relation.Removes, work);
+            Edge(graph, producer, Relation.Creates, request);
+            Edge(graph, System(graph, "EarlyReactorSystem", "MainRoot", 5), Relation.Reacts, work);
+            Edge(graph, System(graph, "LateReactorSystem", "MainRoot", 20), Relation.Reacts, work);
+            var cleanup = System(graph, "RemoveWorkChangedSystem", "MainRoot", 3, "Cleanup", generated: true);
+            Edge(graph, cleanup, Relation.Reacts, work);
+
+            var handler = System(graph, "HandlerSystem", "MainRoot", 30);
+            Edge(graph, handler, Relation.Reads, request);
+            Edge(graph, handler, Relation.Destroys, request);
+            Edge(graph, System(graph, "AfterHandlerSystem", "MainRoot", 40), Relation.Reads, request);
+            Edge(graph, System(graph, "OtherRootSystem", "OtherRoot", 1), Relation.Reads, request);
+
+            Edge(graph, System(graph, "SweepSystem", "MainRoot", 2, "Cleanup"), Relation.Creates, sweep);
+            Edge(graph, System(graph, "FirstSystem", "MainRoot", 1), Relation.Reads, sweep);
+            Edge(graph, System(graph, "LateSweepSystem", "MainRoot", 4, "Cleanup"), Relation.Reads, sweep);
+            return graph;
+        }
+
+        static string Component(EcsGraph graph, string label, string? attribute = null, string? role = null)
+        {
+            var node = new GraphNode { Id = label, Label = label, Kind = NodeKind.Component, Role = role };
+            node.Contexts.Add("Game");
+            if (attribute != null) node.Attributes.Add(attribute);
+            graph.Nodes.Add(node);
+            return label;
+        }
+
+        static string System(EcsGraph graph, string label, string root, int order, string runs = "Execute", bool generated = false)
+        {
+            var node = new GraphNode { Id = label, Label = label, Kind = NodeKind.System, SourceFile = "Assets/" + label + ".cs", Line = 1, Generated = generated };
+            node.Interfaces.Add(runs);
+            node.Placements.Add(new Placement { Root = root, Order = order, Chain = { root } });
+            node.RegisteredIn.Add(new Registration { Feature = root, Index = order });
+            graph.Nodes.Add(node);
+            return label;
+        }
+
+        static void Edge(EcsGraph graph, string source, string relation, string target) => graph.Edges.Add(new GraphEdge
+        {
+            Source = source, Target = target, Relation = relation,
+            Via = relation switch { Relation.Reads or Relation.Reacts => "AllOf", Relation.Destroys => "Destroy", Relation.Removes => "Flag", _ => "Add" },
+            SourceFile = "Code.cs", Line = graph.Edges.Count + 1
+        });
+
+        // -- reading an answer -----------------------------------------------------------------
+
+        static List<string> Lines(string output) => output.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+
+        static int Indent(string output, string start) =>
+            output.Split('\n').First(l => l.TrimStart().StartsWith(start, StringComparison.Ordinal)) is var line ? line.Length - line.TrimStart().Length : -1;
+    }
+}

@@ -57,7 +57,8 @@ namespace Entitas.Graph
                     "systems-of" => queries.SystemsOf(options.Arg(0)),
                     "explain" => queries.Explain(options.Arg(0)),
                     "path" => queries.Path(options.Arg(0), options.Arg(1)),
-                    "query" => queries.Query(options.Words(), options.Limit, options.Depth),
+                    "query" => queries.Query(options.Words(), options.Limit, options.DepthFor(GraphQueries.DefaultQueryDepth, GraphQueries.MaxQueryDepth)),
+                    "flow" => queries.Flow(options.Arg(0), options.DepthFor(GraphQueries.DefaultFlowDepth, GraphQueries.MaxFlowDepth)),
                     "report" => GraphReport.Build(graph),
                     _ => throw new UsageException($"unknown command '{options.Command}'")
                 };
@@ -108,6 +109,8 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  explain <Name>              A node and all its connections.");
             Console.Error.WriteLine("  path <A> <B>                The shortest data-flow chain from A to B.");
             Console.Error.WriteLine("  query <words…>              The connected subgraph around the nodes the words match best.");
+            Console.Error.WriteLine("  flow <Component|System>     What happens after it: the systems its requests, events and [Watched]");
+            Console.Error.WriteLine("                              changes reach, in order, each labelled same frame / next frame.");
             Console.Error.WriteLine("  report                      Print GRAPH_REPORT.md (findings).");
             Console.Error.WriteLine("  diff <old> [<new>]          What changed in the data flow between two graph.json (new: the current project).");
             Console.Error.WriteLine("  diff --ref <old> [--ref <new>]");
@@ -125,7 +128,8 @@ namespace Entitas.Graph
             Console.Error.WriteLine("      --event-suffix <s>      Name suffix of event components (default: Event).");
             Console.Error.WriteLine("      --budget <tokens>       Cap each answer at about this many tokens (default: 2000; 0 = no cap).");
             Console.Error.WriteLine("      --limit <n>             Seed nodes for query (default: 5).");
-            Console.Error.WriteLine("      --depth <n>             Steps query walks from the seeds (1-4, default: 2).");
+            Console.Error.WriteLine("      --depth <n>             Steps query walks from the seeds (1-4, default: 2);");
+            Console.Error.WriteLine("                              system hops flow follows (1-8, default: 4).");
             Console.Error.WriteLine("      --no-html               Skip graph.html on build.");
             Console.Error.WriteLine("      --ref <git-ref>         For diff: build a side at this commit (git archive; the checkout is not touched).");
             Console.Error.WriteLine("                              Once: old, against the working tree. Twice: old, then new.");
@@ -412,7 +416,7 @@ namespace Entitas.Graph
             public string RequestSuffix = "Request";
             public string EventSuffix = "Event";
             public int Limit = GraphQueries.DefaultQuerySeeds;
-            public int Depth = GraphQueries.DefaultQueryDepth;
+            public int? Depth;
             public int Budget = GraphQueries.DefaultBudget;
             public bool Html = true;
             public readonly List<string> Refs = new List<string>();
@@ -427,6 +431,12 @@ namespace Entitas.Graph
 
             public string Words() =>
                 Positional.Count > 0 ? string.Join(" ", Positional) : throw new UsageException($"'{Command}' needs at least one word");
+
+            /// <summary>--depth means steps for query and system hops for flow, so each command has its own default and range.</summary>
+            public int DepthFor(int fallback, int max) =>
+                Depth == null ? fallback
+                : Depth <= max ? Depth.Value
+                : throw new UsageException($"--depth for '{Command}' is 1 to {max}");
 
             public static Options? Parse(string[] args)
             {
@@ -462,8 +472,8 @@ namespace Entitas.Graph
                             if (++i >= args.Length || !int.TryParse(args[i], out options.Limit) || options.Limit < 1) return null;
                             break;
                         case "--depth":
-                            if (++i >= args.Length || !int.TryParse(args[i], out options.Depth) ||
-                                options.Depth < 1 || options.Depth > GraphQueries.MaxQueryDepth) return null;
+                            if (++i >= args.Length || !int.TryParse(args[i], out var depth) || depth < 1) return null;
+                            options.Depth = depth;
                             break;
                         case "--budget":
                             if (++i >= args.Length || !int.TryParse(args[i], out options.Budget) || options.Budget < 0) return null;

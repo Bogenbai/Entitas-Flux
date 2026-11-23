@@ -41,6 +41,7 @@ namespace Entitas.Graph.Setup
                 "",
                 "Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;",
                 "explain <Name>; query \"<words>\" (the connected subgraph around the matching nodes);",
+                "flow <Request|System> (what happens after it: the systems it reaches, each in which frame);",
                 "diff --commit <sha> (what one commit changed); diff --ref <branch> (changes since a branch, for reviewing it);",
                 $"report (= `{report}`, an overview worth reading once).",
                 "Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.",
