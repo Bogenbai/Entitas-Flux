@@ -453,8 +453,10 @@
   let pendingFrame = null;
   network.on('stabilizationIterationsDone', () => {
     network.setOptions({ physics: false });
-    // Once drawn: a label's size is known only after it has been drawn.
-    if (pendingFrame) { const id = pendingFrame; pendingFrame = null; network.once('afterDrawing', () => frame(id)); network.redraw(); }
+    // Now, on the settled positions — and again once drawn, when every label's size is known.
+    // Not only after drawing: a background tab draws nothing, and the view stayed where the
+    // first, pre-layout frame had put it (a node at the bottom of the ring cut at the edge).
+    if (pendingFrame) { const id = pendingFrame; pendingFrame = null; frame(id); network.once('afterDrawing', () => frame(id)); network.redraw(); }
   });
 
   // With a scope of one or two steps the view holds the node and its neighbours, labels
