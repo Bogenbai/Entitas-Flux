@@ -228,6 +228,11 @@ namespace Entitas.Graph.Output
 
                 if (kind == HandOff.None)
                 {
+                    // "read+removed by X" says it already; "also, not followed: removes it" under X
+                    // again did not. A removal handed on (a [Watched] change) is still followed.
+                    if (component.Id == step.Takes && relations.All(r => r == Relation.Removes))
+                        continue;
+
                     step.NotFollowed.Add(NotFollowed(component, edges, relations));
                     continue;
                 }
@@ -389,6 +394,7 @@ namespace Entitas.Graph.Output
                 // runs — its first takers are that step.
                 var step = new FlowStep(taker.Node, hop)
                 {
+                    Takes = link.Component.Id,
                     Since = since != null && frame.Frames != null ? since + frame.Frames
                         : hop == 1 && (since == null || StartLink != null) ? 0
                         : (int?)null
@@ -907,6 +913,9 @@ namespace Entitas.Graph.Output
         public readonly int Hop;
 
         public bool Expanded;
+
+        /// <summary>The id of the component the step takes: its taker line already says what it does to it.</summary>
+        public string? Takes;
 
         /// <summary>Frames since the step marked [+0]; null once a frame on the way is unknown.</summary>
         public int? Since;

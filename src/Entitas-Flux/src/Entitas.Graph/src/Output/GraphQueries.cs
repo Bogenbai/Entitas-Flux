@@ -354,7 +354,7 @@ namespace Entitas.Graph.Output
                 return node.Role == null ? null : $"  role: {node.Role} (by name)";
 
             var why = node.Message == "request"
-                ? "consumed by " + string.Join(", ", node.ConsumedBy.Select(Label)) + (node.ConsumedByRemoval ? ", which removes it, not the entity" : string.Empty)
+                ? "consumed by " + string.Join(", ", node.ConsumedBy.Select(Label)) + (node.ConsumedByRemoval ? ", which takes it off the entity" : string.Empty)
                 : "carried by " + string.Join(", ", node.CarriedBy.Select(Label));
             return node.Role == null ? $"  role: {node.Message} (by structure: {why})"
                 : node.Role == node.Message ? $"  role: {node.Role} (by name; by structure too: {why})"

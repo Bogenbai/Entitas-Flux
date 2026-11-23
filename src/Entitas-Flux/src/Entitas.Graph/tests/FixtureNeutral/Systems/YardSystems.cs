@@ -178,4 +178,71 @@ namespace Harbor
             }
         }
     }
+
+    /// <summary>Sends a pilot to the ship an order names. A gone ship jumps straight to `done:`, which destroys the order: every order goes.</summary>
+    public sealed class PilotShipsSystem : IExecuteSystem
+    {
+        readonly PortContext _port;
+        readonly IGroup<PortEntity> _orders;
+        readonly List<PortEntity> _buffer = new List<PortEntity>();
+
+        public PilotShipsSystem(PortContext port)
+        {
+            _port = port;
+            _orders = port.GetGroup(PortMatcher.PilotOrder);
+        }
+
+        public void Execute()
+        {
+            foreach (PortEntity order in _orders.GetEntities(_buffer))
+            {
+                PortEntity ship = _port.GetEntityWithShipId(order.pilotOrder.Value);
+                if (ship == null || !ship.hasHull)
+                    goto done;
+                ship.ReplaceHull(ship.hull.Value + 1);
+                done:
+                order.Destroy();
+            }
+        }
+    }
+
+    /// <summary>Lights the beacon, every frame.</summary>
+    public sealed class LightBeaconsSystem : IExecuteSystem
+    {
+        readonly PortContext _port;
+
+        public LightBeaconsSystem(PortContext port) => _port = port;
+
+        public void Execute() => _port.CreateEntity().AddBeacon(1);
+    }
+
+    /// <summary>Counts the beacons it sees this frame.</summary>
+    public sealed class WatchBeaconsSystem : IExecuteSystem
+    {
+        readonly IGroup<PortEntity> _beacons;
+        public int Seen;
+
+        public WatchBeaconsSystem(PortContext port) => _beacons = port.GetGroup(PortMatcher.Beacon);
+
+        public void Execute()
+        {
+            foreach (PortEntity beacon in _beacons)
+                Seen += beacon.beacon.Value;
+        }
+    }
+
+    /// <summary>Douses every beacon at the end of the frame, and does nothing else.</summary>
+    public sealed class DouseBeaconsSystem : ICleanupSystem
+    {
+        readonly IGroup<PortEntity> _beacons;
+        readonly List<PortEntity> _buffer = new List<PortEntity>();
+
+        public DouseBeaconsSystem(PortContext port) => _beacons = port.GetGroup(PortMatcher.Beacon);
+
+        public void Cleanup()
+        {
+            foreach (PortEntity beacon in _beacons.GetEntities(_buffer))
+                beacon.Destroy();
+        }
+    }
 }

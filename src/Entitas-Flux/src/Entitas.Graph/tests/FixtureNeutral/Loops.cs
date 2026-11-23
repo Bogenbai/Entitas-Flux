@@ -81,6 +81,10 @@ namespace Harbor
             Add(new StrikeColoursSystem(contexts.port));
             Add(new SurveyHullsSystem(contexts.port));
             Add(new ReturnSalutesSystem(contexts.port));
+            Add(new PilotShipsSystem(contexts.port));
+            Add(new LightBeaconsSystem(contexts.port));
+            Add(new WatchBeaconsSystem(contexts.port));
+            Add(new DouseBeaconsSystem(contexts.port));
         }
     }
 }

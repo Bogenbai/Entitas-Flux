@@ -108,6 +108,8 @@ namespace Harbor
         public void OnSightPressed(PortEntity ship) => ship.isSighted = true;
 
         public void OnSalutePressed(PortEntity ship) => ship.isSalute = true;
+
+        public void OnPilotPressed(int shipId) => Make.Blank().AddPilotOrder(shipId);
     }
 
     /// <summary>Paints whatever hull it is handed: the yard's work happens in here, not in the yard's loop.</summary>

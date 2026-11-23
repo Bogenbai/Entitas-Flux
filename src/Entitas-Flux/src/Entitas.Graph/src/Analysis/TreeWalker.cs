@@ -437,6 +437,8 @@ namespace Entitas.Graph.Analysis
                 {
                     case ContinueStatementSyntax when destroy && Leaves(node, loop) && DestroyedBefore(node, loop.Identifier.ValueText):
                         break;
+                    case GotoStatementSyntax jump when LandsBefore(jump, write, loop.Statement):
+                        break;
                     case ContinueStatementSyntax or BreakStatementSyntax when Leaves(node, loop):
                     case ReturnStatementSyntax or ThrowStatementSyntax or ThrowExpressionSyntax or GotoStatementSyntax:
                     case YieldStatementSyntax yield when yield.IsKind(SyntaxKind.YieldBreakStatement):
@@ -445,6 +447,22 @@ namespace Entitas.Graph.Analysis
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Whether a `goto` jumps forward to a label on the way to <paramref name="write"/>: a
+        /// statement of a block holding the write, at or before it. From there the code runs on
+        /// to the write, and every jump in between is checked on its own, so the goto skips
+        /// nothing: `if (done) goto finish; … finish: request.Destroy();` destroys every request.
+        /// </summary>
+        static bool LandsBefore(GotoStatementSyntax jump, SyntaxNode write, SyntaxNode body)
+        {
+            if (!jump.IsKind(SyntaxKind.GotoStatement) || jump.Expression is not IdentifierNameSyntax name)
+                return false;
+            var label = body.DescendantNodes().OfType<LabeledStatementSyntax>()
+                .FirstOrDefault(l => l.Identifier.ValueText == name.Identifier.ValueText);
+            return label != null && label.SpanStart > jump.SpanStart && label.SpanStart <= write.SpanStart &&
+                   label.Parent is BlockSyntax block && write.Ancestors().Contains(block);
         }
 
         /// <summary>Whether the block a `continue` ends has already destroyed the loop's entity, in a statement of its own.</summary>
@@ -700,8 +718,27 @@ namespace Entitas.Graph.Analysis
         static IEnumerable<(SyntaxNode Node, bool Negate)> GuardsBefore(SyntaxList<StatementSyntax> statements, int index, int leading)
         {
             for (var i = index - 1; i >= leading; i--)
-                if (Guard(statements[i]) is { } holds)
+                if (Guard(statements[i]) is { } holds && !JumpsTo(statements, i, index, holds))
                     yield return (statements[i], !holds);
+        }
+
+        /// <summary>
+        /// Whether guard <paramref name="i"/> jumps with a `goto` to a label among the statements
+        /// after it, up to statement <paramref name="index"/>: `if (done) goto finish;` guards what
+        /// comes before `finish:`, not the statement the label marks or what follows it.
+        /// </summary>
+        static bool JumpsTo(SyntaxList<StatementSyntax> statements, int i, int index, bool holds)
+        {
+            var guard = (IfStatementSyntax)statements[i];
+            var branch = holds ? guard.Else!.Statement : guard.Statement;
+            while (branch is BlockSyntax { Statements.Count: > 0 } block)
+                branch = block.Statements[block.Statements.Count - 1];
+            if (branch is not GotoStatementSyntax jump || !jump.IsKind(SyntaxKind.GotoStatement) || jump.Expression is not IdentifierNameSyntax name)
+                return false;
+            for (var k = i + 1; k <= index; k++)
+                if (statements[k] is LabeledStatementSyntax label && label.Identifier.ValueText == name.Identifier.ValueText)
+                    return true;
+            return false;
         }
 
         /// <summary>

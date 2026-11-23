@@ -56,8 +56,12 @@ namespace Entitas.Graph.Analysis
     ///   NoneOf (a suspended cat's leave request waits): unlike a sweep's, its entities live on
     ///   either way, and the request is still the handler's when it gets to it.
     ///
-    /// Not a message, on purpose: a component taken off by a loop that does nothing else
-    /// (transient, GraphBuilder.TransientComponents); an entity destroyed, or a request removed,
+    /// Not a message, on purpose: a component destroyed only by sweeps in the cleanup phase that
+    /// do nothing else — it was up the whole frame for whoever reads it, a one-frame signal (a
+    /// tick made every frame), not something handed to a handler, so a request swept by a
+    /// [Cleanup(DestroyEntity)] system alone needs its name; a component taken off by a loop
+    /// that does nothing else (transient, GraphBuilder.TransientComponents); an entity
+    /// destroyed, or a request removed,
     /// only sometimes — under a condition, after a continue, in a nested loop, behind a guard on
     /// anything but its own group (`if (!_pathfinding.IsInitialized) return;`: requests wait, or
     /// hints live until a window opens; the structure cannot tell which, so their names have to)
@@ -73,10 +77,14 @@ namespace Entitas.Graph.Analysis
 
         sealed class Loop
         {
+            public string Key = null!;
             public TypeInfo System = null!;
             public GroupShape Shape = null!;
             public readonly HashSet<string> Sets = new HashSet<string>(StringComparer.Ordinal);
             public bool Destroys;
+
+            /// <summary>It destroys in the cleanup phase, after every Execute() of the frame.</summary>
+            public bool AtFrameEnd;
 
             public List<string> Requires => Shape.AllOf;
 
@@ -100,7 +108,7 @@ namespace Entitas.Graph.Analysis
                     shape.AllOf.Count == 0 || shape.AnyOf.Count > 0 || shape.Changes.Count > 0)
                     return null;
                 if (!loops.TryGetValue(key, out var loop))
-                    loops[key] = loop = new Loop { System = system, Shape = shape };
+                    loops[key] = loop = new Loop { Key = key, System = system, Shape = shape };
                 return loop;
             }
 
@@ -115,7 +123,10 @@ namespace Entitas.Graph.Analysis
             foreach (var destroy in destroys)
             {
                 if (destroy.Steady && destroy.EveryEntity && LoopOf(destroy.Loop, destroy.Group, destroy.Accessor) is { } loop)
+                {
                     loop.Destroys = true;
+                    loop.AtFrameEnd |= destroy.Method != null && context.RunsInCleanup(destroy.Method);
+                }
             }
 
             var sweeps = loops.Values.Where(l => l.IsSweep).ToList();
@@ -221,9 +232,19 @@ namespace Entitas.Graph.Analysis
                     carriedBy[group.Key] = carriers.OrderBy(c => c, StringComparer.Ordinal).ToList();
             }
 
+            // Swept at the end of the frame and nothing else done there: it was up the whole frame
+            // for whoever reads it, a one-frame signal (a tick), not something handed to a handler.
+            var busy = new HashSet<string>(accesses.Where(a => a.Relation == Relation.Creates).SelectMany(a => new[] { a.Within, a.Loop })
+                .Concat(calls.Select(c => c.Within)).OfType<string>(), StringComparer.Ordinal);
+            bool OnlySweptAtFrameEnd(string component, List<string> by) => by.All(id =>
+            {
+                var own = sweeps.Where(s => s.System.Id == id && s.Requires.Contains(component)).ToList();
+                return own.Count > 0 && own.All(s => s.AtFrameEnd && !busy.Contains(s.Key));
+            });
+
             var carrying = new HashSet<string>(carriedBy.Values.SelectMany(c => c), StringComparer.Ordinal);
             var messages = new Dictionary<string, MessageInfo>(StringComparer.Ordinal);
-            foreach (var pair in consumedBy.Where(p => !marking.Contains(p.Key) && !carrying.Contains(p.Key)))
+            foreach (var pair in consumedBy.Where(p => !marking.Contains(p.Key) && !carrying.Contains(p.Key) && !OnlySweptAtFrameEnd(p.Key, p.Value)))
                 messages[pair.Key] = new MessageInfo { Kind = Request, By = pair.Value };
             foreach (var pair in carriedBy)
                 messages[pair.Key] = new MessageInfo

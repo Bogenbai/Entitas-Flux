@@ -59,4 +59,9 @@ namespace Harbor
     [Port] public sealed class Salute : IComponent { }
     [Port] public sealed class Colours : IComponent { }
     [Port] public sealed class SurveyDue : IComponent { }
+
+    // A pilot is sent for a ship: the order goes at the end of every pass, also when a jump skips
+    // the work. A beacon is lit every frame, watched and doused at its end: no one's request.
+    [Port] public sealed class PilotOrder : IComponent { public int Value; }  // PilotShipsSystem: `goto done;` lands on its Destroy()
+    [Port] public sealed class Beacon : IComponent { public int Value; }      // DouseBeaconsSystem sweeps it in Cleanup, nothing else
 }

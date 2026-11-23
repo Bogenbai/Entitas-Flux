@@ -149,7 +149,7 @@ namespace Entitas.Graph.Tests
             messages.Should().BeEquivalentTo(new Dictionary<string, string>
             {
                 ["DockingOrder"] = "request", ["RefuelOrder"] = "request", ["SaleOrder"] = "request", ["ScrapFleetOrder"] = "request",
-                ["RepaintOrder"] = "request", ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
+                ["RepaintOrder"] = "request", ["PilotOrder"] = "request", ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
             });
 
             // Who consumes a request is the reader whose loop destroys it, or marks it Doomed.
@@ -176,7 +176,7 @@ namespace Entitas.Graph.Tests
             Node("DockingOrder").ConsumedByRemoval.Should().BeFalse("its handler destroys it");
 
             Queries.Explain("RepaintOrder").Should().Contain(
-                "  role: request (by structure: consumed by RepaintHullsSystem, which removes it, not the entity)\n");
+                "  role: request (by structure: consumed by RepaintHullsSystem, which takes it off the entity)\n");
             Graph.ToJson().Should().Contain(
                 "\"message\": \"request\",\n      \"consumed_by\": [\n        \"system:Harbor.RepaintHullsSystem\"\n      ],\n      \"consumed_by_removal\": true");
         }
@@ -205,6 +205,29 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_jump_to_the_order_s_Destroy_skips_nothing_and_a_beacon_doused_at_the_frame_s_end_is_no_request()
+        {
+            // `if (ship == null || !ship.hasHull) goto done;` jumps over the work, onto `done: order.Destroy();`.
+            Node("PilotOrder").Message.Should().Be("request");
+            Node("PilotOrder").ConsumedBy.Select(Label).Should().Equal("PilotShipsSystem");
+            Edges("PilotShipsSystem", Relation.Destroys, "PilotOrder").Should().ContainSingle(e => e.Condition == null);
+            Edges("PilotShipsSystem", Relation.Creates, "Hull").Should().ContainSingle(e => e.Condition == "!(ship == null || !ship.hasHull)");
+
+            // Lit every frame, watched, doused in Cleanup by a system doing nothing else: it was
+            // up the whole frame for whoever watches it, a signal rather than a request.
+            Node("Beacon").Message.Should().BeNull("only DouseBeaconsSystem destroys it, in Cleanup, and does nothing else");
+        }
+
+        [Fact]
+        public void Flow_does_not_list_again_the_removal_its_taker_line_already_names()
+        {
+            var flow = Queries.Flow("RepaintOrder");
+
+            flow.Should().Contain("read+removed by RepaintHullsSystem");
+            flow.Should().NotContain("removes RepaintOrder");
+        }
+
+        [Fact]
         public void Destroys_are_inferred_through_the_doom_marker_and_the_armed_pulse()
         {
             Edges("SweepDoomedSystem", Relation.Destroys, "RefuelOrder")
@@ -225,7 +248,7 @@ namespace Entitas.Graph.Tests
             Section(report, "Flags set once on purpose?").Should().Contain(
                 "- `Registered` set by `RegisterShipsSystem` — the setter only sees entities while they have `Fresh`, which `ForgetFreshSystem` removes");
             Section(report, "State flags that are never cleared").Should().Contain("None.");
-            report.Should().Contain("- messages: 0 requests by name (`*Request`), 5 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
+            report.Should().Contain("- messages: 0 requests by name (`*Request`), 6 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
             report.Should().NotContain("JustCreated").And.NotContain("GameCleanupSystems");
             Section(report, "Requests without a handler").Should().Contain("go by name (`--request-suffix`, `--event-suffix`)");
         }
@@ -271,7 +294,7 @@ namespace Entitas.Graph.Tests
             var head = output.Split('\n')[0];
 
             // CountShipsDockedSystem says nothing ShipDocked does not: the event shows it one step out.
-            head.Should().StartWith("query \"ship docked\": 16 nodes match; seeds: DockShipsSystem, ShipDocked, Ship, Docked, PrioritizeShipsSystem (also: CountShipsDockedSystem, ");
+            head.Should().StartWith("query \"ship docked\": 17 nodes match; seeds: DockShipsSystem, ShipDocked, Ship, Docked, PrioritizeShipsSystem (also: CountShipsDockedSystem, ");
             Sections(output)["1 step out:"].Should().Contain("CountShipsDockedSystem");
 
             // It is the structure that makes ShipDocked an event here: without it the reader seeds.
@@ -338,7 +361,7 @@ namespace Entitas.Graph.Tests
                 .Should().BeEquivalentTo(new[]
                 {
                     ("DockingOrder", "request"), ("RefuelOrder", "request"), ("SaleOrder", "request"), ("ScrapFleetOrder", "request"),
-                    ("RepaintOrder", "request"), ("TowOrder", "request"), ("ShipDocked", "event")
+                    ("RepaintOrder", "request"), ("TowOrder", "request"), ("PilotOrder", "request"), ("ShipDocked", "event")
                 });
             named.Nodes.Single(n => n.Label == "CargoUnloaded").MessageRole.Should().Be("event", "no suffix names it; the structure still does");
 
