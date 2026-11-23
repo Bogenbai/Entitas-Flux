@@ -105,7 +105,12 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   to a `[Watched]` change when its group needs a component the changed entity never gets
   (furniture is never a cat; `graph.json` records it on the write as `unseen_by`), a reaction
   that never sees a change names its other triggers, and an answer near its budget drops its
-  "also, not followed" lines first.
+  "also, not followed" lines first. A reader also waits for what the new entity carrying a
+  request is made without: for the system adding it (`next frame (waits for Stamp from
+  StampParcelsSystem #9)`), or `frame unknown (waits for View, added after an await)` when it
+  arrives after an `await`, a coroutine's `yield` or outside the systems — `waits` on the write
+  in `graph.json`. Factories injected through an interface the project implements once are
+  followed, so `unseen_by` sees past them too.
 
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and
