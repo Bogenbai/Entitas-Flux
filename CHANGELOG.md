@@ -71,8 +71,13 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   optional `condition`. What a system writes through a factory or helper is one `by calling
   Factory.Method:` line after its own writes, with that call's requests and events followed
   beneath it: `flow PlaceFurnitureRequest` dropped from ~2 250 to ~1 400 tokens, and an
-  assistant no longer reads the factory as the creator of the system's events. In
-  `graph.html` a busy node's neighbours get room for their labels.
+  assistant no longer reads the factory as the creator of the system's events. A condition
+  names every enclosing clause, outermost first, cut at the tail past ~70 characters; a
+  private method called only under a condition passes it to its writes (`PayForCart()` under
+  `if (itemCount > 0)` → `if (CanAfford())`); a lambda passed with a `when:`-style bool runs
+  under it; an `if`/`else` pair cancels out. `explain` of a system names who else reads the
+  requests it handles. In `graph.html` every search lays out alike — the neighbours in rings
+  around the node, framed with room for their labels.
 
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
