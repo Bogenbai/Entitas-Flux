@@ -113,8 +113,11 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   followed, so `unseen_by` sees past them too. A reader that destroys a request only under a
   condition, when nothing else takes it, says so — `destroys it only once target.hasHueAnimator
   (HueAnimator is added only after an await)` — and the steps after it lose their `[+N]`;
-  `added_late` in `graph.json` marks components every write of which comes after an `await`,
-  followed through interfaces and abstract classes to every override.
+  `added_late` in `graph.json` marks components every write of which comes after an `await`.
+  A call through an interface or abstract method now reaches every override, through abstract
+  classes too, so a system binding views is credited with what each view's registrars add
+  (`who-creates HueAnimator` names the view binders; +430 inferred edges on the production
+  project, build time unchanged).
 
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and

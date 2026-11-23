@@ -363,27 +363,14 @@ namespace Entitas.Graph.Analysis
                 list.Add(implementation);
         }
 
-        /// <summary>The methods a call can land in: itself when it has a body, plus project implementations and overrides.</summary>
-        public IEnumerable<IMethodSymbol> Dispatch(IEnumerable<IMethodSymbol> callees)
-        {
-            foreach (var callee in callees)
-            {
-                var definition = callee.OriginalDefinition;
-                if (!definition.IsAbstract && definition.DeclaringSyntaxReferences.Length > 0)
-                    yield return definition;
-                if (_implementations.TryGetValue(definition, out var implementations))
-                    foreach (var implementation in implementations)
-                        yield return implementation.OriginalDefinition;
-            }
-        }
-
         /// <summary>
-        /// Like <see cref="Dispatch"/>, and on through each implementation's own overrides: an
-        /// interface method an abstract class implements reaches the classes overriding it
+        /// The methods with a body a call can land in: itself, the project's implementations and
+        /// overrides, and on through each implementation's own overrides — an interface method an
+        /// abstract class implements reaches the classes overriding it
         /// (IEntityComponentRegistrar.RegisterComponents → EntityComponentRegistrar → HueAnimator).
-        /// Only the methods with a body.
+        /// Stopping at the abstract method lost every registrar's writes.
         /// </summary>
-        public IEnumerable<IMethodSymbol> DispatchAll(IEnumerable<IMethodSymbol> callees)
+        public IEnumerable<IMethodSymbol> Dispatch(IEnumerable<IMethodSymbol> callees)
         {
             var seen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             var queue = new Queue<IMethodSymbol>(callees.Select(c => c.OriginalDefinition));

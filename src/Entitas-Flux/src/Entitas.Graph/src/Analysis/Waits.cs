@@ -346,14 +346,14 @@ namespace Entitas.Graph.Analysis
         /// <summary>
         /// The methods that may run only after a method was suspended at <paramref name="late"/>
         /// ("an await", "a yield"): those called after one, and everything they call, however deep,
-        /// through interfaces and abstract classes to every override (a view's registrars).
+        /// through interfaces and abstract classes to every override (a view's registrars, <see cref="BuildContext.Dispatch"/>).
         /// </summary>
         static HashSet<IMethodSymbol> RunsAfter(BuildContext context, Creations creations, List<CallSite> calls, string late)
         {
             var found = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             var queue = new Queue<IMethodSymbol>();
             foreach (var call in calls.Where(c => c.Late == late))
-            foreach (var method in context.DispatchAll(new[] { call.Callee }))
+            foreach (var method in context.Dispatch(new[] { call.Callee }))
                 if (found.Add(method))
                     queue.Enqueue(method);
 
@@ -362,7 +362,7 @@ namespace Entitas.Graph.Analysis
                 if (!creations.Callees.TryGetValue(queue.Dequeue(), out var further))
                     continue;
                 foreach (var call in further)
-                foreach (var method in context.DispatchAll(new[] { call.Callee }))
+                foreach (var method in context.Dispatch(new[] { call.Callee }))
                     if (found.Add(method))
                         queue.Enqueue(method);
             }

@@ -254,6 +254,8 @@ namespace Entitas.Graph.Tests
             Node("Hologram").AddedLate.Should().Be("after an await", "RedeployProbesSystem adds one too, but on a probe it is making");
             Node("Charge").AddedLate.Should().BeNull("ChargeProbesSystem adds it the ordinary way");
             Node("Lens").AddedLate.Should().Be("after an await", "IFitting.Fit lands in LensFitting through the abstract Fitting");
+            Edges("ProjectHologramsSystem", Relation.Creates, "Lens").Should().ContainSingle(e => e.Confidence == Confidence.Inferred,
+                "the call graph follows IFitting.Fit through the abstract Fitting to LensFitting's override too");
 
             var lines = Lines(Queries.Flow("BeamOrder"));
             lines.Should().Contain(l => l.StartsWith("read+destroyed by BeamToShipsSystem", StringComparison.Ordinal) &&
