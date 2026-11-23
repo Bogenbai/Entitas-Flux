@@ -48,7 +48,8 @@ namespace Entitas.Graph.Setup
         /// <param name="targets">Instruction files from --target; empty for the default (see <see cref="DefaultTargets"/>).</param>
         /// <param name="toolPath">Where entitas-graph.dll lives — injectable so tests do not depend on where they run.</param>
         /// <param name="claudeHook">Also add the Claude Code hook that keeps assistants out of graph.json (<see cref="ClaudeHook"/>).</param>
-        public static SetupResult Install(string unityRoot, IReadOnlyList<string> targets, bool gitignore, string toolPath, bool claudeHook = true)
+        /// <param name="mcp">Also register the MCP server in .mcp.json (<see cref="McpConfig"/>).</param>
+        public static SetupResult Install(string unityRoot, IReadOnlyList<string> targets, bool gitignore, string toolPath, bool claudeHook = true, bool mcp = true)
         {
             var unity = RequireUnityRoot(unityRoot);
             var gitRoot = FindGitRoot(unity);
@@ -88,6 +89,11 @@ namespace Entitas.Graph.Setup
             var settingsExisting = claudeHook ? TextFile.Read(settings) : null;
             var settingsUpdated = claudeHook ? Apply(settings, () => ClaudeHook.Install(settingsExisting?.Text)) : null;
 
+            // The MCP server, for agents without a shell, in the project's .mcp.json next to its own servers.
+            var servers = Path.Combine(repository, McpConfig.File);
+            var serversExisting = mcp ? TextFile.Read(servers) : null;
+            var serversUpdated = mcp ? Apply(servers, () => McpConfig.Install(serversExisting?.Text)) : null;
+
             foreach (var (file, existing, updated) in plan)
                 result.Files.Add(Write(file, existing, updated));
             foreach (var (file, existing, updated) in wrappers)
@@ -101,6 +107,14 @@ namespace Entitas.Graph.Setup
                 var change = Write(settings, settingsExisting, settingsUpdated);
                 result.Files.Add(new FileChange(change.Path, change.Outcome,
                     change.Outcome == FileOutcome.Unchanged ? "already keeps Claude out of graph.json" : "+ hook: keeps Claude out of graph.json"));
+            }
+            if (serversUpdated != null)
+            {
+                var change = Write(servers, serversExisting, serversUpdated);
+                result.Files.Add(new FileChange(change.Path, change.Outcome,
+                    change.Outcome == FileOutcome.Unchanged ? "already serves the graph over MCP" : "+ MCP server: the commands as tools for agents without a shell"));
+                if (change.Outcome != FileOutcome.Unchanged)
+                    result.Notes.Add($"Claude Code asks once to approve the project's MCP server. A subagent whose tools: list leaves out Bash gets the graph by adding mcp__{McpConfig.Server}__* to it.");
             }
 
             if (!InstructionBlock.IsUnder(toolPath, repository))
@@ -164,6 +178,23 @@ namespace Entitas.Graph.Setup
                 else
                 {
                     result.Files.Add(Write(settings, settingsText, without));
+                }
+            }
+
+            var servers = Path.Combine(repository, McpConfig.File);
+            var serversText = TextFile.Read(servers);
+            if (serversText != null)
+            {
+                var without = Apply(servers, () => McpConfig.Uninstall(serversText.Text));
+                if (without == null) { }
+                else if (without.Length == 0)
+                {
+                    File.Delete(servers);
+                    result.Files.Add(new FileChange(servers, FileOutcome.Deleted, "nothing else was in it"));
+                }
+                else
+                {
+                    result.Files.Add(Write(servers, serversText, without));
                 }
             }
 
@@ -251,6 +282,10 @@ namespace Entitas.Graph.Setup
             var settings = TextFile.Read(Path.Combine(repository, ".claude", "settings.json"));
             if (settings != null && ClaudeHook.Has(settings.Text) && !ClaudeHook.IsCurrent(settings.Text))
                 outdated.Add(Path.Combine(repository, ".claude", "settings.json"));
+
+            var servers = TextFile.Read(Path.Combine(repository, McpConfig.File));
+            if (servers != null && McpConfig.IsOutdated(servers.Text))
+                outdated.Add(Path.Combine(repository, McpConfig.File));
 
             return outdated;
         }

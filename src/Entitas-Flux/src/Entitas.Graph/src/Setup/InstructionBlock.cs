@@ -45,8 +45,10 @@ namespace Entitas.Graph.Setup
                 "explain <Name>; query \"<words>\" (the connected subgraph around the matching nodes);",
                 "flow <Request|System> (what happens after it: the systems it reaches, each in which frame);",
                 "diff --commit <sha> (what one commit changed); diff --ref <branch> (changes since a branch, for reviewing it);",
-                $"report (= `{report}`, an overview worth reading once).",
-                "Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.",
+                $"report (= `{report}`, an overview worth reading once). Each answer is capped at ~2000 tokens. Never read graph.json (~1.4 M tokens).",
+                // Subagents whose tools: list has no Bash cannot run the command; the MCP server
+                // install registers gives them the same answers.
+                $"Subagents without Bash: list mcp__{McpConfig.Server}__* in their tools: (the same commands as MCP tools), or put your answer in their prompt.",
                 // The graph is the map, the code the ground: an answer says where to look, and what it
                 // infers (links through calls, frames) or cannot see (DI, scenes) is checked there.
                 "Before changing code, open the files an answer names: links marked * and frames are inferred, and DI, scenes and prefabs are not in the graph.",

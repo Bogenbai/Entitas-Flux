@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Entitas.Graph.Analysis;
+using Entitas.Graph.Mcp;
 using Entitas.Graph.Output;
 using Entitas.Graph.Setup;
 using Entitas.SourceGenerator.Cli;
@@ -42,6 +43,13 @@ namespace Entitas.Graph
                 if (options.Command == "build")
                 {
                     Build(options);
+                    return Ok;
+                }
+
+                if (options.Command == "mcp")
+                {
+                    if (options.Positional.Count > 0) throw new UsageException("'mcp' takes no arguments");
+                    Serve(options);
                     return Ok;
                 }
 
@@ -82,16 +90,12 @@ namespace Entitas.Graph
             }
             catch (AmbiguousNameException ex)
             {
-                Console.Error.WriteLine($"{ex.Message} — be more specific:");
-                foreach (var node in ex.Candidates.OrderBy(n => n.Label))
-                    Console.Error.WriteLine($"  {node.FullName ?? node.Id}  [{node.Kind}]");
+                Console.Error.Write(NameErrors.Ambiguous(ex));
                 return Ambiguous;
             }
             catch (NodeNotFoundException ex)
             {
-                Console.Error.WriteLine(ex.Message + (ex.Suggestions.Count > 0 ? ". Did you mean:" : "."));
-                foreach (var node in ex.Suggestions)
-                    Console.Error.WriteLine($"  {node.Label}  [{node.Kind}]");
+                Console.Error.Write(NameErrors.NotFound(ex));
                 return NotFound;
             }
             catch (Exception ex)
@@ -121,10 +125,12 @@ namespace Entitas.Graph
             Console.Error.WriteLine("                              The same, the project at a branch or commit against the working tree,");
             Console.Error.WriteLine("                              or against the project at a second one.");
             Console.Error.WriteLine("  diff --commit <commit>      What one commit changed: its first parent against it.");
+            Console.Error.WriteLine("  mcp                         The query commands as tools of an MCP server on stdio, for assistants and");
+            Console.Error.WriteLine("                              subagents without a shell (install registers it in .mcp.json).");
             Console.Error.WriteLine("  install                     Tell the project's AI assistant to use these commands: a block in CLAUDE.md");
             Console.Error.WriteLine("                              (and AGENTS.md, if present) in the git root, the short commands entitas-graph and\n" +
                                     "                              entitas-graph.cmd next to it, a Claude Code hook in .claude/settings.json that keeps\n" +
-                                    "                              assistants out of graph.json, and entitas-graph-out/ in .gitignore.");
+                                    "                              assistants out of graph.json, the MCP server in .mcp.json, and entitas-graph-out/ in .gitignore.");
             Console.Error.WriteLine("  uninstall                   Remove that block and those commands again.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  -r, --root <dir>            Unity project root (default: $ENTITAS_GRAPH_ROOT, set by the wrappers, else the current directory).");
@@ -144,6 +150,7 @@ namespace Entitas.Graph
             Console.Error.WriteLine("      --target <file>         Instruction file for install/uninstall instead of the default (repeatable).");
             Console.Error.WriteLine("      --no-gitignore          install: leave .gitignore alone.");
             Console.Error.WriteLine("      --no-claude-hook        install: leave .claude/settings.json alone (no hook keeping Claude out of graph.json).");
+            Console.Error.WriteLine("      --no-mcp                install: leave .mcp.json alone (no MCP server for agents without a shell).");
             Console.Error.WriteLine();
             Console.Error.WriteLine("Queries reuse graph.json and rebuild it first when a source file is newer. An answer over");
             Console.Error.WriteLine("the budget starts with a summary by feature and says how much it left out.");
@@ -166,7 +173,7 @@ namespace Entitas.Graph
             var tool = ToolPath();
 
             var result = options.Command == "install"
-                ? AssistantSetup.Install(options.Root, options.Targets, options.Gitignore, tool, options.ClaudeHook)
+                ? AssistantSetup.Install(options.Root, options.Targets, options.Gitignore, tool, options.ClaudeHook, options.Mcp)
                 : AssistantSetup.Uninstall(options.Root, options.Targets);
 
             var cwd = Directory.GetCurrentDirectory();
@@ -175,6 +182,42 @@ namespace Entitas.Graph
             foreach (var note in result.Notes)
                 Console.Error.WriteLine($"note: {note}");
             return Ok;
+        }
+
+        // -- mcp ----------------------------------------------------------------------------
+
+        /// <summary>
+        /// The MCP server on stdin/stdout until the client closes it. The graph is kept between
+        /// calls and loaded again only when the sources are newer than graph.json, or graph.json
+        /// changed under it (a build from the terminal); a call that finds it stale rebuilds it,
+        /// as a CLI query would. Notes go to stderr, which the client logs.
+        /// </summary>
+        static void Serve(Options options)
+        {
+            EcsGraph? graph = null;
+            var loaded = DateTime.MinValue;
+            EcsGraph Current()
+            {
+                var path = GraphPath(options);
+                if (graph != null && File.Exists(path) && File.GetLastWriteTimeUtc(path) == loaded && !IsStale(path, options.Root))
+                    return graph;
+                graph = LoadOrBuild(options);
+                loaded = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+                return graph;
+            }
+
+            string Diff(string? commit, string? from, string? to)
+            {
+                var refs = new List<string>();
+                if (from != null) refs.Add(from);
+                if (to != null) refs.Add(to);
+                var request = new Options { Command = "diff", Root = options.Root, Project = options.Project, OutOverride = options.OutOverride,
+                    RequestSuffix = options.RequestSuffix, EventSuffix = options.EventSuffix, Budget = options.Budget, Commit = commit };
+                request.Refs.AddRange(refs);
+                return Program.Diff(request);
+            }
+
+            new McpServer(Current, Diff, options.Budget, Version()).Run(Console.In, Console.Out);
         }
 
         // -- building -----------------------------------------------------------------------
@@ -435,6 +478,7 @@ namespace Entitas.Graph
             public readonly List<string> Targets = new List<string>();
             public bool Gitignore = true;
             public bool ClaudeHook = true;
+            public bool Mcp = true;
 
             public string Out => OutOverride ?? Path.Combine(Root, "entitas-graph-out");
 
@@ -512,6 +556,9 @@ namespace Entitas.Graph
                             break;
                         case "--no-claude-hook":
                             options.ClaudeHook = false;
+                            break;
+                        case "--no-mcp":
+                            options.Mcp = false;
                             break;
                         case "-h": case "--help":
                             return null;

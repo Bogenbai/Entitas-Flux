@@ -100,7 +100,7 @@ namespace Entitas.Graph.Setup
         }
 
         /// <summary>Equal JSON; netstandard/.NET 6 have no JsonNode.DeepEquals.</summary>
-        static bool Same(JsonNode? a, JsonNode b) => a != null && a.ToJsonString() == b.ToJsonString();
+        internal static bool Same(JsonNode? a, JsonNode b) => a != null && a.ToJsonString() == b.ToJsonString();
 
         static JsonNode Entry() => new JsonObject
         {
@@ -114,21 +114,21 @@ namespace Entitas.Graph.Setup
             hooks.Any(h => h?["command"] is JsonValue value && value.TryGetValue<string>(out var command) &&
                            command.Contains(Wrappers.ShName) && command.Contains(Flag));
 
-        static JsonObject? Parse(string? text)
+        internal static JsonObject? Parse(string? text, string file = File)
         {
             if (string.IsNullOrWhiteSpace(text)) return null;
             try
             {
                 return JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject
-                       ?? throw new FormatException($"{File} is not a JSON object");
+                       ?? throw new FormatException($"{file} is not a JSON object");
             }
             catch (JsonException ex)
             {
-                throw new FormatException($"{File} is not valid JSON ({ex.Message})");
+                throw new FormatException($"{file} is not valid JSON ({ex.Message})");
             }
         }
 
-        static string Write(JsonObject root, string? existing)
+        internal static string Write(JsonObject root, string? existing)
         {
             var newline = existing != null && existing.Contains("\r\n") ? "\r\n" : "\n";
             var text = root.ToJsonString(Options).Replace("\r\n", "\n").Replace("\n", newline);
