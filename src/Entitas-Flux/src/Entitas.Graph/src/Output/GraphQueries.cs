@@ -800,7 +800,15 @@ namespace Entitas.Graph.Output
         string ChangeReactions(GraphEdge write, string writer)
         {
             var target = _graph.Node(write.Target);
-            var reacted = target == null ? null : ReactedToBy(target, writer, ReactorsInline);
+            if (target == null)
+                return string.Empty;
+
+            // Not the systems whose group no write of the writer's can ever match (graph.json `unseen_by`).
+            var writes = _graph.Outgoing(writer).Where(e => e.Target == target.Id && e.Relation is Relation.Creates or Relation.Removes).ToList();
+            var unseen = writes.Count == 0 || writes.Any(w => w.UnseenBy.Count == 0)
+                ? new HashSet<string>(StringComparer.Ordinal)
+                : new HashSet<string>(writes[0].UnseenBy.Select(u => u.System).Where(s => writes.All(w => w.UnseenBy.Any(u => u.System == s))), StringComparer.Ordinal);
+            var reacted = ReactedToBy(target, writer, ReactorsInline, unseen);
             return reacted == null ? string.Empty : $"  → reacted to by {reacted}";
         }
 
@@ -818,13 +826,13 @@ namespace Entitas.Graph.Output
         /// — the next hand-off, where an assistant goes next. Generated systems (the watched
         /// cleanup) are left out. Over the cap, reactors that hand something off are kept first.
         /// </summary>
-        string? ReactedToBy(GraphNode component, string? except, int cap)
+        string? ReactedToBy(GraphNode component, string? except, int cap, IReadOnlyCollection<string>? unseen = null)
         {
             if (!component.Attributes.Contains("Watched"))
                 return null;
 
             var reactors = _graph.Incoming(component.Id)
-                .Where(e => e.Relation == Relation.Reacts && e.Source != except)
+                .Where(e => e.Relation == Relation.Reacts && e.Source != except && unseen?.Contains(e.Source) != true)
                 .Select(e => e.Source)
                 .Distinct()
                 .Select(id => _graph.Node(id)!)

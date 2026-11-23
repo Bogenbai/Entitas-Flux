@@ -3,7 +3,7 @@ namespace Harbor
     /// <summary>The frame: pulses are armed first, so a pulse made this frame is seen armed the next.</summary>
     public sealed class CoreLoop : Feature
     {
-        public CoreLoop(Contexts contexts, ShipFactory factory)
+        public CoreLoop(Contexts contexts, ShipFactory factory, DepotFactory depots)
         {
             Add(new ArmPulsesSystem(contexts.port));
             Add(new TickClockSystem(contexts.signal));
@@ -13,6 +13,7 @@ namespace Harbor
             Add(new CountCargoSystem(contexts.port));
             Add(new CountShipsDockedSystem(contexts.port));
             Add(new Fleet(contexts, factory));
+            Add(new Depots(contexts, depots));
             Add(new ForgetFreshSystem(contexts.port));
             Add(new PortWatchedCleanupSystems(contexts));
         }
@@ -42,6 +43,17 @@ namespace Harbor
             Add(new ScrapShipsSystem(contexts.port));
             Add(new ScrapFleetSystem(contexts.port));
             Add(new LaunchTankersSystem(contexts.signal, factory));
+        }
+    }
+
+    public sealed class Depots : Feature
+    {
+        public Depots(Contexts contexts, DepotFactory factory)
+        {
+            Add(new ShowGaugesSystem(contexts.port));
+            Add(new FitGaugesSystem(contexts.port));
+            Add(new BuildDepotsSystem(contexts.signal, factory));
+            Add(new LeakFuelSystem(contexts.port));
         }
     }
 

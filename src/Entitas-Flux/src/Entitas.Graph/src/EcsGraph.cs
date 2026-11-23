@@ -183,7 +183,25 @@ namespace Entitas.Graph
         /// </summary>
         public string? Condition;
 
+        /// <summary>
+        /// For a system's creates and removes of a [Watched] component: the systems reacting to
+        /// its XChanged marker whose group can never match the entity written, and a component
+        /// that group requires and the entity never gets — absent when it was made and added
+        /// nowhere but where entities are made (Analysis.UnseenReactors). Empty when the entity's
+        /// origin is not known for certain, which is most writes.
+        /// </summary>
+        public List<UnseenReactor> UnseenBy = new List<UnseenReactor>();
+
         public string Key => $"{Source}\u0001{Target}\u0001{Relation}\u0001{Via}\u0001{Confidence}\u0001{Through}\u0001{Entity}";
+    }
+
+    /// <summary>A system reacting to a [Watched] component that never sees one write of it, and why: a component its group needs.</summary>
+    public sealed class UnseenReactor
+    {
+        public string System = string.Empty;
+
+        /// <summary>The component the reacting group requires and the written entity never gets.</summary>
+        public string Needs = string.Empty;
     }
 
     public sealed class GraphMetadata
@@ -353,6 +371,18 @@ namespace Entitas.Graph
                     if (e.Entity != null) w.WriteString("entity", e.Entity);
                     if (e.OnlyWhile != null) w.WriteString("only_while", e.OnlyWhile);
                     if (e.Condition != null) w.WriteString("condition", e.Condition);
+                    if (e.UnseenBy.Count > 0)
+                    {
+                        w.WriteStartArray("unseen_by");
+                        foreach (var u in e.UnseenBy)
+                        {
+                            w.WriteStartObject();
+                            w.WriteString("system", u.System);
+                            w.WriteString("needs", u.Needs);
+                            w.WriteEndObject();
+                        }
+                        w.WriteEndArray();
+                    }
                     if (e.Order > 0) w.WriteNumber("order", e.Order);
                     if (e.Count > 1) w.WriteNumber("count", e.Count);
                     if (e.SourceFile != null) w.WriteString("source_file", e.SourceFile);
@@ -438,8 +468,14 @@ namespace Entitas.Graph
 
             foreach (var e in root.GetProperty("links").EnumerateArray())
             {
+                var unseen = new List<UnseenReactor>();
+                if (e.TryGetProperty("unseen_by", out var unseenBy) && unseenBy.ValueKind == JsonValueKind.Array)
+                    foreach (var u in unseenBy.EnumerateArray())
+                        unseen.Add(new UnseenReactor { System = Str(u, "system") ?? string.Empty, Needs = Str(u, "needs") ?? string.Empty });
+
                 graph.Edges.Add(new GraphEdge
                 {
+                    UnseenBy = unseen,
                     Source = e.GetProperty("source").GetString()!,
                     Target = e.GetProperty("target").GetString()!,
                     Relation = e.GetProperty("relation").GetString()!,

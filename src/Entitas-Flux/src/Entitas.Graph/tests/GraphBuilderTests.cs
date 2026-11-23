@@ -891,6 +891,80 @@ namespace Entitas.Graph.Tests
         static bool CreatesIn(EcsGraph graph, string system, string component) =>
             graph.Edges.Any(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == Relation.Creates && e.Target == "component:" + component);
 
+        const string Crates = @"
+            [Game, Watched] public sealed class W : IComponent { public int Value; }
+
+            // B is put only on crates, C only on barrels, as they are made.
+            public static class Make
+            {
+                public static GameContext Game;
+                public static GameEntity Crate() { GameEntity e = Game.CreateEntity(); e.isB = true; return e; }
+                public static GameEntity Barrel() { GameEntity e = Game.CreateEntity(); e.isC = true; return e; }
+            }
+
+            public static class Tweak
+            {
+                public static GameEntity Set(this GameEntity e) { e.AddW(1); return e; }
+                public static GameEntity Reset(this GameEntity e) { e.ReplaceW(0); return e; }
+            }
+
+            public sealed class OnBarrelSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _changed;
+                public OnBarrelSystem(GameContext game) => _changed = game.GetGroup(GameMatcher.AllOf(GameMatcher.C, GameMatcher.WChanged));
+                public void Execute() { }
+            }
+
+            // D is given to existing crates as well: a crate may have it by the time W changes.
+            public sealed class OnLabelledSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _changed;
+                public OnLabelledSystem(GameContext game) => _changed = game.GetGroup(GameMatcher.AllOf(GameMatcher.D, GameMatcher.WChanged));
+                public void Execute() { }
+            }
+
+            public sealed class LabelSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _crates;
+                public LabelSystem(GameContext game) => _crates = game.GetGroup(GameMatcher.B);
+                public void Execute() { foreach (GameEntity crate in _crates.GetEntities()) crate.isD = true; }
+            }
+
+            public sealed class MakeCratesSystem : IExecuteSystem
+            {
+                public void Execute() => Make.Crate().Set();
+            }
+
+            // Reset is also handed out as a delegate, so it may run on anything.
+            public sealed class ResetCratesSystem : IExecuteSystem
+            {
+                public Func<GameEntity, GameEntity> Later = Tweak.Reset;
+                public void Execute() => Make.Crate().Reset();
+            }";
+
+        [Fact]
+        public void A_reaction_is_unseen_only_where_the_entity_certainly_never_gets_what_its_group_needs()
+        {
+            var graph = Snippet(Crates);
+            IEnumerable<string> UnseenBy(string system) => graph.Edges
+                .Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Target == "component:W")
+                .UnseenBy.Select(u => $"{u.System.Split(':')[1]} needs {u.Needs.Split(':')[1]}");
+
+            UnseenBy("MakeCratesSystem").Should().Equal(new[] { "OnBarrelSystem needs C" },
+                "a crate is made with B alone, and C is only put on barrels as they are made; D can come later");
+            UnseenBy("ResetCratesSystem").Should().BeEmpty("Reset is handed out as a delegate: what it runs on is not known");
+
+            // One component added where the code does not say which, and nothing is certain any more.
+            var untraced = Snippet(Crates + @"
+                public sealed class CopySystem : IExecuteSystem
+                {
+                    GameEntity _from, _to;
+                    int _index;
+                    public void Execute() => _to.AddComponent(_index, _from.GetComponent(_index));
+                }");
+            untraced.Edges.Should().OnlyContain(e => e.UnseenBy.Count == 0);
+        }
+
         static string? ConditionIn(EcsGraph graph, string system, string relation, string component) =>
             graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;
 

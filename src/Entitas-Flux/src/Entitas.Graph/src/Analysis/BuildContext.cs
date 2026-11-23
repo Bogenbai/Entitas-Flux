@@ -245,6 +245,9 @@ namespace Entitas.Graph.Analysis
         public readonly ConcurrentDictionary<(IMethodSymbol Method, string Parameter), IReadOnlyList<(string Parameter, bool Negated)>?> HelperConditions =
             new ConcurrentDictionary<(IMethodSymbol, string), IReadOnlyList<(string, bool)>?>(new MethodParameterComparer());
 
+        /// <summary>What project methods do with entities (Analysis.EntityOrigins), worked out once per method.</summary>
+        public readonly EntityMethods EntityMethods = new EntityMethods();
+
         sealed class MethodParameterComparer : IEqualityComparer<(IMethodSymbol Method, string Parameter)>
         {
             public bool Equals((IMethodSymbol Method, string Parameter) x, (IMethodSymbol Method, string Parameter) y) =>

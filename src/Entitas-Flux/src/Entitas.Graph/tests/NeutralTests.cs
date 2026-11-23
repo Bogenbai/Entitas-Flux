@@ -29,6 +29,10 @@ namespace Entitas.Graph.Tests
         static List<GraphEdge> Edges(string source, string relation, string target) =>
             Graph.Edges.Where(e => Label(e.Source) == source && e.Relation == relation && Label(e.Target) == target).ToList();
 
+        /// <summary>"System needs Component" for the reactors a creates edge records as never seeing it.</summary>
+        static IEnumerable<string> UnseenBy(string source, string target, string? through) =>
+            Edges(source, Relation.Creates, target).Single(e => e.Through == through).UnseenBy.Select(u => $"{Label(u.System)} needs {Label(u.Needs)}");
+
         [Fact]
         public void The_port_compiles_with_its_generated_code()
         {
@@ -72,6 +76,70 @@ namespace Entitas.Graph.Tests
                 "creates Fuel  [Watched → FuelChanged]  (if ship != null)  OrderSystems.cs:84",
                 "also, not followed: creates Doomed",
                 "ends: destroyed by SweepDoomedSystem*  LateLoop #2  (created with RefuelOrder; Doomed by RefuelShipsSystem)  PulseSystems.cs:52");
+        }
+
+        [Fact]
+        public void A_depot_s_fuel_change_does_not_reach_the_reaction_that_needs_a_ship()
+        {
+            // The factory builds the depot and drains it through a helper: a [Watched] change on an
+            // entity made right there, with Depot and Fuel and never Ship, which only the ship
+            // factory puts on what it builds. WarnLowFuelSystem's group needs Ship.
+            var output = Queries.Flow("BuildDepotsSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "by calling DepotFactory.Build: creates 2 (Fuel, Depot)  (if _signal.hasClock && _signal.clock.Value % 20 == 0)  Plumbing.cs:55",
+                "creates Fuel  [Watched → FuelChanged]  Plumbing.cs:56",
+                "+1 reacting to FuelChanged need Ship, which this entity never gets");
+            output.Should().NotContain("WarnLowFuelSystem");
+
+            // Recorded on the writes, through the factory, the helper on the depot being built
+            // and a loop over depots alike.
+            UnseenBy("BuildDepotsSystem", "Fuel", "Tanks.Drain").Should().Equal("WarnLowFuelSystem needs Ship");
+            UnseenBy("BuildDepotsSystem", "Fuel", "DepotFactory.Build").Should().Equal("WarnLowFuelSystem needs Ship");
+            UnseenBy("LeakFuelSystem", "Fuel", null).Should().Equal("WarnLowFuelSystem needs Ship");
+            Queries.Flow("LeakFuelSystem").Should().NotContain("WarnLowFuelSystem");
+
+            // A ship found by its id is one the ship factory made: never a depot.
+            UnseenBy("RefuelShipsSystem", "Fuel", null).Should().Equal("ShowGaugesSystem needs Depot");
+            Lines(Queries.Flow("RefuelOrder")).Should().ContainInOrder(
+                "creates Fuel  [Watched → FuelChanged]  (if ship != null)  OrderSystems.cs:84",
+                "reacted to by WarnLowFuelSystem  #15 (Fleet)  same frame [+1]  ShipSystems.cs:106",
+                "+1 reacting to FuelChanged need Depot, which this entity never gets");
+        }
+
+        [Fact]
+        public void A_reaction_needing_what_the_entity_gets_later_stays_and_names_its_other_trigger()
+        {
+            // ShowGaugesSystem needs Gauge too, which no depot is built with: FitGaugesSystem fits
+            // it to existing depots, so the depot can still match. It runs before the depots are
+            // built, so it never sees this change — but it reacts to GaugeChanged as well.
+            Lines(Queries.Flow("BuildDepotsSystem")).Should().Contain(
+                "reacted to by ShowGaugesSystem  #20 (Depots)  never sees it (RemoveFuelChangedPortSystem #25 clears FuelChanged first; other trigger: GaugeChanged)  DepotSystems.cs:18");
+            Edges("FitGaugesSystem", Relation.Creates, "Gauge").Should().OnlyContain(e => e.UnseenBy.Count == 0);
+
+            // And a ship's fuel still reaches the ship's reaction.
+            Lines(Queries.Flow("BurnFuelSystem")).Should().ContainInOrder(
+                "reacted to by WarnLowFuelSystem  #15 (Fleet)  same frame [+0]  ShipSystems.cs:106",
+                "+1 reacting to FuelChanged need Depot, which this entity never gets");
+        }
+
+        [Fact]
+        public void Over_the_budget_a_flow_drops_what_it_does_not_follow_before_it_folds_its_endings()
+        {
+            var full = Queries.Flow("DockingOrder");
+            Lines(full).Should().Contain("also, not followed: creates Docked, Pulse*");
+
+            // At its own size it passes the headroom: the "also" lines go, nothing else.
+            var atBudget = new GraphQueries(Graph, budget: full.Length / 4).Flow("DockingOrder");
+            Lines(atBudget).Should().Equal(Lines(full).Where(l => !l.StartsWith("also, not followed", StringComparison.Ordinal)));
+
+            // Only when that is still too much do the takers ending there share a line.
+            var folded = new GraphQueries(Graph, budget: atBudget.Length / 4).Flow("DockingOrder");
+            folded.Should().NotContain("also, not followed").And.NotContain("not shown");
+            Lines(folded).Should().Contain("read by, ending there: GreetCaptainSystem #8, CountShipsDockedSystem #11 — next frame (waits for Armed) [+1]");
+
+            // With room to spare it stays whole.
+            new GraphQueries(Graph, budget: full.Length).Flow("DockingOrder").Should().Be(full);
         }
 
         [Fact]
@@ -216,6 +284,7 @@ namespace Entitas.Graph.Tests
             EcsGraph.FromJson(json).ToJson().Should().Be(json);
             json.Should().Contain("\"message\": \"request\",\n      \"consumed_by\": [\n        \"system:Harbor.DockShipsSystem\"\n      ]");
             json.Should().Contain("\"message\": \"event\",\n      \"carried_by\": [\n        \"component:Pulse\"\n      ]");
+            json.Should().Contain("\"unseen_by\": [\n        {\n          \"system\": \"system:Harbor.WarnLowFuelSystem\",\n          \"needs\": \"component:Ship\"\n        }\n      ]");
         }
 
         [Fact]

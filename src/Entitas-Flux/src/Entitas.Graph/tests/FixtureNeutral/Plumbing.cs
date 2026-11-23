@@ -39,6 +39,32 @@ namespace Harbor
             apply(self);
             return self;
         }
+
+        public static T Also<T>(this T self, Action<T> also)
+        {
+            also(self);
+            return self;
+        }
+    }
+
+    /// <summary>A depot is built with what it is, then drained: Drain changes the [Watched] Fuel of the depot being built.</summary>
+    public sealed class DepotFactory
+    {
+        public PortEntity Build(int capacity)
+        {
+            PortEntity depot = Make.Blank().Also(x => x.isDepot = true);
+            depot.AddFuel(capacity);
+            return depot.Drain();
+        }
+    }
+
+    public static class Tanks
+    {
+        public static PortEntity Drain(this PortEntity tank)
+        {
+            tank.ReplaceFuel(0);
+            return tank;
+        }
     }
 
     /// <summary>A factory: a ship is built with everything it carries, a tanker with a tank too.</summary>

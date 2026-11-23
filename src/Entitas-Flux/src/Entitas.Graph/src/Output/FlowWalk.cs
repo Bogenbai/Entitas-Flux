@@ -134,7 +134,9 @@ namespace Entitas.Graph.Output
         {
             if (Start.Kind == NodeKind.Component)
             {
-                var kind = Kind(Start, new[] { Relation.Creates, Relation.Removes });
+                // Every write of it: a reactor is left out only when none of them reaches it.
+                var writes = In(Start.Id).Where(e => e.Relation is Relation.Creates or Relation.Removes).ToList();
+                var kind = Kind(Start, new[] { Relation.Creates, Relation.Removes }, writes);
                 StartLink = new FlowLink(Start, kind == HandOff.None ? HandOff.State : kind, Array.Empty<GraphEdge>(), Array.Empty<string>()) { Expanded = true };
                 _expandedComponents.Add(Start.Id);
 
@@ -144,8 +146,9 @@ namespace Entitas.Graph.Output
                     .OrderBy(e => e.Confidence == Confidence.Extracted ? 0 : 1).ThenBy(e => e.Source, StringComparer.Ordinal).ThenBy(e => e.Line)
                     .ToList();
 
-                var (takers, skipped) = Takers(Start, StartLink.Kind, StartLink.Relations, null);
+                var (takers, skipped, unseen) = Takers(Start, StartLink.Kind, StartLink.Relations, null, writes);
                 StartLink.Skipped = skipped;
+                StartLink.Unseen.AddRange(unseen);
                 var creators = Creators.Select(e => Node(e.Source)).Distinct().ToList();
                 ChooseRoots(takers.Select(t => t.Node), creators);
                 Producers = Root == null ? Array.Empty<GraphNode>() : creators.Where(c => c.Kind == NodeKind.System && Slot(c, Root) != null).ToList();
@@ -157,7 +160,7 @@ namespace Entitas.Graph.Output
                 _expandedSystems.Add(Start.Id);
                 ChooseRoots(Start.Placements.Count > 0
                     ? new[] { Start }
-                    : Writes(Start).SelectMany(w => w.Kind == HandOff.None ? Enumerable.Empty<GraphNode>() : Takers(w.Component, w.Kind, w.Relations, Start).Takers.Select(t => t.Node)),
+                    : Writes(Start).SelectMany(w => w.Kind == HandOff.None ? Enumerable.Empty<GraphNode>() : Takers(w.Component, w.Kind, w.Relations, Start, w.Edges).Takers.Select(t => t.Node)),
                     Array.Empty<GraphNode>());
                 StartStep.Since = Root != null && Slot(Start, Root) != null ? 0 : (int?)null;
                 _queue.Enqueue(StartStep);
@@ -202,7 +205,7 @@ namespace Entitas.Graph.Output
                     var component = Node(g.Key);
                     var relations = g.Select(e => e.Relation).Distinct().OrderBy(r => r == Relation.Creates ? 0 : 1).ToList();
                     var edges = g.OrderBy(e => e.Confidence == Confidence.Extracted ? 0 : 1).ThenBy(e => e.SourceFile, StringComparer.Ordinal).ThenBy(e => e.Line).ToList();
-                    return (Component: component, Kind: IsHub(component) ? HandOff.None : Kind(component, relations), Edges: (IReadOnlyList<GraphEdge>)edges, Relations: (IReadOnlyList<string>)relations);
+                    return (Component: component, Kind: IsHub(component) ? HandOff.None : Kind(component, relations, edges), Edges: (IReadOnlyList<GraphEdge>)edges, Relations: (IReadOnlyList<string>)relations);
                 })
                 .Where(w => w.Component.Kind == NodeKind.Component)
                 .OrderBy(w => w.Edges[0].Confidence == Confidence.Extracted ? 0 : 1)
@@ -225,8 +228,7 @@ namespace Entitas.Graph.Output
 
                 if (kind == HandOff.None)
                 {
-                    var unreached = component.Attributes.Contains("Watched") ? Reactors(component, relations).Skipped : 0;
-                    step.NotFollowed.Add(new FlowWrite(component, edges, IsHub(component), unreached));
+                    step.NotFollowed.Add(NotFollowed(component, edges, relations));
                     continue;
                 }
 
@@ -236,7 +238,7 @@ namespace Entitas.Graph.Output
             Calls(step, called);
         }
 
-        void Follow(FlowStep step, FlowLink link, List<FlowLink> into, List<FlowTaker>? known = null, int skipped = 0)
+        void Follow(FlowStep step, FlowLink link, List<FlowLink> into, (List<FlowTaker> Takers, int Skipped, List<FlowUnseen> Unseen)? known = null)
         {
             into.Add(link);
             if (!_expandedComponents.Add(link.Component.Id))
@@ -244,10 +246,9 @@ namespace Entitas.Graph.Output
 
             link.Expanded = true;
             HandOffs++;
-            var takers = known;
-            if (takers == null)
-                (takers, skipped) = Takers(link.Component, link.Kind, link.Relations, step.Node);
+            var (takers, skipped, unseen) = known ?? Takers(link.Component, link.Kind, link.Relations, step.Node, link.Writes);
             link.Skipped = skipped;
+            link.Unseen.AddRange(unseen);
             if (step.Hop >= Depth)
             {
                 link.Beyond = takers.Count;
@@ -313,8 +314,7 @@ namespace Entitas.Graph.Output
                     .OrderBy(m => m, StringComparer.Ordinal).ToList());
                 foreach (var (component, kind, edges, relations) in group)
                 {
-                    call.Writes.Add(new FlowWrite(component, edges, IsHub(component),
-                        kind == HandOff.None && component.Attributes.Contains("Watched") ? Reactors(component, relations).Skipped : 0));
+                    call.Writes.Add(kind == HandOff.None ? NotFollowed(component, edges, relations) : new FlowWrite(component, edges, IsHub(component)));
                     if (kind == HandOff.None)
                         continue;
 
@@ -327,9 +327,9 @@ namespace Entitas.Graph.Output
 
                     if (_expandedComponents.Contains(component.Id) || edges.All(e => e.Via is "Add" or "AddComponent"))
                         continue;
-                    var (takers, skipped) = Takers(component, kind, relations, step.Node);
-                    if (kind.HasFlag(HandOff.Watched) ? takers.Count > 0 : takers.Any(t => Frame(new[] { step.Node }, t, link, Root) is { Frames: not null, Never: false }))
-                        Follow(step, link, call.HandOffs, takers, skipped);
+                    var taken = Takers(component, kind, relations, step.Node, edges);
+                    if (kind.HasFlag(HandOff.Watched) ? taken.Takers.Count > 0 : taken.Takers.Any(t => Frame(new[] { step.Node }, t, link, Root) is { Frames: not null, Never: false }))
+                        Follow(step, link, call.HandOffs, taken);
                 }
 
                 if (call.Writes.Count > 1 || call.HandOffs.Count > 0)
@@ -337,6 +337,15 @@ namespace Entitas.Graph.Output
                 else
                     step.NotFollowed.AddRange(call.Writes);
             }
+        }
+
+        /// <summary>A write listed, not followed; for a [Watched] component with reactors, why none of them takes it.</summary>
+        FlowWrite NotFollowed(GraphNode component, IReadOnlyList<GraphEdge> edges, IReadOnlyList<string> relations)
+        {
+            if (!component.Attributes.Contains("Watched"))
+                return new FlowWrite(component, edges, IsHub(component));
+            var (_, skipped, unseen) = Reactors(component, relations, edges);
+            return new FlowWrite(component, edges, IsHub(component), skipped, unseen);
         }
 
         /// <summary>The methods the system called in its own code that led to this edge: `called`, or the method `through` names.</summary>
@@ -391,7 +400,8 @@ namespace Entitas.Graph.Output
                     step.Expanded = true;
                     _queue.Enqueue(step);
                 }
-                link.Takers.Add(new FlowTake(step, taker.Edges, frame, elsewhere, taker.Marker));
+                link.Takers.Add(new FlowTake(step, taker.Edges, frame, elsewhere, taker.Marker,
+                    taker.Marker ? OtherTriggers(taker.Node, link.Component) : Array.Empty<GraphNode>()));
             }
 
             link.Ends.AddRange(Ends(link, producers.Count == 1 ? producers[0] : null, takers));
@@ -410,7 +420,7 @@ namespace Entitas.Graph.Output
             // takes only the changes Reactors lets through (no add when it leaves the component out).
             if (taker.Marker && link == StartLink)
             {
-                producers = producers.Where(p => Reactors(link.Component, Relations(p, link.Component)).Reacting.Contains(taker.Node)).ToList();
+                producers = producers.Where(p => Reactors(link.Component, Relations(p, link.Component), WritesOf(p, link.Component)).Reacting.Contains(taker.Node)).ToList();
                 if (producers.Count == 0)
                     return FlowFrame.Unknown($"none of the changes under {(root == null ? "the root" : Node(root).Label)} is one it takes");
             }
@@ -441,10 +451,10 @@ namespace Entitas.Graph.Output
 
         // -- hand-offs and takers --------------------------------------------------------------
 
-        HandOff Kind(GraphNode component, IReadOnlyList<string> relations)
+        HandOff Kind(GraphNode component, IReadOnlyList<string> relations, IReadOnlyList<GraphEdge> writes)
         {
             var kind = HandOff.None;
-            if (component.Attributes.Contains("Watched") && Reactors(component, relations).Reacting.Count > 0)
+            if (component.Attributes.Contains("Watched") && Reactors(component, relations, writes).Reacting.Count > 0)
                 kind |= HandOff.Watched;
             if (relations.Contains(Relation.Creates))
             {
@@ -460,6 +470,10 @@ namespace Entitas.Graph.Output
         static int KindRank(HandOff kind) =>
             kind.HasFlag(HandOff.Request) ? 0 : kind.HasFlag(HandOff.Watched) ? 1 : kind.HasFlag(HandOff.Event) ? 2 : kind == HandOff.None ? 4 : 3;
 
+        List<GraphEdge> WritesOf(GraphNode system, GraphNode component) => Out(system.Id)
+            .Where(e => e.Target == component.Id && e.Relation is Relation.Creates or Relation.Removes)
+            .ToList();
+
         List<string> Relations(GraphNode system, GraphNode component) => Out(system.Id)
             .Where(e => e.Target == component.Id && e.Relation is Relation.Creates or Relation.Removes)
             .Select(e => e.Relation)
@@ -468,14 +482,20 @@ namespace Entitas.Graph.Output
             .ToList();
 
         /// <summary>
-        /// The systems reacting to a [Watched] component's marker that take this kind of change.
-        /// The marker is set on add and remove alike, but a group leaving the component out
-        /// (NoneOf) takes the entity only once it is gone, and one requiring it only while it is
-        /// there: the four systems reacting to UnpaidChanged on a 2000-file project all leave
-        /// Unpaid out, and a factory adding Unpaid to new furniture reached none of them. The graph
-        /// keeps no group, so a system with a second group is skipped too; the answer counts them.
+        /// The systems reacting to a [Watched] component's marker that take this change. The
+        /// marker is set on add and remove alike, but a group leaving the component out (NoneOf)
+        /// takes the entity only once it is gone, and one requiring it only while it is there: the
+        /// four systems reacting to UnpaidChanged on a 2000-file project all leave Unpaid out, and
+        /// a factory adding Unpaid to new furniture reached none of them. The graph keeps no group,
+        /// so a system with a second group is skipped too; the answer counts them (Skipped).
+        ///
+        /// Nor does a system whose group requires what the written entity never gets: furniture
+        /// is never a cat, so the cat animation reacting to MovingChanged never sees the furniture
+        /// factory clear Moving. The build works that out (graph.json `unseen_by`, on the write);
+        /// a reactor is left out when every one of <paramref name="writes"/> says so (Unseen).
         /// </summary>
-        (List<GraphNode> Reacting, int Skipped) Reactors(GraphNode component, IReadOnlyList<string> relations)
+        (List<GraphNode> Reacting, int Skipped, List<FlowUnseen> Unseen) Reactors(GraphNode component, IReadOnlyList<string> relations,
+            IReadOnlyList<GraphEdge> writes)
         {
             var all = In(component.Id)
                 .Where(e => e.Relation == Relation.Reacts)
@@ -485,9 +505,37 @@ namespace Entitas.Graph.Output
                 .ToList();
             var addOnly = relations.Count == 1 && relations[0] == Relation.Creates;
             var removeOnly = relations.Count == 1 && relations[0] == Relation.Removes;
-            var reacting = all.Where(n => !(addOnly && Filters(n, component)) && !(removeOnly && Requires(n, component))).ToList();
-            return (reacting, all.Count - reacting.Count);
+            var taking = all.Where(n => !(addOnly && Filters(n, component)) && !(removeOnly && Requires(n, component))).ToList();
+
+            var unseen = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (writes.Count > 0 && writes.All(w => w.UnseenBy.Count > 0))
+            {
+                foreach (var u in writes[0].UnseenBy)
+                    if (writes.All(w => w.UnseenBy.Any(x => x.System == u.System)))
+                        unseen[u.System] = u.Needs;
+            }
+
+            var reacting = taking.Where(n => !unseen.ContainsKey(n.Id)).ToList();
+            var missed = taking.Where(n => unseen.ContainsKey(n.Id))
+                .Select(n => new FlowUnseen(n, _graph.Node(unseen[n.Id]) is { } needs ? needs.Label : unseen[n.Id]))
+                .ToList();
+            return (reacting, all.Count - taking.Count, missed);
         }
+
+        /// <summary>
+        /// What else a reacting system takes: the markers of the other [Watched] components it
+        /// reacts to. A system that never sees this change may start on another one — the cooking
+        /// animation misses the factory's CookingChanged and plays once the view adds
+        /// ProductStandAnimator — so "never sees it" alone read like a bug where it is none.
+        /// </summary>
+        IReadOnlyList<GraphNode> OtherTriggers(GraphNode system, GraphNode component) => Out(system.Id)
+            .Where(e => e.Relation == Relation.Reacts && e.Target != component.Id)
+            .OrderBy(e => e.Confidence == Confidence.Extracted ? 0 : 1)
+            .ThenBy(e => e.SourceFile, StringComparer.Ordinal)
+            .ThenBy(e => e.Line)
+            .Select(e => Node(e.Target))
+            .Distinct()
+            .ToList();
 
         /// <summary>
         /// A hub (Id, Event, Ready, a position) is written next to nearly everything; following it
@@ -514,10 +562,11 @@ namespace Entitas.Graph.Output
         /// marker that take this kind of change (<see cref="Reactors"/>). Generated systems are
         /// endings, not takers; so is the producer itself.
         /// </summary>
-        (List<FlowTaker> Takers, int Skipped) Takers(GraphNode component, HandOff kind, IReadOnlyList<string> relations, GraphNode? producer)
+        (List<FlowTaker> Takers, int Skipped, List<FlowUnseen> Unseen) Takers(GraphNode component, HandOff kind, IReadOnlyList<string> relations,
+            GraphNode? producer, IReadOnlyList<GraphEdge> writes)
         {
             var reads = (kind & (HandOff.Request | HandOff.Event | HandOff.Transient | HandOff.State)) != 0;
-            var (reactors, skipped) = kind.HasFlag(HandOff.Watched) ? Reactors(component, relations) : (new List<GraphNode>(), 0);
+            var (reactors, skipped, unseen) = kind.HasFlag(HandOff.Watched) ? Reactors(component, relations, writes) : (new List<GraphNode>(), 0, new List<FlowUnseen>());
             var reacting = new HashSet<string>(reactors.Select(r => r.Id), StringComparer.Ordinal);
             var incoming = In(component.Id);
             var takers = incoming
@@ -538,7 +587,7 @@ namespace Entitas.Graph.Output
                     return new FlowTaker(n, edges, reacts);
                 })
                 .ToList();
-            return (takers, skipped);
+            return (takers, skipped, unseen.Where(u => u.System.Id != producer?.Id).ToList());
         }
 
         /// <summary>
@@ -925,6 +974,9 @@ namespace Entitas.Graph.Output
         /// <summary>Systems reacting to the marker that this kind of change does not reach (<see cref="FlowWalk"/>'s Reactors).</summary>
         public int Skipped;
 
+        /// <summary>Systems reacting to the marker whose group the written entity can never match.</summary>
+        public readonly List<FlowUnseen> Unseen = new List<FlowUnseen>();
+
         public readonly List<FlowTake> Takers = new List<FlowTake>();
         public readonly List<FlowEnd> Ends = new List<FlowEnd>();
 
@@ -956,13 +1008,18 @@ namespace Entitas.Graph.Output
         /// <summary>Reacts to the [Watched] marker rather than reading the component.</summary>
         public readonly bool Marker;
 
-        public FlowTake(FlowStep step, IReadOnlyList<GraphEdge> edges, FlowFrame frame, IReadOnlyList<(string, FlowFrame)> elsewhere, bool marker)
+        /// <summary>For a reaction: the other [Watched] components the system reacts to.</summary>
+        public readonly IReadOnlyList<GraphNode> OtherTriggers;
+
+        public FlowTake(FlowStep step, IReadOnlyList<GraphEdge> edges, FlowFrame frame, IReadOnlyList<(string, FlowFrame)> elsewhere, bool marker,
+            IReadOnlyList<GraphNode> otherTriggers)
         {
             Step = step;
             Edges = edges;
             Frame = frame;
             Elsewhere = elsewhere;
             Marker = marker;
+            OtherTriggers = otherTriggers;
         }
     }
 
@@ -990,12 +1047,29 @@ namespace Entitas.Graph.Output
         /// <summary>For a [Watched] component: systems reacting to it that take only the other kind of change.</summary>
         public readonly int Skipped;
 
-        public FlowWrite(GraphNode component, IReadOnlyList<GraphEdge> edges, bool hub, int skipped)
+        /// <summary>For a [Watched] component: systems reacting to it whose group the written entity can never match.</summary>
+        public readonly IReadOnlyList<FlowUnseen> Unseen;
+
+        public FlowWrite(GraphNode component, IReadOnlyList<GraphEdge> edges, bool hub, int skipped = 0, IReadOnlyList<FlowUnseen>? unseen = null)
         {
             Component = component;
             Edges = edges;
             Hub = hub;
             Skipped = skipped;
+            Unseen = unseen ?? Array.Empty<FlowUnseen>();
+        }
+    }
+
+    /// <summary>A system reacting to a [Watched] component that never sees this write, and a component its group needs that the entity never gets.</summary>
+    internal sealed class FlowUnseen
+    {
+        public readonly GraphNode System;
+        public readonly string Needs;
+
+        public FlowUnseen(GraphNode system, string needs)
+        {
+            System = system;
+            Needs = needs;
         }
     }
 

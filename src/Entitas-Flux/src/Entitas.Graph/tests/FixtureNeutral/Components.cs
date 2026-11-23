@@ -38,5 +38,9 @@ namespace Harbor
     [Port] public sealed class Inspected : IComponent { }
     [Port] public sealed class Expedited : IComponent { }
 
+    // Fuel depots: built by a factory, never a ship; a gauge is fitted later, not built in.
+    [Port] public sealed class Depot : IComponent { }
+    [Port, Watched] public sealed class Gauge : IComponent { public int Value; }
+
     [Signal, Unique] public sealed class Clock : IComponent { public int Value; }
 }

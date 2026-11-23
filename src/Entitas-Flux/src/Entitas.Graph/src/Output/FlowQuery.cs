@@ -14,12 +14,22 @@ namespace Entitas.Graph.Output
         {
             Full,
 
-            /// <summary>The takers of a hand-off that hand nothing on share one line.</summary>
+            /// <summary>Without the writes that are not followed ("also, not followed") and the counts of reactors a change misses.</summary>
+            NoAlso,
+
+            /// <summary>Also, the takers of a hand-off that hand nothing on share one line.</summary>
             FoldedEnds,
 
-            /// <summary>Also without the writes that are not followed and the readers outside the systems.</summary>
+            /// <summary>Also without calls that hand nothing on and the readers outside the systems.</summary>
             Bare
         }
+
+        /// <summary>
+        /// A flow is folded once it passes this share of the budget, not only once it is over: one
+        /// more branch on a flow at 1 990 of 2 000 tokens cut its last endings, and the cut falls
+        /// on whatever comes last, which is often the main chain's end.
+        /// </summary>
+        const int FlowHeadroomPercent = 95;
 
         /// <summary>
         /// What happens after a component is created, or after a system runs, in one answer: the
@@ -38,12 +48,14 @@ namespace Entitas.Graph.Output
             var walk = FlowWalk.Run(_graph, start, Math.Max(1, Math.Min(MaxFlowDepth, depth)), _hubThreshold);
             var head = FlowHead(walk, NamesMarker(name, start));
 
-            // Whole when it fits; otherwise with the endings folded, then without what is not
-            // followed, so what is cut last is the main chain. Below that the budget cuts as usual.
+            // Whole when it fits with room to spare; otherwise first without what is not followed —
+            // side notes, the least of the answer — then with the endings folded, then bare, so
+            // what is cut last is the main chain. Below that the budget cuts as usual.
             var entries = new FlowText(this, walk, FlowDetail.Full).Entries;
-            foreach (var detail in new[] { FlowDetail.FoldedEnds, FlowDetail.Bare })
+            foreach (var detail in new[] { FlowDetail.NoAlso, FlowDetail.FoldedEnds, FlowDetail.Bare })
             {
-                if (!Capped || head.Sum(l => l.Length + Environment.NewLine.Length) + entries.Sum(e => e.Length) <= _budget * CharsPerToken)
+                if (!Capped || head.Sum(l => l.Length + Environment.NewLine.Length) + entries.Sum(e => e.Length) <=
+                    _budget * CharsPerToken * FlowHeadroomPercent / 100)
                     break;
                 entries = new FlowText(this, walk, detail).Entries;
             }
@@ -235,7 +247,7 @@ namespace Entitas.Graph.Output
                 foreach (var link in step.HandOffs)
                     Link(link, indent, string.Empty, null);
 
-                if (_detail != FlowDetail.Bare && step.NotFollowed.Count > 0)
+                if (_detail == FlowDetail.Full && step.NotFollowed.Count > 0)
                     Line($"{indent}also, not followed: {NotFollowed(step.NotFollowed)}");
 
                 // After the system's own writes, what it writes by calling a factory or a helper:
@@ -310,7 +322,7 @@ namespace Entitas.Graph.Output
                 var ending = new List<FlowTake>();
                 foreach (var take in link.Takers)
                 {
-                    if (_detail != FlowDetail.Full && (take.Frame.Never || take.Step.Expanded && !take.Step.HandsOn))
+                    if (_detail >= FlowDetail.FoldedEnds && (take.Frame.Never || take.Step.Expanded && !take.Step.HandsOn))
                     {
                         ending.Add(take);
                         continue;
@@ -329,6 +341,11 @@ namespace Entitas.Graph.Output
                     Line(link.Relations.Contains(Relation.Creates)
                         ? $"{indent}+{link.Skipped} reacting to {MarkerName(link.Component)} take only its removal (their groups leave {link.Component.Label} out)"
                         : $"{indent}+{link.Skipped} reacting to {MarkerName(link.Component)} take only its add (their groups require {link.Component.Label})");
+
+                // Named by what they need, not by name: the reader looking for one learns why it
+                // is missing, and the systems themselves are no part of this flow.
+                if (_detail == FlowDetail.Full && link.Unseen.Count > 0)
+                    Line($"{indent}+{link.Unseen.Count} reacting to {MarkerName(link.Component)} need {Needs(link.Unseen)}, which this entity never gets");
 
                 if (ending.Count == 0)
                     return;
@@ -382,19 +399,40 @@ namespace Entitas.Graph.Output
             /// <summary>
             /// "same frame", "next frame (waits for Ready from MarkEventsReadySystem #2)", "frame
             /// unknown (why)", "never sees it (why)" — and what differs under the start's other roots.
+            /// A reaction never seen names what else the system reacts to, once.
             /// </summary>
             string Frame(FlowTake take, bool spell = true)
             {
-                var text = Words(take.Frame, spell);
+                var others = take.OtherTriggers.Count == 0 ? null : OtherTriggers(take.OtherTriggers);
+                var text = Words(take.Frame, spell, take.Frame.Never ? others : null);
+                if (take.Frame.Never)
+                    others = null;
                 foreach (var (root, frame) in take.Elsewhere)
-                    text += $" ({_q.Label(root)}: {Words(frame, false)})";
+                {
+                    text += $" ({_q.Label(root)}: {Words(frame, false, frame.Never ? others : null)})";
+                    if (frame.Never)
+                        others = null;
+                }
                 return text;
             }
 
-            string Words(FlowFrame frame, bool spell)
+            /// <summary>"other trigger: ProductStandAnimatorChanged", three named at most.</summary>
+            static string OtherTriggers(IReadOnlyList<GraphNode> components)
+            {
+                const int shown = 3;
+                return (components.Count == 1 ? "other trigger: " : "other triggers: ") +
+                       string.Join(", ", components.Take(shown).Select(MarkerName)) +
+                       (components.Count > shown ? $", +{components.Count - shown} more" : string.Empty);
+            }
+
+            /// <summary>"Cat", "Cat or Plant": what the reactors a write misses need.</summary>
+            static string Needs(IEnumerable<FlowUnseen> unseen) =>
+                string.Join(" or ", unseen.Select(u => u.Needs).Distinct().OrderBy(n => n, StringComparer.Ordinal));
+
+            string Words(FlowFrame frame, bool spell, string? others = null)
             {
                 if (frame.Never)
-                    return $"never sees it ({frame.Why})";
+                    return $"never sees it ({frame.Why}{(others == null ? string.Empty : "; " + others)})";
                 if (frame.Frames == null)
                     return $"frame unknown ({frame.Why})";
                 var words = frame.Frames == 0 ? "same frame" : frame.Frames == 1 ? "next frame" : $"{frame.Frames} frames later";
@@ -452,11 +490,21 @@ namespace Entitas.Graph.Output
                         var names = g.OrderBy(w => w.Edges.Any(e => e.Confidence == Confidence.Extracted) ? 0 : 1)
                             .ThenBy(w => w.Component.Label, StringComparer.Ordinal)
                             .Select(w => w.Component.Label + (w.Edges.Any(e => e.Confidence == Confidence.Extracted) ? string.Empty : "*") +
-                                         (w.Hub ? " (hub)" : string.Empty) +
-                                         (w.Skipped > 0 ? $" (its {Count(w.Skipped, "reactor")} take{(w.Skipped == 1 ? "s" : string.Empty)} the other change)" : string.Empty))
+                                         (w.Hub ? " (hub)" : string.Empty) + Missed(w))
                             .ToList();
                         return $"{g.Key} {string.Join(", ", names.Take(shown))}{(names.Count > shown ? $", +{names.Count - shown} more" : string.Empty)}";
                     }));
+            }
+
+            /// <summary>Why the reactors of a [Watched] write listed, not followed, do not take it: " (its 4 reactors take the other change)".</summary>
+            static string Missed(FlowWrite write)
+            {
+                var why = new List<string>();
+                if (write.Skipped > 0)
+                    why.Add($"{Count(write.Skipped, "reactor")} take{(write.Skipped == 1 ? "s" : string.Empty)} the other change");
+                if (write.Unseen.Count > 0)
+                    why.Add($"{Count(write.Unseen.Count, "reactor")} need{(write.Unseen.Count == 1 ? "s" : string.Empty)} {Needs(write.Unseen)}, which it never gets");
+                return why.Count == 0 ? string.Empty : $" (its {string.Join("; ", why)})";
             }
         }
     }

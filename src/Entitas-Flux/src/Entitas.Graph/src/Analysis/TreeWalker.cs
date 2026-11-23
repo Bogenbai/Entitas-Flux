@@ -26,6 +26,7 @@ namespace Entitas.Graph.Analysis
             new Dictionary<(IMethodSymbol, int), (ISymbol?, string?)>();
         readonly Dictionary<ForEachStatementSyntax, bool> _steady = new Dictionary<ForEachStatementSyntax, bool>();
         readonly Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?> _enumMembers = new Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?>();
+        readonly EntityOrigins _origins;
 
         public TreeWalker(BuildContext context, SyntaxTree tree)
         {
@@ -34,6 +35,7 @@ namespace Entitas.Graph.Analysis
             _generated = context.IsGenerated(tree);
             _model = context.Full.GetSemanticModel(tree);
             _file = context.RelativePath(tree.FilePath);
+            _origins = new EntityOrigins(context, _model, _file, e => GroupOf(e));
         }
 
         public TreeResult? Walk()
@@ -71,7 +73,7 @@ namespace Entitas.Graph.Analysis
             }
 
             return _result.Accesses.Count + _result.Destroys.Count + _result.Calls.Count + _result.Registrations.Count + _result.GroupUses.Count +
-                   _result.CalledOutsideMethods.Count + _result.Written.Count > 0 ? _result : null;
+                   _result.CalledOutsideMethods.Count + _result.Written.Count + _result.UntracedWrites > 0 ? _result : null;
         }
 
         // -- fields written after construction ----------------------------------------------
@@ -242,6 +244,7 @@ namespace Entitas.Graph.Analysis
             if (access.Relation == Relation.Creates || access.Relation == Relation.Removes)
             {
                 TraceEntity(access, entity ?? Receiver(name));
+                access.Origin = _origins.Of(entity ?? Receiver(name));
                 access.Condition = ConditionOf(name);
             }
 
@@ -1148,6 +1151,7 @@ namespace Entitas.Graph.Analysis
 
             if (_model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method)
                 return;
+            _origins.Visit(invocation, method, _result);
 
             if (name == "Destroy" && invocation.ArgumentList.Arguments.Count == 0 && IsEntity(method.ContainingType))
             {
