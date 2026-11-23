@@ -126,6 +126,20 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void The_structure_finds_the_requests_and_events_the_names_say_except_one_nobody_handles()
+        {
+            // By name and by structure alike; OrphanRequest is never read, so never consumed: only
+            // its name says it is a request. Event (the marker) and Destructed carry and doom, and
+            // are no messages; Ready is no message because a Ready entity alone lives on.
+            Graph.Nodes.Where(n => n.Role != null && n.Role != n.Message).Select(n => n.Label).Should().Equal("OrphanRequest");
+            Graph.Nodes.Where(n => n.Message != null && n.Role == null).Should().BeEmpty();
+            Graph.Nodes.Single(n => n.Label == "PlaceFurnitureRequest").ConsumedBy.Select(Label).Should().Equal("PlaceFurnitureByRequestSystem");
+            Graph.Nodes.Single(n => n.Label == "FurniturePlacedEvent").CarriedBy.Select(Label).Should().Equal("Event");
+            foreach (var plumbing in new[] { "Event", "Ready", "Destructed", "JustSpawned", "ShopItem" })
+                Graph.Nodes.Single(n => n.Label == plumbing).Message.Should().BeNull(plumbing + " is no message");
+        }
+
+        [Fact]
         public void Generated_cleanup_systems_are_part_of_the_graph()
         {
             var cleanup = Graph.Nodes.Single(n => n.Label == "RemoveTappedGameSystem");
@@ -431,6 +445,82 @@ namespace Entitas.Graph.Tests
             Condition("G").Should().Be("_flag", "wherever the condition stands among the arguments");
         }
 
+        [Fact]
+        public void A_helper_s_body_says_which_argument_decides_whatever_its_parameters_are_called()
+        {
+            var graph = Snippet(@"
+                public static class Helpers
+                {
+                    public static readonly List<Action> Later = new List<Action>();
+
+                    public static T Gate<T>(this T self, Action<T> apply, bool open) { if (open) apply(self); return self; }
+                    public static T Skip<T>(this T self, Action<T> apply, bool skip) { if (skip) return self; apply(self); return self; }
+                    public static T Maybe<T>(this T self, Action<T> apply, bool when) { apply?.Invoke(self); return self; }
+                    public static T Both<T>(this T self, Action<T> apply, bool a, bool b) { if (a && !b) apply.Invoke(self); return self; }
+                    public static T Keep<T>(this T self, Action<T> apply, bool when) { if (when) Later.Add(() => apply(self)); return self; }
+                    public static T Pick<T>(this T self, Func<T, T> apply, bool on) => on ? apply(self) : self;
+                }
+
+                public sealed class HelperSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly bool _flag, _other;
+
+                    public void Execute()
+                    {
+                        _e.Gate(x => x.isB = true, _flag);
+                        _e.Skip(x => x.isC = true, skip: _flag);
+                        _e.Maybe(x => x.isD = true, when: _flag);
+                        _e.Both(x => x.isE = true, _flag, _other);
+                        _e.Keep(x => x.isF = true, when: _flag);
+                        _e.Pick(x => { x.isG = true; return x; }, _flag);
+                    }
+                }");
+
+            string? Condition(string component) => ConditionIn(graph, "HelperSystem", Relation.Creates, component);
+
+            Condition("B").Should().Be("_flag", "Gate runs it if (open)");
+            Condition("C").Should().Be("!_flag", "Skip returns early if (skip)");
+            Condition("D").Should().BeNull("Maybe runs it whatever its `when` says");
+            Condition("E").Should().Be("_flag && !_other", "if (a && !b): both arguments decide, in their order");
+            Condition("F").Should().BeNull("Keep hands it to a list: when it runs is not known");
+            Condition("G").Should().Be("_flag", "on ? apply(self) : self");
+        }
+
+        [Fact]
+        public void A_helper_from_a_dll_is_known_by_its_parameter_names_only()
+        {
+            var library = CSharpCompilation.Create("Helpers", new[]
+                {
+                    CSharpSyntaxTree.ParseText(@"
+                        using System;
+                        public static class DllHelpers
+                        {
+                            public static T With<T>(this T self, Action<T> apply, bool when) { if (when) apply(self); return self; }
+                            public static T Gate<T>(this T self, Action<T> apply, bool open) { if (open) apply(self); return self; }
+                        }")
+                },
+                FixtureProject.References(), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            using var image = new System.IO.MemoryStream();
+            library.Emit(image).Success.Should().BeTrue();
+
+            var graph = Snippet(@"
+                public sealed class DllSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly bool _flag;
+
+                    public void Execute()
+                    {
+                        _e.With(x => x.isB = true, when: _flag);
+                        _e.Gate(x => x.isC = true, open: _flag);
+                    }
+                }", MetadataReference.CreateFromImage(image.ToArray()));
+
+            ConditionIn(graph, "DllSystem", Relation.Creates, "B").Should().Be("_flag", "`when` is one of the names a condition goes by");
+            ConditionIn(graph, "DllSystem", Relation.Creates, "C").Should().BeNull("no body to read, and `open` is no such name");
+        }
+
         static string? ConditionIn(EcsGraph graph, string system, string relation, string component) =>
             graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;
 
@@ -439,10 +529,11 @@ namespace Entitas.Graph.Tests
         /// <paramref name="code"/> — all in the global namespace, which keeps the generated names
         /// short (isB, not isSB) without any generation option.
         /// </summary>
-        static EcsGraph Snippet(string code)
+        static EcsGraph Snippet(string code, params MetadataReference[] references)
         {
             var source = @"
                 using System;
+                using System.Collections.Generic;
                 using Entitas;
                 using Entitas.CodeGeneration.Attributes;
 
@@ -453,7 +544,7 @@ namespace Entitas.Graph.Tests
                 public enum Kind { One, Two }
                 " + code;
             var compilation = CSharpCompilation.Create("Snippet", new[] { CSharpSyntaxTree.ParseText(source, path: "/snippet/Code.cs") },
-                FixtureProject.References(), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                FixtureProject.References().Concat(references), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
             CSharpGeneratorDriver.Create(new EntitasIncrementalGenerator())
                 .RunGeneratorsAndUpdateCompilation(compilation, out var generated, out _);
             generated.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()).Should().BeEmpty();

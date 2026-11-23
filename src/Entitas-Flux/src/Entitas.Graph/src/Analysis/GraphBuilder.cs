@@ -283,6 +283,17 @@ namespace Entitas.Graph.Analysis
                     edge.OnlyWhile = guard;
             }
 
+            // Requests and events by what happens to their entities — loops, conditions and
+            // creation sites exist only here, so the conclusion goes into the graph for the queries.
+            var messages = Messages.Classify(context, accesses, destroys, groups);
+            foreach (var node in graph.Nodes)
+            {
+                if (node.Kind != NodeKind.Component || !messages.TryGetValue(node.Label, out var message))
+                    continue;
+                node.Message = message.Kind;
+                (message.Kind == Messages.Request ? node.ConsumedBy : node.CarriedBy).AddRange(message.By);
+            }
+
             graph.Edges.AddRange(edges.Values);
             graph.Nodes.Sort((a, b) => string.CompareOrdinal(a.Id, b.Id));
             FeatureTree.Place(graph);
@@ -856,10 +867,16 @@ namespace Entitas.Graph.Analysis
         public string? Loop;
 
         /// <summary>
-        /// For removals in a foreach of the accessor itself (not through a helper): the removal
-        /// runs on every entity the loop visits — no condition, no jump before it.
+        /// For writes in a foreach of the accessor itself (not through a helper): the write runs
+        /// on every entity the loop visits — no condition, no jump before it.
         /// </summary>
         public bool EveryEntity;
+
+        /// <summary>That foreach runs whenever its system does (TreeWalker.IsSteady): what it does to every entity reaches every entity of its group.</summary>
+        public bool Steady;
+
+        /// <summary>A flag assigned something other than a constant (isX = condition): it may set the flag or clear it.</summary>
+        public bool MayClear;
 
         /// <summary>For matcher reads: the field or local the group is assigned to, and the clause.</summary>
         public ISymbol? MatcherGroup;
@@ -899,6 +916,12 @@ namespace Entitas.Graph.Analysis
         public TypeInfo Accessor = null!;
         public IMethodSymbol? Method;
         public ISymbol? Group;
+
+        /// <summary>As for <see cref="Access"/>: the foreach the destroyed entity comes from, whether every entity it visits is destroyed, and whether it runs whenever its system does.</summary>
+        public string? Loop;
+        public bool EveryEntity;
+        public bool Steady;
+
         public string File = string.Empty;
         public int Line;
         public Condition? Condition;

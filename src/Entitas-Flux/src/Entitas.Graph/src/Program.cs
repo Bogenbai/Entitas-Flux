@@ -126,6 +126,7 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  -o, --out <dir>             Output folder (default: <root>/entitas-graph-out).");
             Console.Error.WriteLine("      --request-suffix <s>    Name suffix of request components (default: Request).");
             Console.Error.WriteLine("      --event-suffix <s>      Name suffix of event components (default: Event).");
+            Console.Error.WriteLine("                              Components no suffix names are recognised by structure.");
             Console.Error.WriteLine("      --budget <tokens>       Cap each answer at about this many tokens (default: 2000; 0 = no cap).");
             Console.Error.WriteLine("      --limit <n>             Seed nodes for query (default: 5).");
             Console.Error.WriteLine("      --depth <n>             Steps query walks from the seeds (1-4, default: 2);");

@@ -44,6 +44,7 @@ namespace Entitas.Graph.Output
             sb.AppendLine($"- {Percent(extracted, graph.Edges.Count)} written in the type itself (EXTRACTED), {Percent(graph.Edges.Count - extracted, graph.Edges.Count)} through a query, factory or entity shape (INFERRED)");
             foreach (var root in features.Where(f => f.Root).OrderBy(f => f.Label, StringComparer.Ordinal))
                 sb.AppendLine($"- root feature **{root.Label}** runs {systems.Count(s => s.Placements.Any(p => p.Root == root.Id))} systems");
+            sb.AppendLine($"- messages: {Messages(components, "request", graph.Metadata.RequestSuffix)}; {Messages(components, "event", graph.Metadata.EventSuffix)}");
             sb.AppendLine();
 
             sb.AppendLine("## Most connected components");
@@ -67,22 +68,26 @@ namespace Entitas.Graph.Output
                 "Something waits for them, no code makes them — created from data (component lists in prefabs or configs added through AddComponent at runtime), in another assembly, or dead.",
                 components.Where(c => Has(c, Relation.Reads, Relation.Reacts) && !Has(c, Relation.Creates) && !c.Attributes.Contains("Unique")).Select(c => Line(c, In(c), Relation.Reads, "read by", graph)));
 
+            // These four go by the naming convention, not by structure: a request without a
+            // handler is never consumed, and an event without a consumer is read by nobody, so
+            // what happens to their entities cannot tell them from state. Only a name can.
             var requestSuffix = graph.Metadata.RequestSuffix;
             var eventSuffix = graph.Metadata.EventSuffix;
             Section(sb, itemsPerSection, $"Requests without a handler (`*{requestSuffix}`)",
-                "Created, but no system picks them up.",
+                "Created, but no system picks them up. These four sections go by name (`--request-suffix`, `--event-suffix`), not by structure: " +
+                "a request nobody handles is never consumed and an event nobody reads is read by nobody, so only a name tells them from any other component.",
                 components.Where(c => c.Role == "request" && Has(c, Relation.Creates) && !Has(c, Relation.Reads)).Select(c => Line(c, In(c), Relation.Creates, "created by", graph)));
 
             Section(sb, itemsPerSection, $"Requests nobody destroys or removes (`*{requestSuffix}`)",
-                "Handled, but neither destroyed nor removed — a handler should get rid of the request it processed, or it is processed again next frame.",
+                "Handled, but neither destroyed nor removed — a handler should get rid of the request it processed, or it is processed again next frame. By name (`--request-suffix`).",
                 components.Where(c => c.Role == "request" && Has(c, Relation.Reads) && !Has(c, Relation.Destroys, Relation.Removes)).Select(c => Line(c, In(c), Relation.Reads, "handled by", graph)));
 
             Section(sb, itemsPerSection, $"Events without a consumer (`*{eventSuffix}`)",
-                "Created, but nothing reads them.",
+                "Created, but nothing reads them. By name (`--event-suffix`).",
                 components.Where(c => c.Role == "event" && Has(c, Relation.Creates) && !Has(c, Relation.Reads, Relation.Reacts)).Select(c => Line(c, In(c), Relation.Creates, "created by", graph)));
 
             Section(sb, itemsPerSection, $"Events destroyed by hand (`*{eventSuffix}`)",
-                "A system destroys entities of a group that names the event itself; events are usually destroyed once, generically, after everyone had a chance to read them.",
+                "A system destroys entities of a group that names the event itself; events are usually destroyed once, generically, after everyone had a chance to read them. By name (`--event-suffix`).",
                 components.Where(c => c.Role == "event")
                     .SelectMany(c => In(c).Where(e => e.Relation == Relation.Destroys && e.Confidence == Confidence.Extracted)
                         .Select(e => $"- `{c.Label}` destroyed by `{Name(e.Source)}` at {e.SourceFile}:{e.Line}")));
@@ -169,14 +174,14 @@ namespace Entitas.Graph.Output
 
             Section(sb, itemsPerSection, "Flags set once on purpose? (the setter filters them out with NoneOf, or only sees entities while they carry a transient component)",
                 "Never cleared either, but every system setting them on existing entities either excludes them from its own group with NoneOf, " +
-                "or loops over a group that requires a transient component — one with [Cleanup], or one a system takes off every entity holding it (JustCreated) — " +
+                "or loops over a group that requires a transient component — one with [Cleanup], or one a system takes off every entity holding it, such as a one-frame \"just created\" marker — " +
                 "so each entity is marked once and then left alone: the usual shape of a \"done\" marker. Usually deliberate; " +
                 "worth a look only if something expects the flag to go away again.",
                 neverCleared.Where(SetOnce).Select(c => Line(c, In(c), Relation.Creates, "set by", graph, OnlyWhileReason(c))));
 
             Section(sb, itemsPerSection, "Systems not registered in any feature",
                 "They exist but nothing adds them, so they never run (or are added outside a feature). A generated feature listed here " +
-                "(GameCleanupSystems, GameWatchedCleanupSystems, GameEventSystems) means its [Cleanup], [Watched] or [Event] systems never run.",
+                "(`<Context>CleanupSystems`, `<Context>WatchedCleanupSystems`, `<Context>EventSystems`) means its [Cleanup], [Watched] or [Event] systems never run.",
                 systems.Where(s => s.RegisteredIn.Count == 0 && !s.Generated)
                     .Concat(features.Where(f => f.Generated && f.RegisteredIn.Count == 0))
                     .OrderBy(s => s.Label)
@@ -219,6 +224,19 @@ namespace Entitas.Graph.Output
 
         static int Distinct(IEnumerable<GraphEdge> edges, params string[] relations) =>
             edges.Where(e => relations.Contains(e.Relation)).Select(e => e.Source).Distinct().Count();
+
+        /// <summary>
+        /// "88 requests by name (`*Request`), 72 by structure, 70 of them both": how far the
+        /// project's naming and what its entities go through agree. The commands follow the name
+        /// where it says, the structure elsewhere; a gap either way is worth knowing about.
+        /// </summary>
+        static string Messages(IReadOnlyCollection<GraphNode> components, string kind, string suffix)
+        {
+            var named = components.Count(c => c.Role == kind);
+            var found = components.Count(c => c.Message == kind);
+            var both = components.Count(c => c.Role == kind && c.Message == kind);
+            return $"{named} {kind}s by name (`*{suffix}`), {found} by structure, {both} of them both";
+        }
 
         static string Percent(int part, int total) => total == 0 ? "0%" : $"{100 * part / total}%";
     }

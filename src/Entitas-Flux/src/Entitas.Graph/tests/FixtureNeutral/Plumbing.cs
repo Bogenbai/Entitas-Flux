@@ -1,0 +1,69 @@
+using System;
+
+namespace Harbor
+{
+    /// <summary>Where entities come from: a blank one, or a pulse — an entity the sweeper takes away once it is armed.</summary>
+    public static class Make
+    {
+        static Contexts _contexts;
+
+        public static void Use(Contexts contexts) => _contexts = contexts;
+
+        public static PortEntity Blank() => _contexts.port.CreateEntity();
+
+        public static PortEntity Pulse()
+        {
+            PortEntity pulse = _contexts.port.CreateEntity();
+            pulse.isPulse = true;
+            return pulse;
+        }
+    }
+
+    /// <summary>
+    /// Helpers that run what they are handed or not. Their parameters are named `gate` and
+    /// `skip`: whether the lambda runs is in their bodies, not in their names.
+    /// </summary>
+    public static class Fluent
+    {
+        public static T Apply<T>(this T self, Action<T> apply, bool gate)
+        {
+            if (gate)
+                apply(self);
+            return self;
+        }
+
+        public static T Unless<T>(this T self, Action<T> apply, bool skip)
+        {
+            if (skip)
+                return self;
+            apply(self);
+            return self;
+        }
+    }
+
+    /// <summary>A factory: a ship is built with everything it carries.</summary>
+    public sealed class ShipFactory
+    {
+        public PortEntity Launch(int id)
+        {
+            PortEntity ship = Make.Blank();
+            ship.isShip = true;
+            ship.AddShipId(id);
+            ship.AddFuel(50);
+            ship.AddCargo(id * 40);
+            ship.AddHull(3);
+            ship.isFresh = true;
+            return ship;
+        }
+    }
+
+    /// <summary>The harbour master's panel: orders come from the UI as well as from systems.</summary>
+    public sealed class DockingPanel
+    {
+        public void OnDockPressed(int shipId) => Make.Blank().AddDockingOrder(shipId);
+
+        public void OnSellPressed(int shipId) => Make.Blank().AddSaleOrder(shipId);
+
+        public void OnScrapFleetPressed() => Make.Blank().isScrapFleetOrder = true;
+    }
+}

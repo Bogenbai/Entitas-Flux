@@ -327,7 +327,7 @@ namespace Entitas.Graph.Output
             {
                 head.Add($"  contexts: {string.Join(", ", node.Contexts)}; {(node.Flag ? "flag" : "data: " + string.Join(", ", node.Fields))}");
                 if (node.Attributes.Count > 0) head.Add($"  attributes: {string.Join(", ", node.Attributes)}");
-                if (node.Role != null) head.Add($"  role: {node.Role} (by name)");
+                if (RoleLine(node) is { } role) head.Add(role);
             }
             if (node.Interfaces.Count > 0) head.Add($"  runs: {string.Join(", ", node.Interfaces)}");
             foreach (var registration in node.RegisteredIn)
@@ -344,6 +344,24 @@ namespace Entitas.Graph.Output
         }
 
         /// <summary>
+        /// Where a component's role comes from: its name (the suffix convention), what happens to
+        /// its entities (who consumes it, what carries it), or both — and which one the commands
+        /// go by when they differ (the name).
+        /// </summary>
+        string? RoleLine(GraphNode node)
+        {
+            if (node.Message == null)
+                return node.Role == null ? null : $"  role: {node.Role} (by name)";
+
+            var why = node.Message == "request"
+                ? "consumed by " + string.Join(", ", node.ConsumedBy.Select(Label))
+                : "carried by " + string.Join(", ", node.CarriedBy.Select(Label));
+            return node.Role == null ? $"  role: {node.Message} (by structure: {why})"
+                : node.Role == node.Message ? $"  role: {node.Role} (by name; by structure too: {why})"
+                : $"  role: {node.Role} (by name; by structure a {node.Message}: {why})";
+        }
+
+        /// <summary>
         /// For a system: who else reads the requests it handles. A request is usually one system's
         /// input, but not always: on a real project the floating "+coins" text came from a second
         /// reader of ChangeCurrencyRequest, and an assistant asking what the player sees from the
@@ -354,7 +372,7 @@ namespace Entitas.Graph.Output
             if (node.Kind != NodeKind.System) return;
 
             var requests = _graph.Outgoing(node.Id)
-                .Where(e => e.Relation == Relation.Reads && e.Confidence == Confidence.Extracted && _graph.Node(e.Target)?.Role == "request")
+                .Where(e => e.Relation == Relation.Reads && e.Confidence == Confidence.Extracted && _graph.Node(e.Target)?.MessageRole == "request")
                 .Select(e => e.Target)
                 .Distinct()
                 .OrderBy(Label, StringComparer.Ordinal)
@@ -825,7 +843,7 @@ namespace Entitas.Graph.Output
 
         /// <summary>The requests and events a system creates (two at most).</summary>
         List<string> HandOffs(GraphNode system) => _graph.Outgoing(system.Id)
-            .Where(e => e.Relation == Relation.Creates && _graph.Node(e.Target)?.Role != null)
+            .Where(e => e.Relation == Relation.Creates && _graph.Node(e.Target)?.MessageRole != null)
             .Select(e => Label(e.Target))
             .Distinct()
             .OrderBy(l => l, StringComparer.Ordinal)
@@ -880,7 +898,7 @@ namespace Entitas.Graph.Output
         {
             var parts = new List<string> { string.Join("/", node.Contexts), node.Flag ? "flag" : "data" };
             parts.AddRange(node.Attributes);
-            if (node.Role != null) parts.Add(node.Role);
+            if (node.MessageRole != null) parts.Add(node.MessageRole);
             return string.Join(", ", parts);
         }
 

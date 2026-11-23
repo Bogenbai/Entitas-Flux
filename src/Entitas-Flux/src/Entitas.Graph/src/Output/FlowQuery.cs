@@ -101,8 +101,8 @@ namespace Entitas.Graph.Output
             var taken = _graph.Outgoing(system.Id)
                 .Where(e => e.Relation is Relation.Reads or Relation.Reacts && e.Confidence == Confidence.Extracted)
                 .Select(e => (Node: _graph.Node(e.Target)!, e.Relation))
-                .Where(t => t.Relation == Relation.Reacts || t.Node.Role != null)
-                .Select(t => t.Relation == Relation.Reacts ? $"{MarkerName(t.Node)} ([Watched])" : $"{t.Node.Label} ({t.Node.Role})")
+                .Where(t => t.Relation == Relation.Reacts || t.Node.MessageRole != null)
+                .Select(t => t.Relation == Relation.Reacts ? $"{MarkerName(t.Node)} ([Watched])" : $"{t.Node.Label} ({t.Node.MessageRole})")
                 .Distinct()
                 .OrderBy(s => s, StringComparer.Ordinal)
                 .ToList();
@@ -294,7 +294,7 @@ namespace Entitas.Graph.Output
                         if (_detail == FlowDetail.Bare)
                             return $"{g.Key} {count}";
                         var names = g.OrderBy(w => followed.Contains(w.Component.Id) ? 0 : 1)
-                            .ThenBy(w => w.Component.Role != null || w.Component.Attributes.Contains("Watched") ? 0 : 1)
+                            .ThenBy(w => w.Component.MessageRole != null || w.Component.Attributes.Contains("Watched") ? 0 : 1)
                             .ThenBy(w => w.Hub ? 1 : 0)
                             .ThenBy(w => w.Component.Label, StringComparer.Ordinal)
                             .Select(w => w.Component.Label + (w.Hub ? " (hub)" : string.Empty))

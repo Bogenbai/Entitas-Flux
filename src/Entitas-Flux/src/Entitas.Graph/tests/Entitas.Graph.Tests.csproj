@@ -8,10 +8,12 @@
     <IsPublishable>false</IsPublishable>
   </PropertyGroup>
 
-  <!-- Fixture/ is a small Entitas project compiled by the tests, not part of the test assembly. -->
+  <!-- Fixture/ and FixtureNeutral/ are small Entitas projects compiled by the tests, not part of the test assembly. -->
   <ItemGroup>
     <Compile Remove="Fixture/**/*.cs" />
     <None Include="Fixture/**/*.cs" />
+    <Compile Remove="FixtureNeutral/**/*.cs" />
+    <None Include="FixtureNeutral/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>

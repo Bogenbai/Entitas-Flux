@@ -147,7 +147,7 @@ namespace Entitas.Graph.Output
 
         /// <summary>The reader reads the event and matches none of the words the event does not.</summary>
         static bool EchoesEvent(Index index, SubgraphNode reader, SubgraphNode @event) =>
-            @event.Node.Role == "event" &&
+            @event.Node.MessageRole == "event" &&
             (reader.MatchedTerms & ~@event.MatchedTerms) == 0 &&
             index.Flow(@event.Node.Id).Any(e => e.Source == reader.Node.Id && e.Target == @event.Node.Id && e.Relation == Relation.Reads);
 
@@ -650,7 +650,7 @@ namespace Entitas.Graph.Output
         /// component someone reacts to (the reaction is the receiving end, also a hand-off).
         /// </summary>
         public bool HandOff =>
-            Other.Node.Role != null ||
+            Other.Node.MessageRole != null ||
             Relation == Graph.Relation.Reacts ||
             (Outgoing && Other.Reacted && Relation is Graph.Relation.Creates or Graph.Relation.Removes);
     }

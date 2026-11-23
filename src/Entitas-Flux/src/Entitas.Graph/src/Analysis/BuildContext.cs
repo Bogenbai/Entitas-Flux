@@ -225,11 +225,42 @@ namespace Entitas.Graph.Analysis
 
         // -- types --------------------------------------------------------------------------
 
+        /// <summary>
+        /// Whether <paramref name="method"/> is a system's Execute() or Cleanup(): what Entitas
+        /// calls every frame. Initialize and TearDown run once, a helper whenever it is called.
+        /// </summary>
+        public bool RunsEveryFrame(IMethodSymbol method)
+        {
+            if (method.Parameters.Length != 0 || method.Name is not ("Execute" or "Cleanup") && method.ExplicitInterfaceImplementations.Length == 0)
+                return false;
+            foreach (var frame in new[] { _execute, _cleanup })
+                if (frame != null && SymbolEqualityComparer.Default.Equals(method.ContainingType.FindImplementationForInterfaceMember(frame), method))
+                    return true;
+            return false;
+        }
+
+        IMethodSymbol? _execute, _cleanup;
+
+        /// <summary>The conditions a helper runs its delegate parameter under (Analysis.HelperConditions), worked out once per helper and parameter.</summary>
+        public readonly ConcurrentDictionary<(IMethodSymbol Method, string Parameter), IReadOnlyList<(string Parameter, bool Negated)>?> HelperConditions =
+            new ConcurrentDictionary<(IMethodSymbol, string), IReadOnlyList<(string, bool)>?>(new MethodParameterComparer());
+
+        sealed class MethodParameterComparer : IEqualityComparer<(IMethodSymbol Method, string Parameter)>
+        {
+            public bool Equals((IMethodSymbol Method, string Parameter) x, (IMethodSymbol Method, string Parameter) y) =>
+                SymbolEqualityComparer.Default.Equals(x.Method, y.Method) && string.Equals(x.Parameter, y.Parameter, StringComparison.Ordinal);
+
+            public int GetHashCode((IMethodSymbol Method, string Parameter) obj) =>
+                SymbolEqualityComparer.Default.GetHashCode(obj.Method) * 31 + StringComparer.Ordinal.GetHashCode(obj.Parameter);
+        }
+
         public void IndexTypes()
         {
             var systems = Full.GetTypeByMetadataName("Entitas.Systems");
             var iSystem = Full.GetTypeByMetadataName("Entitas.ISystem");
             EntityBase = Full.GetTypeByMetadataName("Entitas.Entity");
+            _execute = Full.GetTypeByMetadataName("Entitas.IExecuteSystem")?.GetMembers("Execute").OfType<IMethodSymbol>().FirstOrDefault(m => m.Parameters.Length == 0);
+            _cleanup = Full.GetTypeByMetadataName("Entitas.ICleanupSystem")?.GetMembers("Cleanup").OfType<IMethodSymbol>().FirstOrDefault(m => m.Parameters.Length == 0);
 
             foreach (var type in AllTypes(Full.Assembly.GlobalNamespace))
             {

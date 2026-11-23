@@ -24,6 +24,7 @@ namespace Entitas.Graph.Analysis
         readonly Dictionary<SyntaxNode, HashSet<string>> _groupFields = new Dictionary<SyntaxNode, HashSet<string>>();
         readonly Dictionary<(IMethodSymbol, int), (ISymbol? Group, string? Loop)> _helperLoops =
             new Dictionary<(IMethodSymbol, int), (ISymbol?, string?)>();
+        readonly Dictionary<ForEachStatementSyntax, bool> _steady = new Dictionary<ForEachStatementSyntax, bool>();
 
         public TreeWalker(BuildContext context, SyntaxTree tree)
         {
@@ -119,8 +120,10 @@ namespace Entitas.Graph.Analysis
                         else
                         {
                             // isX = someCondition: may set it, may clear it.
+                            access.MayClear = true;
+                            var clone = Clone(access);
                             Emit(access, Relation.Creates, "Flag", name);
-                            Emit(Clone(access), Relation.Removes, "Flag", name);
+                            Emit(clone, Relation.Removes, "Flag", name);
                         }
                     }
                     break;
@@ -178,7 +181,8 @@ namespace Entitas.Graph.Analysis
 
         static Access Clone(Access a) => new Access
         {
-            Accessor = a.Accessor, Method = a.Method, Component = a.Component, Context = a.Context, File = a.File, Line = a.Line, Condition = a.Condition
+            Accessor = a.Accessor, Method = a.Method, Component = a.Component, Context = a.Context, File = a.File, Line = a.Line, Condition = a.Condition,
+            MayClear = a.MayClear
         };
 
         /// <summary>The call an index constant is passed to, and the entity it is called on (null when unqualified).</summary>
@@ -282,7 +286,8 @@ namespace Entitas.Graph.Analysis
                         {
                             access.Group = GroupOf(forEach.Expression);
                             access.Loop = LoopKey(forEach);
-                            access.EveryEntity = access.Relation == Relation.Removes && RunsForEveryEntity(identifier, forEach);
+                            access.EveryEntity = RunsForEveryEntity(identifier, forEach, access.Relation == Relation.Destroys);
+                            access.Steady = IsSteady(forEach);
                         }
                         else if (declaration is VariableDeclaratorSyntax { Initializer.Value: var initializer })
                         {
@@ -306,11 +311,16 @@ namespace Entitas.Graph.Analysis
         /// <summary>
         /// Whether a write in the body of <paramref name="loop"/> runs for every entity the loop
         /// visits: not under a condition, a nested loop, a catch or a lambda, and not after a
-        /// jump that can skip it (<c>if (…) continue;</c>). Asked of removals only: taking X off
-        /// every entity of a group of X is what makes X transient, and a conditional RemoveX — a
-        /// timer removed once it ran out — leaves entities that keep it.
+        /// jump that can skip it (<c>if (…) continue;</c>). Taking X off every entity of a group
+        /// of X is what makes X transient, and a conditional RemoveX — a timer removed once it ran
+        /// out — leaves entities that keep it; destroying every entity, or marking every one for a
+        /// destroyer, is what makes a component a message (<see cref="Messages"/>).
+        ///
+        /// For a Destroy() a `continue` right after another Destroy() of the same entity skips
+        /// nothing: `if (!valid) { request.Destroy(); continue; } … request.Destroy();` destroys
+        /// every request, which is how handlers turn a request down.
         /// </summary>
-        static bool RunsForEveryEntity(SyntaxNode write, ForEachStatementSyntax loop)
+        static bool RunsForEveryEntity(SyntaxNode write, ForEachStatementSyntax loop, bool destroy = false)
         {
             for (var node = write.Parent; node != null && node != loop; node = node.Parent)
             {
@@ -342,6 +352,8 @@ namespace Entitas.Graph.Analysis
 
                 switch (node)
                 {
+                    case ContinueStatementSyntax when destroy && Leaves(node, loop) && DestroyedBefore(node, loop.Identifier.ValueText):
+                        break;
                     case ContinueStatementSyntax or BreakStatementSyntax when Leaves(node, loop):
                     case ReturnStatementSyntax or ThrowStatementSyntax or ThrowExpressionSyntax or GotoStatementSyntax:
                     case YieldStatementSyntax yield when yield.IsKind(SyntaxKind.YieldBreakStatement):
@@ -351,6 +363,18 @@ namespace Entitas.Graph.Analysis
 
             return true;
         }
+
+        /// <summary>Whether the block a `continue` ends has already destroyed the loop's entity, in a statement of its own.</summary>
+        static bool DestroyedBefore(SyntaxNode jump, string entity) =>
+            jump.Parent is BlockSyntax block &&
+            block.Statements.TakeWhile(s => s != jump).Any(s => s is ExpressionStatementSyntax
+            {
+                Expression: InvocationExpressionSyntax
+                {
+                    ArgumentList.Arguments.Count: 0,
+                    Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Destroy", Expression: IdentifierNameSyntax target }
+                }
+            } && target.Identifier.ValueText == entity);
 
         /// <summary>Whether a continue/break belongs to <paramref name="loop"/> rather than a loop or switch inside it.</summary>
         static bool Leaves(SyntaxNode jump, ForEachStatementSyntax loop)
@@ -367,13 +391,80 @@ namespace Entitas.Graph.Analysis
             return true;
         }
 
+        /// <summary>
+        /// Whether <paramref name="loop"/> runs whenever its system does: it sits in the system's
+        /// own Execute() or Cleanup(), not under a condition, inside another loop, a lambda or a
+        /// catch. What such a loop does to every entity it visits happens to every entity of its
+        /// group, sooner or later. A loop over furniture nested in a loop over sell requests does
+        /// it only when someone sells, and one in Initialize() only once.
+        ///
+        /// Unlike a write's condition, a guard the method starts with counts here, unless it only
+        /// asks whether the loop's own group is empty (`if (_requests.count == 0) return;`, which
+        /// changes nothing). `if (!_ui.IsOpen&lt;TasksWindow&gt;()) return;` before a loop destroying
+        /// hints means the hints live until the window opens.
+        ///
+        /// The loop may sit in another method of the system instead, when one call to it in the
+        /// type is such a statement of Execute() or Cleanup() (`Execute() =&gt; ProcessRequests();`),
+        /// one call deep. A base class running an override only sometimes (a pausable system) is
+        /// no Execute() of the system's own, and does not count.
+        /// </summary>
+        bool IsSteady(ForEachStatementSyntax loop)
+        {
+            if (!_steady.TryGetValue(loop, out var steady))
+                _steady[loop] = steady = RunsEveryTime(loop, GroupOf(loop.Expression), helpers: 1);
+            return steady;
+        }
+
+        /// <summary>Whether <paramref name="statement"/> runs whenever its system's Execute() or Cleanup() does (<see cref="IsSteady"/>).</summary>
+        bool RunsEveryTime(SyntaxNode statement, ISymbol? group, int helpers)
+        {
+            for (var node = statement.Parent; node != null; node = node.Parent)
+            {
+                if (node is BlockSyntax or TryStatementSyntax or UsingStatementSyntax or LockStatementSyntax or CheckedStatementSyntax or
+                    UnsafeStatementSyntax or FixedStatementSyntax or ExpressionStatementSyntax or ArrowExpressionClauseSyntax)
+                    continue;
+                if (node is not MethodDeclarationSyntax method || _model.GetDeclaredSymbol(method) is not { } symbol || ConditionOf(statement) != null)
+                    return false;
+
+                if (method.Body is { } body)
+                {
+                    var top = statement.AncestorsAndSelf().OfType<StatementSyntax>().First(s => s.Parent == body);
+                    if (!body.Statements.TakeWhile(s => s != top)
+                            .All(s => Guard(s) == null || group != null && OnlyAsksAbout(((IfStatementSyntax)s).Condition, group)))
+                        return false;
+                }
+
+                if (_context.RunsEveryFrame(symbol))
+                    return true;
+                if (helpers == 0 || method.Parent is not TypeDeclarationSyntax type)
+                    return false;
+
+                // One call that runs every time is enough: more calls (from Initialize, from a
+                // handler) only run it more often.
+                return type.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                    .Where(call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: var name } && name == symbol.Name ||
+                                   call.Expression is MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name.Identifier.ValueText: var member } && member == symbol.Name)
+                    .Any(call => SymbolEqualityComparer.Default.Equals(_model.GetSymbolInfo(call).Symbol?.OriginalDefinition, symbol) &&
+                                 RunsEveryTime(call, group, helpers - 1));
+            }
+
+            return false;
+        }
+
+        /// <summary>Whether every name in <paramref name="condition"/> is <paramref name="group"/> or a member of it: `_requests.count == 0`.</summary>
+        bool OnlyAsksAbout(ExpressionSyntax condition, ISymbol group) =>
+            condition.DescendantNodesAndSelf().OfType<SimpleNameSyntax>()
+                .Where(n => !(n.Parent is MemberAccessExpressionSyntax access && access.Name == n))
+                .All(n => SymbolEqualityComparer.Default.Equals(_model.GetSymbolInfo(n).Symbol, group));
+
         // -- conditions ---------------------------------------------------------------------
 
         /// <summary>
-        /// Parameter names that make a bool argument the condition of a lambda passed with it:
-        /// `With(x =&gt; x.isExcluded = true, when: request.isExcluded)` sets the flag only when the
-        /// request says so. A convention, not a guarantee, so the list is short and literal;
-        /// matched without case, so `onlyIf` and `OnlyIf` both count.
+        /// For a helper whose body is not in the compilation (a DLL): parameter names that make a
+        /// bool argument the condition of a lambda passed with it — `With(x =&gt; x.isExcluded =
+        /// true, when: request.isExcluded)`. A convention, not a guarantee, so the list is short
+        /// and literal; matched without case, so `onlyIf` and `OnlyIf` both count. A helper with
+        /// a body is read instead (<see cref="HelperConditions"/>), and its names do not matter.
         /// </summary>
         static readonly HashSet<string> ConditionParameters = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -384,10 +475,10 @@ namespace Entitas.Graph.Analysis
         /// The condition <paramref name="node"/> runs under inside its method, or null when it runs
         /// whenever the method does: every if/else, switch section or arm, ?:, right side of
         /// &amp;&amp;, || or ??, ?., catch, guard — an if before it, in a block enclosing it, that
-        /// returns, continues, breaks or jumps — and the `when:` of a helper it is passed to as a
-        /// lambda (<see cref="ConditionParameters"/>). Outermost first, as the code reads: the
-        /// line cut at the tail loses the innermost detail, not the case it belongs to
-        /// (`currencyTypeId == Coins &amp;&amp; amount &gt; 0 &amp;&amp; request.isRefund`).
+        /// returns, continues, breaks or jumps — and the bool argument that decides whether a
+        /// helper it is passed to as a lambda runs it (<see cref="WhenArguments"/>). Outermost
+        /// first, as the code reads: the line cut at the tail loses the innermost detail, not the
+        /// case it belongs to (`currencyTypeId == Coins &amp;&amp; amount &gt; 0 &amp;&amp; request.isRefund`).
         ///
         /// Not conditions: loops (a write per entity is what a loop is for; RunsForEveryEntity
         /// covers what that means for removals), lambdas (walked through: a callback runs where it
@@ -455,41 +546,68 @@ namespace Entitas.Graph.Analysis
                     case CatchClauseSyntax catchClause when child == catchClause.Block:
                         yield return (catchClause, false);
                         break;
-                    case ArgumentSyntax argument when child is AnonymousFunctionExpressionSyntax && WhenArgument(argument) is { } when:
-                        yield return (when, false);
+                    case ArgumentSyntax argument when child is AnonymousFunctionExpressionSyntax:
+                        // Last argument first: the list is reversed into reading order.
+                        foreach (var when in Enumerable.Reverse(WhenArguments(argument)))
+                            yield return when;
                         break;
                 }
             }
         }
 
         /// <summary>
-        /// For a lambda passed as <paramref name="lambda"/>: the other argument of the same call
-        /// whose parameter — resolved through the call's method, so positional arguments count —
-        /// is a bool named as a condition (<see cref="ConditionParameters"/>). Null when there is
-        /// none, or when it is a constant: `when: true` says nothing.
+        /// For a lambda passed as <paramref name="lambda"/>: the other arguments of the same call
+        /// that decide whether the called method runs it, each with whether the lambda runs when
+        /// it is false (`Unless(x =&gt; …, skip: c)`). Parameters are resolved through the call's
+        /// method, so positional arguments count. When the method's body is in the compilation it
+        /// says which (<see cref="HelperConditions"/>); otherwise a bool parameter named as a
+        /// condition does (<see cref="ConditionParameters"/>). A constant says nothing: `when: true`.
         /// </summary>
-        ArgumentSyntax? WhenArgument(ArgumentSyntax lambda)
+        List<(SyntaxNode Argument, bool Negated)> WhenArguments(ArgumentSyntax lambda)
         {
+            var found = new List<(SyntaxNode, bool)>();
             if (lambda.Parent is not ArgumentListSyntax { Arguments.Count: > 1 } list || list.Parent is not InvocationExpressionSyntax call)
-                return null;
+                return found;
             var info = _model.GetSymbolInfo(call);
             if ((info.Symbol ?? info.CandidateSymbols.FirstOrDefault()) is not IMethodSymbol method)
-                return null;
+                return found;
+
+            var definition = (method.ReducedFrom ?? method).OriginalDefinition;
+            var applied = ParameterOf(list, list.Arguments.IndexOf(lambda), method);
+            var known = applied == null || _context.IsGenerated(definition.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree)
+                ? null
+                : _context.HelperConditions.GetOrAdd((definition, applied.Name), key => HelperConditions.Of(key.Method, key.Parameter));
 
             for (var i = 0; i < list.Arguments.Count; i++)
             {
                 var argument = list.Arguments[i];
-                if (argument == lambda)
+                if (argument == lambda || ParameterOf(list, i, method) is not { Type.SpecialType: SpecialType.System_Boolean } parameter ||
+                    _model.GetConstantValue(argument.Expression).HasValue)
                     continue;
-                var parameter = argument.NameColon != null
-                    ? method.Parameters.FirstOrDefault(p => p.Name == argument.NameColon.Name.Identifier.ValueText)
-                    : i < method.Parameters.Length && list.Arguments.Take(i).All(a => a.NameColon == null) ? method.Parameters[i] : null;
-                if (parameter is { Type.SpecialType: SpecialType.System_Boolean } && ConditionParameters.Contains(parameter.Name) &&
-                    !_model.GetConstantValue(argument.Expression).HasValue)
-                    return argument;
+
+                if (known == null)
+                {
+                    if (ConditionParameters.Contains(parameter.Name))
+                        found.Add((argument, false));
+                }
+                else
+                {
+                    foreach (var (name, negated) in known)
+                        if (name == parameter.Name)
+                            found.Add((argument, negated));
+                }
             }
 
-            return null;
+            return found;
+        }
+
+        /// <summary>The parameter argument <paramref name="index"/> of a call binds to: by name, or by position while no named argument comes before it.</summary>
+        static IParameterSymbol? ParameterOf(ArgumentListSyntax list, int index, IMethodSymbol method)
+        {
+            var argument = list.Arguments[index];
+            return argument.NameColon != null
+                ? method.Parameters.FirstOrDefault(p => p.Name == argument.NameColon.Name.Identifier.ValueText)
+                : index < method.Parameters.Length && list.Arguments.Take(index).All(a => a.NameColon == null) ? method.Parameters[index] : null;
         }
 
         static bool IsBoundary(SyntaxNode node) =>
@@ -524,7 +642,7 @@ namespace Entitas.Graph.Analysis
         /// false — what follows runs where c does not hold; for `if (c) {…} else return;`: true.
         /// Null for any other statement, an if that throws included.
         /// </summary>
-        static bool? Guard(StatementSyntax statement)
+        internal static bool? Guard(StatementSyntax statement)
         {
             if (statement is not IfStatementSyntax ifStatement)
                 return null;
@@ -916,9 +1034,12 @@ namespace Entitas.Graph.Analysis
                 };
                 if (invocation.Expression is MemberAccessExpressionSyntax target)
                 {
-                    var probe = new Access();
+                    var probe = new Access { Relation = Relation.Destroys };
                     TraceEntity(probe, target.Expression);
                     destroy.Group = probe.Group;
+                    destroy.Loop = probe.Loop;
+                    destroy.EveryEntity = probe.EveryEntity;
+                    destroy.Steady = probe.Steady;
                 }
                 _result.Destroys.Add(destroy);
                 return;

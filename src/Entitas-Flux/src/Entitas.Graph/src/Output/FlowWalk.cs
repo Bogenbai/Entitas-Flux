@@ -448,8 +448,9 @@ namespace Entitas.Graph.Output
                 kind |= HandOff.Watched;
             if (relations.Contains(Relation.Creates))
             {
-                if (component.Role == "request") kind |= HandOff.Request;
-                else if (component.Role == "event") kind |= HandOff.Event;
+                // By name when the project follows the convention, otherwise by what happens to the entity.
+                if (component.MessageRole == "request") kind |= HandOff.Request;
+                else if (component.MessageRole == "event") kind |= HandOff.Event;
                 if (component.TransientRemovedBy.Count > 0 || component.Attributes.Contains("Cleanup"))
                     kind |= HandOff.Transient;
             }

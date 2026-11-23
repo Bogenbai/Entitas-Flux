@@ -44,7 +44,8 @@ namespace Entitas.Graph.Output
                     w.WriteString("id", n.Id);
                     w.WriteString("label", n.Label);
                     w.WriteString("kind", n.Kind);
-                    if (n.Role != null) w.WriteString("role", n.Role);
+                    // The page colours and offers `flow` by role, so a request found by structure counts as one.
+                    if (n.MessageRole != null) w.WriteString("role", n.MessageRole);
                     if (n.Generated) w.WriteBoolean("generated", true);
                     if (n.SourceFile != null) w.WriteString("file", n.SourceFile);
                     if (n.Line > 0) w.WriteNumber("line", n.Line);
