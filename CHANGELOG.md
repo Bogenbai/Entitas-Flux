@@ -106,7 +106,10 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   `#node=…` links, hover to fade what a node is not connected to (from the canvas or the side
   panel), a side panel with conditions, placements and CLI commands to copy, a project
   overview (`O`) and keyboard shortcuts (`?`). Every search lays out alike — neighbours in
-  rings around the node — and is framed by measuring the nodes with their labels.
+  rings around the node — and is framed by measuring the nodes with their labels. In a narrow
+  window the frame leaves room for the legend and the search list stays on screen; long
+  conditions wrap; without a link the page opens on the overview, which says why that node is
+  drawn; a page opened in a background tab draws itself when it is shown.
 
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
