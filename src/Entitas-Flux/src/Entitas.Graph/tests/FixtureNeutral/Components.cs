@@ -75,4 +75,8 @@ namespace Harbor
     [Port] public sealed class LaunchDue : IComponent { }   // LaunchProbesSystem needs Hologram
     [Port] public sealed class PingDue : IComponent { }     // PingProbesSystem needs Charge
     [Port] public sealed class Telemetry : IComponent { public int Value; }
+    [Port] public sealed class BeamOrder : IComponent { public int Value; }
+    [Port] public sealed class Lens : IComponent { public int Value; }
+    [Port] public sealed class CustomsCheck : IComponent { public int Value; }  // ClearCustomsSystem seals every check, then destroys the sealed ones
+    [Port] public sealed class Seal : IComponent { public int Value; }       // LensFitting, through IFitting and the abstract Fitting, after the await  // BeamToShipsSystem destroys it only once the ship has its Hologram
 }

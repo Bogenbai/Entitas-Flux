@@ -377,6 +377,29 @@ namespace Entitas.Graph.Analysis
             }
         }
 
+        /// <summary>
+        /// Like <see cref="Dispatch"/>, and on through each implementation's own overrides: an
+        /// interface method an abstract class implements reaches the classes overriding it
+        /// (IEntityComponentRegistrar.RegisterComponents → EntityComponentRegistrar → HueAnimator).
+        /// Only the methods with a body.
+        /// </summary>
+        public IEnumerable<IMethodSymbol> DispatchAll(IEnumerable<IMethodSymbol> callees)
+        {
+            var seen = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            var queue = new Queue<IMethodSymbol>(callees.Select(c => c.OriginalDefinition));
+            while (queue.Count > 0)
+            {
+                var definition = queue.Dequeue();
+                if (!seen.Add(definition))
+                    continue;
+                if (!definition.IsAbstract && definition.DeclaringSyntaxReferences.Length > 0)
+                    yield return definition;
+                if (_implementations.TryGetValue(definition, out var implementations))
+                    foreach (var implementation in implementations)
+                        queue.Enqueue(implementation.OriginalDefinition);
+            }
+        }
+
         static bool DerivesFrom(INamedTypeSymbol type, INamedTypeSymbol baseType)
         {
             for (var current = type.BaseType; current != null; current = current.BaseType)

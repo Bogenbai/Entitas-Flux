@@ -329,7 +329,7 @@ namespace Entitas.Graph.Output
                     }
 
                     var step = take.Step;
-                    Line($"{indent}{TakeVerb(take)} {step.Node.Label}{Inferred(take.Edges)}  {_q.FlowPlace(step.Node, _walk.Root)}  {Frame(take)}{Since(step)}  " +
+                    Line($"{indent}{TakeVerb(take)} {step.Node.Label}{Inferred(take.Edges)}  {_q.FlowPlace(step.Node, _walk.Root)}  {Frame(take)}{Since(step)}{Until(step)}  " +
                          ShortLocation(take.Edges[0]) + (step.Expanded || take.Frame.Never ? string.Empty : Where(step.Node.Id)));
                     if (!step.Expanded)
                         continue;
@@ -354,11 +354,11 @@ namespace Entitas.Graph.Output
                 // chain leads to is in the lines above.
                 foreach (var take in ending.Where(t => t.Step.Expanded))
                     _shown.Add(take.Step.Node.Id);
-                var frames = ending.Select(t => Frame(t, spell: false) + Since(t.Step)).Distinct().ToList();
+                var frames = ending.Select(t => Frame(t, spell: false) + Since(t.Step) + Until(t.Step)).Distinct().ToList();
                 var verb = ending.Select(TakeVerb).Distinct().Count() == 1 ? TakeVerb(ending[0]) : "taken by";
                 Line(frames.Count == 1
-                    ? $"{indent}{verb}, ending there: {string.Join(", ", ending.Select(t => $"{t.Step.Node.Label} {_q.FlowPlace(t.Step.Node, _walk.Root)}"))} — {Frame(ending[0])}{Since(ending[0].Step)}"
-                    : $"{indent}{verb}, ending there: {string.Join("; ", ending.Select(t => $"{t.Step.Node.Label} {_q.FlowPlace(t.Step.Node, _walk.Root)} {Frame(t)}{Since(t.Step)}"))}");
+                    ? $"{indent}{verb}, ending there: {string.Join(", ", ending.Select(t => $"{t.Step.Node.Label} {_q.FlowPlace(t.Step.Node, _walk.Root)}"))} — {Frame(ending[0])}{Since(ending[0].Step)}{Until(ending[0].Step)}"
+                    : $"{indent}{verb}, ending there: {string.Join("; ", ending.Select(t => $"{t.Step.Node.Label} {_q.FlowPlace(t.Step.Node, _walk.Root)} {Frame(t)}{Since(t.Step)}{Until(t.Step)}"))}");
             }
 
             void Ends(FlowLink link, string indent)
@@ -445,6 +445,11 @@ namespace Entitas.Graph.Output
             }
 
             static string Since(FlowStep step) => step.Since is { } since ? $" [+{since}]" : string.Empty;
+
+            /// <summary>", destroys it only once target.hasHueAnimator (HueAnimator is added only after an await)": the message waits.</summary>
+            static string Until(FlowStep step) => step.Until is { } until
+                ? $", {until.Verb} it only once {until.Condition}" + (until.Late != null ? $" ({until.Late})" : string.Empty)
+                : string.Empty;
 
             static string WriteVerb(IReadOnlyList<string> relations) => string.Join("+", relations);
 

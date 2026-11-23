@@ -314,15 +314,46 @@ namespace Entitas.Graph.Analysis
         }
 
         /// <summary>
+        /// Components every write of which on an entity that already exists may run only after
+        /// an await or a yield — in its own method past one, or in a method called past one, at
+        /// any depth (a view's registrars: HueAnimator). An await wins over a yield. One write
+        /// a system makes the ordinary way and it is no such component: WorldPosition, which
+        /// some views also set once loaded, is mostly a system's. A reader whose condition asks
+        /// for one (`if (target.hasHueAnimator)`) waits for it with no frame to tell.
+        /// </summary>
+        public static Dictionary<string, string> AddedLate(BuildContext context, Creations creations, List<Access> accesses, List<CallSite> calls)
+        {
+            var afterAwait = RunsAfter(context, creations, calls, "an await");
+            var afterYield = RunsAfter(context, creations, calls, "a yield");
+            var late = new Dictionary<string, string>(StringComparer.Ordinal);
+            var onTime = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var write in accesses.Where(a => a.Relation == Relation.Creates && a.Origin.Created == null))
+            {
+                var name = write.Component.Name;
+                var how = write.Late == "an await" || write.Method != null && afterAwait.Contains(write.Method) ? AfterAwait
+                    : write.Late == "a yield" || write.Method != null && afterYield.Contains(write.Method) ? AfterYield
+                    : null;
+                if (how == null)
+                    onTime.Add(name);
+                else if (!late.TryGetValue(name, out var had) || had != AfterAwait)
+                    late[name] = how;
+            }
+            foreach (var name in onTime)
+                late.Remove(name);
+            return late;
+        }
+
+        /// <summary>
         /// The methods that may run only after a method was suspended at <paramref name="late"/>
-        /// ("an await", "a yield"): those called after one, and everything they call, however deep.
+        /// ("an await", "a yield"): those called after one, and everything they call, however deep,
+        /// through interfaces and abstract classes to every override (a view's registrars).
         /// </summary>
         static HashSet<IMethodSymbol> RunsAfter(BuildContext context, Creations creations, List<CallSite> calls, string late)
         {
             var found = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             var queue = new Queue<IMethodSymbol>();
             foreach (var call in calls.Where(c => c.Late == late))
-            foreach (var method in context.Dispatch(new[] { call.Callee }))
+            foreach (var method in context.DispatchAll(new[] { call.Callee }))
                 if (found.Add(method))
                     queue.Enqueue(method);
 
@@ -331,7 +362,7 @@ namespace Entitas.Graph.Analysis
                 if (!creations.Callees.TryGetValue(queue.Dequeue(), out var further))
                     continue;
                 foreach (var call in further)
-                foreach (var method in context.Dispatch(new[] { call.Callee }))
+                foreach (var method in context.DispatchAll(new[] { call.Callee }))
                     if (found.Add(method))
                         queue.Enqueue(method);
             }

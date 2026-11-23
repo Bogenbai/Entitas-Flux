@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace Entitas.Graph.Output
 {
@@ -268,7 +269,43 @@ namespace Entitas.Graph.Output
                 return;
             }
 
-            Take(link, new[] { step.Node }, step.Hop + 1, step.Since, takers);
+            // A message taken only once a condition holds may sit there for frames: what follows
+            // happens the frame it holds, which no feature order tells.
+            Take(link, new[] { step.Node }, step.Hop + 1, step.Until != null ? null : step.Since, takers);
+        }
+
+        /// <summary>
+        /// The condition a taker destroys or removes the message under, when it never does
+        /// otherwise and nobody takes it unconditionally: until it holds, the message stays and
+        /// is read again every frame. ChangeHueByRequestSystem destroys its request only once
+        /// `target.hasHueAnimator`, which a new piece of furniture gets after its view loads.
+        /// With the take: destroys, removes or takes; and what of the condition may arrive late.
+        ///
+        /// A condition on a component the taker sets itself is its own bookkeeping, no wait:
+        /// UnlockPerkByRequestSystem marks every request isProcessed, then destroys those that are.
+        /// </summary>
+        (string Condition, string Verb, string? Late)? Until(FlowTaker taker, GraphNode component)
+        {
+            if (taker.Marker)
+                return null;
+            var consuming = taker.Edges.Where(e => e.Source == taker.Node.Id && e.Relation is Relation.Destroys or Relation.Removes).ToList();
+            if (consuming.Count == 0 || consuming.Any(e => e.Condition == null) ||
+                In(component.Id).Any(e => e.Relation is Relation.Destroys or Relation.Removes && e.Condition == null))
+                return null;
+
+            var condition = string.Join(" or ", consuming.Select(e => e.Condition!).Distinct());
+            var asked = Regex.Matches(condition, @"\.(?:has|is)([A-Z]\w*)\b").Select(m => m.Groups[1].Value).Distinct().ToList();
+            if (Out(taker.Node.Id).Any(e => e.Relation == Relation.Creates && asked.Contains(Node(e.Target).Label)))
+                return null;
+
+            var verbs = consuming.Select(e => e.Relation).Distinct().ToList();
+            var verb = verbs.Count > 1 ? "takes" : verbs[0] == Relation.Destroys ? "destroys" : "removes";
+            var late = asked
+                .Select(name => _graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Component && n.Label == name && n.AddedLate != null))
+                .Where(n => n != null)
+                .Select(n => $"{n!.Label} is added only {n.AddedLate}")
+                .ToList();
+            return (condition, verb, late.Count == 0 ? null : string.Join("; ", late));
         }
 
         /// <summary>
@@ -400,6 +437,7 @@ namespace Entitas.Graph.Output
                 var step = new FlowStep(taker.Node, hop)
                 {
                     Takes = link.Component.Id,
+                    Until = Until(taker, link.Component),
                     Since = since != null && frame.Frames != null ? since + frame.Frames
                         : hop == 1 && (since == null || StartLink != null) ? 0
                         : (int?)null
@@ -998,6 +1036,9 @@ namespace Entitas.Graph.Output
 
         /// <summary>The id of the component the step takes: its taker line already says what it does to it.</summary>
         public string? Takes;
+
+        /// <summary>It takes the message only once this condition holds (<see cref="FlowWalk.Until"/>).</summary>
+        public (string Condition, string Verb, string? Late)? Until;
 
         /// <summary>Frames since the step marked [+0]; null once a frame on the way is unknown.</summary>
         public int? Since;

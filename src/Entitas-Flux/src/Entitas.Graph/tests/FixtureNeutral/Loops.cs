@@ -80,6 +80,8 @@ namespace Harbor
             Add(new ProjectHologramsSystem(contexts.port));
             Add(new LaunchProbesSystem(contexts.port));
             Add(new PingProbesSystem(contexts.port));
+            Add(new BeamToShipsSystem(contexts.port));
+            Add(new ClearCustomsSystem(contexts.port));
         }
     }
 

@@ -311,6 +311,10 @@ namespace Entitas.Graph.Analysis
                                 (n.MessageRole != null || n.TransientRemovedBy.Count > 0 || n.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal))))
                     .Select(n => n.Label), StringComparer.Ordinal);
                 Waits.Mark(context, creations, accesses, calls, handOffs, edges);
+                var late = Waits.AddedLate(context, creations, accesses, calls);
+                foreach (var node in graph.Nodes)
+                    if (node.Kind == NodeKind.Component && late.TryGetValue(node.Label, out var how))
+                        node.AddedLate = how;
             }
 
             graph.Edges.AddRange(edges.Values);

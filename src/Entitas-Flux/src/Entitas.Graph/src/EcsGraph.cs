@@ -101,6 +101,14 @@ namespace Entitas.Graph
         /// <summary>The request's consumers remove it; the entity holding it lives on.</summary>
         public bool ConsumedByRemoval;
 
+        /// <summary>
+        /// "after an await" or "after a yield": every write of it on an entity that already
+        /// exists may run only after one (a view's asset loaded, then its registrars add
+        /// HueAnimator). What a reader waiting on it — `if (target.hasHueAnimator)` — waits for
+        /// has no frame.
+        /// </summary>
+        public string? AddedLate;
+
         /// <summary>For an event by structure: the consumed markers it is created with (Event, Pulse), whose destroyers take it along.</summary>
         public List<string> CarriedBy = new List<string>();
 
@@ -357,6 +365,7 @@ namespace Entitas.Graph
                         if (n.Message != null) w.WriteString("message", n.Message);
                         if (n.ConsumedBy.Count > 0) WriteStrings(w, "consumed_by", n.ConsumedBy);
                         if (n.ConsumedByRemoval) w.WriteBoolean("consumed_by_removal", true);
+                        if (n.AddedLate != null) w.WriteString("added_late", n.AddedLate);
                         if (n.CarriedBy.Count > 0) WriteStrings(w, "carried_by", n.CarriedBy);
                     }
                     if (n.Interfaces.Count > 0) WriteStrings(w, "interfaces", n.Interfaces);
@@ -493,6 +502,7 @@ namespace Entitas.Graph
                     Role = Str(n, "role"),
                     Message = Str(n, "message"),
                     ConsumedByRemoval = Bool(n, "consumed_by_removal"),
+                    AddedLate = Str(n, "added_late"),
                     Root = Bool(n, "root")
                 };
                 node.Contexts.AddRange(Strs(n, "contexts"));

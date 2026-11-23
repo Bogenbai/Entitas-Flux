@@ -110,7 +110,11 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   StampParcelsSystem #9)`), or `frame unknown (waits for View, added after an await)` when it
   arrives after an `await`, a coroutine's `yield` or outside the systems — `waits` on the write
   in `graph.json`. Factories injected through an interface the project implements once are
-  followed, so `unseen_by` sees past them too.
+  followed, so `unseen_by` sees past them too. A reader that destroys a request only under a
+  condition, when nothing else takes it, says so — `destroys it only once target.hasHueAnimator
+  (HueAnimator is added only after an await)` — and the steps after it lose their `[+N]`;
+  `added_late` in `graph.json` marks components every write of which comes after an `await`,
+  followed through interfaces and abstract classes to every override.
 
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and

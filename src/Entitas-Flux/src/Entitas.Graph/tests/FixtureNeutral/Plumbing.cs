@@ -110,6 +110,10 @@ namespace Harbor
         public void OnSalutePressed(PortEntity ship) => ship.isSalute = true;
 
         public void OnPilotPressed(int shipId) => Make.Blank().AddPilotOrder(shipId);
+
+        public void OnBeamPressed(int shipId) => Make.Blank().AddBeamOrder(shipId);
+
+        public void OnCustomsPressed(int shipId) => Make.Blank().AddCustomsCheck(shipId);
     }
 
     /// <summary>Paints whatever hull it is handed: the yard's work happens in here, not in the yard's loop.</summary>
@@ -121,11 +125,32 @@ namespace Harbor
     /// <summary>Waits for a hologram's asset, then has the emitter mount it: the Hologram arrives after an await.</summary>
     public sealed class HoloProjector
     {
+        readonly IFitting[] _fittings = { new LensFitting() };
+
         public async System.Threading.Tasks.Task ProjectAsync(PortEntity probe)
         {
             await System.Threading.Tasks.Task.Delay(10);
             new HoloEmitter().Mount(probe);
+            foreach (IFitting fitting in _fittings)
+                fitting.Fit(probe);
         }
+    }
+
+    // Fittings are reached through an interface an abstract class implements: the lens is fitted
+    // by an override two steps from the call, still after the projector's await.
+    public interface IFitting
+    {
+        void Fit(PortEntity probe);
+    }
+
+    public abstract class Fitting : IFitting
+    {
+        public abstract void Fit(PortEntity probe);
+    }
+
+    public sealed class LensFitting : Fitting
+    {
+        public override void Fit(PortEntity probe) => probe.ReplaceLens(1);
     }
 
     public sealed class HoloEmitter

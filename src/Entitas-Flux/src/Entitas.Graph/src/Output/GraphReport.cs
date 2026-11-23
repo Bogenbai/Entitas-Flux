@@ -51,7 +51,8 @@ namespace Entitas.Graph.Output
             var byNameOnly = components.Where(c => c.Role == "request" && c.Message != "request").Select(c => $"`{c.Label}`").ToList();
             if (byNameOnly.Count > 0)
                 sb.AppendLine($"  - {byNameOnly.Count} of the requests are found by name only: no loop handling them also destroys or removes them every time " +
-                              "it runs — they wait for something, are taken off elsewhere, or nobody handles them. The structure leaves those to the " +
+                              "it runs — they wait for something, are destroyed inside a loop over another group, are taken off elsewhere, or nobody " +
+                              "handles them. The structure leaves those to the " +
                               "name on purpose (a hint that lives until a window opens looks the same), so keep `--request-suffix`: " +
                               string.Join(", ", byNameOnly.Take(5)) + (byNameOnly.Count > 5 ? $" and {byNameOnly.Count - 5} more" : string.Empty));
             sb.AppendLine();

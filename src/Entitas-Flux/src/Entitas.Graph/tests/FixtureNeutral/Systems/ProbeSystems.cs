@@ -91,4 +91,50 @@ namespace Harbor
             }
         }
     }
+
+    /// <summary>
+    /// Beams to the ship an order names, once the ship shows a Hologram: until then the order
+    /// stays and is looked at again every frame. A Hologram comes only after the projector's await.
+    /// </summary>
+    public sealed class BeamToShipsSystem : IExecuteSystem
+    {
+        readonly PortContext _port;
+        readonly IGroup<PortEntity> _orders;
+
+        public BeamToShipsSystem(PortContext port)
+        {
+            _port = port;
+            _orders = port.GetGroup(PortMatcher.BeamOrder);
+        }
+
+        public void Execute()
+        {
+            foreach (PortEntity order in _orders.GetEntities())
+            {
+                PortEntity ship = _port.GetEntityWithShipId(order.beamOrder.Value);
+                if (ship != null && ship.hasHologram)
+                {
+                    ship.AddRepaintOrder(3);
+                    order.Destroy();
+                }
+            }
+        }
+    }
+
+    /// <summary>Seals every check, then destroys the sealed ones: its condition is a seal it puts on itself, so no check waits.</summary>
+    public sealed class ClearCustomsSystem : IExecuteSystem
+    {
+        readonly IGroup<PortEntity> _checks;
+
+        public ClearCustomsSystem(PortContext port) => _checks = port.GetGroup(PortMatcher.CustomsCheck);
+
+        public void Execute()
+        {
+            foreach (PortEntity check in _checks.GetEntities())
+                check.ReplaceSeal(1);
+            foreach (PortEntity check in _checks.GetEntities())
+                if (check.hasSeal)
+                    check.Destroy();
+        }
+    }
 }

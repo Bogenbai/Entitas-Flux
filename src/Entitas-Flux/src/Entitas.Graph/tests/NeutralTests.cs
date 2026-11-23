@@ -247,6 +247,25 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void An_order_destroyed_only_once_its_ship_shows_a_hologram_waits_and_what_follows_has_no_count()
+        {
+            // BeamToShipsSystem destroys its order only `if (ship != null && ship.hasHologram)`,
+            // and the projector mounts a Hologram only after its await: the order sits there.
+            Node("Hologram").AddedLate.Should().Be("after an await", "RedeployProbesSystem adds one too, but on a probe it is making");
+            Node("Charge").AddedLate.Should().BeNull("ChargeProbesSystem adds it the ordinary way");
+            Node("Lens").AddedLate.Should().Be("after an await", "IFitting.Fit lands in LensFitting through the abstract Fitting");
+
+            var lines = Lines(Queries.Flow("BeamOrder"));
+            lines.Should().Contain(l => l.StartsWith("read+destroyed by BeamToShipsSystem", StringComparison.Ordinal) &&
+                                        l.Contains("[+0], destroys it only once ship != null && ship.hasHologram (Hologram is added only after an await)  "));
+            // What it hands on happens the frame the ship has one, which no order tells: no [+N].
+            lines.Should().Contain(l => l.StartsWith("read+removed by RepaintHullsSystem", StringComparison.Ordinal) && !l.Contains("[+"));
+            Queries.Flow("DockingOrder").Should().NotContain("only once", "DockShipsSystem destroys every order");
+            Queries.Flow("CustomsCheck").Should().Contain("read+destroyed by ClearCustomsSystem")
+                .And.NotContain("only once", "the Seal it asks for is one it puts on every check itself");
+        }
+
+        [Fact]
         public void Flow_does_not_list_again_the_removal_its_taker_line_already_names()
         {
             var flow = Queries.Flow("RepaintOrder");
@@ -322,7 +341,7 @@ namespace Entitas.Graph.Tests
             var head = output.Split('\n')[0];
 
             // CountShipsDockedSystem says nothing ShipDocked does not: the event shows it one step out.
-            head.Should().StartWith("query \"ship docked\": 17 nodes match; seeds: DockShipsSystem, ShipDocked, Ship, Docked, PrioritizeShipsSystem (also: CountShipsDockedSystem, ");
+            head.Should().StartWith("query \"ship docked\": 18 nodes match; seeds: DockShipsSystem, ShipDocked, Ship, Docked, DockingPanel (also: CountShipsDockedSystem, ");
             Sections(output)["1 step out:"].Should().Contain("CountShipsDockedSystem");
 
             // It is the structure that makes ShipDocked an event here: without it the reader seeds.
@@ -389,16 +408,16 @@ namespace Entitas.Graph.Tests
                 .Should().BeEquivalentTo(new[]
                 {
                     ("DockingOrder", "request"), ("RefuelOrder", "request"), ("SaleOrder", "request"), ("ScrapFleetOrder", "request"),
-                    ("RepaintOrder", "request"), ("TowOrder", "request"), ("PilotOrder", "request"), ("ShipDocked", "event")
+                    ("RepaintOrder", "request"), ("TowOrder", "request"), ("PilotOrder", "request"), ("BeamOrder", "request"), ("ShipDocked", "event")
                 });
             named.Nodes.Single(n => n.Label == "CargoUnloaded").MessageRole.Should().Be("event", "no suffix names it; the structure still does");
 
-            // But for one: TowOrder is destroyed only once the clock runs, which the structure
-            // leaves alone on purpose — the name is what finds it.
-            named.Nodes.Where(n => n.Role != null && n.Message != n.Role).Select(n => n.Label).Should().Equal("TowOrder");
+            // But for two: TowOrder is destroyed only once the clock runs, BeamOrder only once its
+            // ship shows a hologram, which the structure leaves alone on purpose — the name finds them.
+            named.Nodes.Where(n => n.Role != null && n.Message != n.Role).Select(n => n.Label).Should().Equal("BeamOrder", "TowOrder");
             named.Nodes.Single(n => n.Label == "TowOrder").MessageRole.Should().Be("request");
-            GraphReport.Build(named).Should().Contain("  - 1 of the requests are found by name only: ")
-                .And.Contain("so keep `--request-suffix`: `TowOrder`\n");
+            GraphReport.Build(named).Should().Contain("  - 2 of the requests are found by name only: ")
+                .And.Contain("so keep `--request-suffix`: `BeamOrder`, `TowOrder`\n");
 
             var byName = new GraphQueries(named, budget: 0);
             byName.Flow("DockingOrder").Should().Be(Queries.Flow("DockingOrder"));
