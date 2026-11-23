@@ -117,7 +117,8 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   A call through an interface or abstract method now reaches every override, through abstract
   classes too, so a system binding views is credited with what each view's registrars add
   (`who-creates HueAnimator` names the view binders; +430 inferred edges on the production
-  project, build time unchanged).
+  project, build time unchanged). What the graph leaves out on purpose, or cannot know from
+  the code, is listed in the README under *What it does not see*.
 
   `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
   (`/`, every word must match), filters that double as the legend, back/forward and
