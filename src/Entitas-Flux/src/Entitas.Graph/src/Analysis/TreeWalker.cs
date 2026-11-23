@@ -28,6 +28,8 @@ namespace Entitas.Graph.Analysis
         readonly Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?> _enumMembers = new Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?>();
         readonly Dictionary<SyntaxNode, List<SyntaxNode>?> _suspensions = new Dictionary<SyntaxNode, List<SyntaxNode>?>();
         readonly Dictionary<ForEachStatementSyntax, ISymbol?> _loopGroups = new Dictionary<ForEachStatementSyntax, ISymbol?>();
+        readonly Dictionary<StatementSyntax, List<JumpPath>?> _jumps = new Dictionary<StatementSyntax, List<JumpPath>?>();
+        bool? _hasGoto;
         readonly EntityOrigins _origins;
 
         public TreeWalker(BuildContext context, SyntaxTree tree)
@@ -645,7 +647,8 @@ namespace Entitas.Graph.Analysis
         /// Unlike a write's condition, a guard the method starts with counts here, unless it only
         /// asks whether the loop's own group is empty (`if (_requests.count == 0) return;`, which
         /// changes nothing). `if (!_ui.IsOpen&lt;TasksWindow&gt;()) return;` before a loop destroying
-        /// hints means the hints live until the window opens.
+        /// hints means the hints live until the window opens. So does an if holding nothing but
+        /// guards (<see cref="OnlyGuards"/>), the same way.
         ///
         /// The loop may sit in another method of the system instead, when one call to it in the
         /// type is such a statement of Execute() or Cleanup() (`Execute() =&gt; ProcessRequests();`),
@@ -674,7 +677,8 @@ namespace Entitas.Graph.Analysis
                 {
                     var top = statement.AncestorsAndSelf().OfType<StatementSyntax>().First(s => s.Parent == body);
                     if (!body.Statements.TakeWhile(s => s != top)
-                            .All(s => Guard(s) == null || group != null && OnlyAsksAbout(((IfStatementSyntax)s).Condition, group)))
+                            .All(s => Guard(s) != null ? group != null && OnlyAsksAbout(((IfStatementSyntax)s).Condition, group)
+                                : !OnlyGuards(s) || group != null && s.DescendantNodesAndSelf().OfType<IfStatementSyntax>().All(i => OnlyAsksAbout(i.Condition, group))))
                         return false;
                 }
 
@@ -732,16 +736,20 @@ namespace Entitas.Graph.Analysis
         Condition? ConditionOf(SyntaxNode node)
         {
             List<Clause>? clauses = null;
-            foreach (var (clause, negate) in Clauses(node))
-                (clauses ??= new List<Clause>()).Add(ClauseOf(clause, negate));
+            foreach (var (clause, negate, path) in Clauses(node))
+                (clauses ??= new List<Clause>()).Add(path == null ? ClauseOf(clause, negate) : JumpClause(path));
             if (clauses == null)
                 return null;
             clauses.Reverse();
             return new Condition(clauses);
         }
 
-        /// <summary>The clauses <paramref name="node"/> runs under, innermost first.</summary>
-        IEnumerable<(SyntaxNode Node, bool Negate)> Clauses(SyntaxNode node)
+        /// <summary>
+        /// The clauses <paramref name="node"/> runs under, innermost first: a branch point and the
+        /// side taken, or for a jump nested in a statement before it the ifs on the way there
+        /// (<see cref="NestedJumps"/>).
+        /// </summary>
+        IEnumerable<(SyntaxNode Node, bool Negate, JumpPath? Path)> Clauses(SyntaxNode node)
         {
             var child = node;
             for (var parent = node.Parent; parent != null && !IsBoundary(parent); child = parent, parent = parent.Parent)
@@ -749,51 +757,51 @@ namespace Entitas.Graph.Analysis
                 switch (parent)
                 {
                     case IfStatementSyntax ifStatement when child == ifStatement.Statement:
-                        yield return (ifStatement, false);
+                        yield return (ifStatement, false, null);
                         break;
                     case IfStatementSyntax ifStatement when child == ifStatement.Else:
-                        yield return (ifStatement, true);
+                        yield return (ifStatement, true, null);
                         break;
                     case BlockSyntax block when child is StatementSyntax statement:
-                        foreach (var guard in GuardsBefore(block.Statements, block.Statements.IndexOf(statement), IsBoundary(block.Parent!) ? Leading(block.Statements) : 0))
+                        foreach (var guard in GuardsBefore(node, block.Statements, block.Statements.IndexOf(statement), IsBoundary(block.Parent!)))
                             yield return guard;
                         break;
                     case SwitchSectionSyntax section when child is StatementSyntax statement:
-                        foreach (var guard in GuardsBefore(section.Statements, section.Statements.IndexOf(statement), 0))
+                        foreach (var guard in GuardsBefore(node, section.Statements, section.Statements.IndexOf(statement), false))
                             yield return guard;
-                        yield return (section, false);
+                        yield return (section, false, null);
                         break;
                     case SwitchExpressionArmSyntax arm when child == arm.Expression:
-                        yield return (arm, false);
+                        yield return (arm, false, null);
                         break;
                     case ConditionalExpressionSyntax conditional when child == conditional.WhenTrue:
-                        yield return (conditional, false);
+                        yield return (conditional, false, null);
                         break;
                     case ConditionalExpressionSyntax conditional when child == conditional.WhenFalse:
-                        yield return (conditional, true);
+                        yield return (conditional, true, null);
                         break;
                     case BinaryExpressionSyntax binary when child == binary.Right && binary.IsKind(SyntaxKind.LogicalAndExpression):
-                        yield return (binary, false);
+                        yield return (binary, false, null);
                         break;
                     case BinaryExpressionSyntax binary when child == binary.Right && binary.IsKind(SyntaxKind.LogicalOrExpression):
-                        yield return (binary, true);
+                        yield return (binary, true, null);
                         break;
                     case BinaryExpressionSyntax binary when child == binary.Right && binary.IsKind(SyntaxKind.CoalesceExpression):
-                        yield return (binary, false);
+                        yield return (binary, false, null);
                         break;
                     case AssignmentExpressionSyntax assignment when child == assignment.Right && assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression):
-                        yield return (assignment, false);
+                        yield return (assignment, false, null);
                         break;
                     case ConditionalAccessExpressionSyntax access when child == access.WhenNotNull:
-                        yield return (access, false);
+                        yield return (access, false, null);
                         break;
                     case CatchClauseSyntax catchClause when child == catchClause.Block:
-                        yield return (catchClause, false);
+                        yield return (catchClause, false, null);
                         break;
                     case ArgumentSyntax argument when child is AnonymousFunctionExpressionSyntax:
                         // Last argument first: the list is reversed into reading order.
-                        foreach (var when in Enumerable.Reverse(WhenArguments(argument)))
-                            yield return when;
+                        foreach (var (when, negated) in Enumerable.Reverse(WhenArguments(argument)))
+                            yield return (when, negated, null);
                         break;
                 }
             }
@@ -857,12 +865,156 @@ namespace Entitas.Graph.Analysis
         static bool IsBoundary(SyntaxNode node) =>
             node is MemberDeclarationSyntax or AccessorDeclarationSyntax or LocalFunctionStatementSyntax;
 
-        /// <summary>The guards among the statements before statement <paramref name="index"/>, nearest first, as clauses on what follows them.</summary>
-        static IEnumerable<(SyntaxNode Node, bool Negate)> GuardsBefore(SyntaxList<StatementSyntax> statements, int index, int leading)
+        /// <summary>
+        /// The guards among the statements before statement <paramref name="index"/>, nearest first,
+        /// as clauses on what follows them: an if that jumps (<see cref="Guard"/>), and the jumps
+        /// nested in one (<see cref="NestedJumps"/>). In a method's <paramref name="body"/>, not
+        /// those it starts with (<see cref="Leading"/>).
+        /// </summary>
+        IEnumerable<(SyntaxNode Node, bool Negate, JumpPath? Path)> GuardsBefore(SyntaxNode write, SyntaxList<StatementSyntax> statements, int index, bool body)
         {
+            var (leading, nested) = body ? Leading(statements) : (0, 0);
             for (var i = index - 1; i >= leading; i--)
-                if (Guard(statements[i]) is { } holds && !JumpsTo(statements, i, index, holds))
-                    yield return (statements[i], !holds);
+            {
+                var holds = Guard(statements[i]);
+                if (holds != null && !JumpsTo(statements, i, index, holds.Value))
+                    yield return (statements[i], !holds.Value, null);
+                if (i >= nested)
+                    foreach (var path in NestedJumps(statements[i], holds, write))
+                        yield return (path.Jump, true, path);
+            }
+        }
+
+        /// <summary>A jump nested in a statement, with the ifs on the way to it from there, outermost first, and the side of each taken.</summary>
+        sealed class JumpPath
+        {
+            public readonly StatementSyntax Jump;
+            public readonly (IfStatementSyntax If, bool Else)[] Steps;
+
+            public JumpPath(StatementSyntax jump, (IfStatementSyntax, bool)[] steps)
+            {
+                Jump = jump;
+                Steps = steps;
+            }
+        }
+
+        /// <summary>
+        /// The jumps nested in <paramref name="statement"/> that leave past whatever follows it — a
+        /// `continue` or `break` of the loop or switch it sits in, a `return`, a `yield break`, a
+        /// `goto` — each reached from it through ifs, elses and blocks only. Where all the ifs on
+        /// the way to one hold, what follows does not run: `if (target != null) { if
+        /// (target.isLoadingView) continue; … }` puts `!(target != null &amp;&amp; target.isLoadingView)`
+        /// on the rest of the loop (<see cref="JumpClause"/>). Last first, like the guards.
+        ///
+        /// Sound before complete — none is better than one that may not hold:
+        /// - a loop, switch, try, lambda or local function on the way: that jump says nothing here
+        ///   (a `continue` in a nested loop leaves that loop, and the rest is too involved to read);
+        /// - a `goto` anywhere in the statement that may land after it starts and at or before
+        ///   <paramref name="write"/>: from there the write runs whatever was asked on the way, so
+        ///   none of the statement's jumps says anything;
+        /// - when the statement is a guard itself (<paramref name="holds"/>), the branch it jumps in
+        ///   is said by that guard; a jump in the other branch is reached only through it, so the
+        ///   guard's own if is left out of that jump's way.
+        /// </summary>
+        IEnumerable<JumpPath> NestedJumps(StatementSyntax statement, bool? holds, SyntaxNode write)
+        {
+            if (statement is not (IfStatementSyntax or BlockSyntax))
+                yield break;
+            if (!_jumps.TryGetValue(statement, out var jumps))
+                _jumps[statement] = jumps = FindJumps(statement);
+            if (jumps == null || MayLandWithin(statement, write))
+                yield break;
+
+            for (var i = jumps.Count - 1; i >= 0; i--)
+            {
+                var path = jumps[i];
+                if (holds == null)
+                    yield return path;
+                else if (path.Steps[0].Else != holds.Value && path.Steps.Length > 1)
+                    yield return new JumpPath(path.Jump, path.Steps.Skip(1).ToArray());
+            }
+        }
+
+        /// <summary>The jumps <see cref="NestedJumps"/> reads in a statement, in the order they are written; null when there is none.</summary>
+        static List<JumpPath>? FindJumps(StatementSyntax statement)
+        {
+            List<JumpPath>? found = null;
+            var steps = new List<(IfStatementSyntax, bool)>();
+
+            void Visit(StatementSyntax s)
+            {
+                switch (s)
+                {
+                    case IfStatementSyntax ifStatement:
+                        steps.Add((ifStatement, false));
+                        Visit(ifStatement.Statement);
+                        steps.RemoveAt(steps.Count - 1);
+                        if (ifStatement.Else != null)
+                        {
+                            steps.Add((ifStatement, true));
+                            Visit(ifStatement.Else.Statement);
+                            steps.RemoveAt(steps.Count - 1);
+                        }
+                        break;
+                    case BlockSyntax block:
+                        foreach (var inner in block.Statements)
+                            Visit(inner);
+                        break;
+                    case ReturnStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax:
+                    case GotoStatementSyntax jump when jump.IsKind(SyntaxKind.GotoStatement):
+                    case YieldStatementSyntax yield when yield.IsKind(SyntaxKind.YieldBreakStatement):
+                        if (steps.Count > 0)
+                            (found ??= new List<JumpPath>()).Add(new JumpPath(s, steps.ToArray()));
+                        break;
+                }
+            }
+
+            Visit(statement);
+            return found;
+        }
+
+        /// <summary>
+        /// Whether a `goto` in <paramref name="statement"/> may land after the statement starts and
+        /// at or before <paramref name="write"/>: a label of its name there, in the same member.
+        /// The tree is asked first whether it has a goto at all.
+        /// </summary>
+        bool MayLandWithin(StatementSyntax statement, SyntaxNode write)
+        {
+            _hasGoto ??= _tree.GetRoot().DescendantTokens().Any(t => t.IsKind(SyntaxKind.GotoKeyword));
+            if (_hasGoto == false)
+                return false;
+
+            var member = statement.Ancestors().FirstOrDefault(IsBoundary);
+            if (member == null)
+                return true;
+            foreach (var jump in statement.DescendantNodes(n => n is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax)
+                         .OfType<GotoStatementSyntax>())
+            {
+                if (!jump.IsKind(SyntaxKind.GotoStatement))
+                    continue;
+                if (jump.Expression is not IdentifierNameSyntax name ||
+                    member.DescendantNodes().OfType<LabeledStatementSyntax>().Any(l => l.Identifier.ValueText == name.Identifier.ValueText &&
+                                                                                       l.SpanStart > statement.SpanStart && l.SpanStart <= write.SpanStart))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The clause a jump nested in an earlier statement puts on what follows it: not all the ifs
+        /// on its way hold — `!(target != null &amp;&amp; target.isLoadingView)`, `!(!a &amp;&amp; b)` for a
+        /// jump in an else. One if alone is a guard like any other, and written as one. The ifs
+        /// are its <see cref="Clause.Parts"/>, for a call's constant arguments to decide.
+        /// </summary>
+        Clause JumpClause(JumpPath path)
+        {
+            if (path.Steps.Length == 1)
+                return ClauseOf(path.Steps[0].If, !path.Steps[0].Else);
+
+            var typed = TypedEnumMembers(path.Steps.SelectMany(s => Written(s.If)).ToList());
+            var parts = path.Steps.Select(s => new Clause(ClauseText(s.If, s.Else, typed), $"{_file}:{s.If.SpanStart}", s.Else, s.If)).ToList();
+            var text = "!(" + string.Join(" && ", parts.Select(p => Guards.NeedsParentheses(p.Text) ? "(" + p.Text + ")" : p.Text)) + ")";
+            return new Clause(text, $"{_file}:{path.Jump.SpanStart}", true, parts: parts);
         }
 
         /// <summary>
@@ -890,14 +1042,33 @@ namespace Entitas.Graph.Analysis
         /// the system runs at all, not which of its writes happen: every write after it shares it,
         /// so it would mark each line conditional and tell none apart. A guard after a loop, or
         /// after an if with a body of its own, does tell the writes before it from those after.
+        ///
+        /// Nested: the same, also over ifs that hold nothing but guards (<see cref="OnlyGuards"/>),
+        /// and only for the jumps nested in them — so a guard after one still says what it said.
         /// </summary>
-        static int Leading(SyntaxList<StatementSyntax> statements)
+        static (int Guards, int Nested) Leading(SyntaxList<StatementSyntax> statements)
         {
             var count = 0;
             while (count < statements.Count &&
                    (statements[count] is LocalDeclarationStatementSyntax or ExpressionStatementSyntax || Guard(statements[count]) != null))
                 count++;
-            return count;
+            var nested = count;
+            while (nested < statements.Count &&
+                   (statements[nested] is LocalDeclarationStatementSyntax or ExpressionStatementSyntax || Guard(statements[nested]) != null ||
+                    OnlyGuards(statements[nested])))
+                nested++;
+            return (count, nested);
+        }
+
+        /// <summary>An if whose branches hold nothing but guards, nested ones too: `if (a) { if (b) return; }` is `if (a &amp;&amp; b) return;` written in two.</summary>
+        static bool OnlyGuards(StatementSyntax statement)
+        {
+            return statement is IfStatementSyntax ifStatement && Guarding(ifStatement.Statement) &&
+                   (ifStatement.Else == null || Guarding(ifStatement.Else.Statement));
+
+            static bool Guarding(StatementSyntax s) => s is BlockSyntax block
+                ? block.Statements.Count > 0 && block.Statements.All(inner => Guard(inner) != null || OnlyGuards(inner))
+                : Guard(s) != null || OnlyGuards(s);
         }
 
         /// <summary>

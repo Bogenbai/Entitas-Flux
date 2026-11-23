@@ -165,7 +165,7 @@ namespace Entitas.Graph.Analysis
             {
                 if (method == null || condition == null || method.Parameters.Length == 0 || _context.TypeOf(method.ContainingType)?.Kind != NodeKind.Type)
                     return;
-                foreach (var clause in condition.Clauses)
+                foreach (var clause in condition.Clauses.SelectMany(c => c.Parts ?? new[] { c }))
                 {
                     if (clause.Node == null)
                         continue;
@@ -391,9 +391,27 @@ namespace Entitas.Graph.Analysis
             return true;
         }
 
-        /// <summary>A clause under bindings; for a case that matches, whether a `when` still decides (true: only the guard is left).</summary>
+        /// <summary>
+        /// A clause under bindings; for a case that matches, whether a `when` still decides (true:
+        /// only the guard is left). A jump's `!(a &amp;&amp; b)` (<see cref="Clause.Parts"/>) holds
+        /// when one of its parts cannot, cannot when all must, and is unknown otherwise.
+        /// </summary>
         (Truth Truth, bool Guarded) Decide(Clause clause, IMethodSymbol method, Bindings bindings)
         {
+            if (clause.Parts != null)
+            {
+                var all = Truth.True;
+                foreach (var part in clause.Parts)
+                {
+                    var (truth, _) = Decide(part, method, bindings);
+                    if (truth == Truth.False)
+                        return (Truth.True, false);
+                    if (truth == Truth.Unknown)
+                        all = Truth.Unknown;
+                }
+                return (all == Truth.True ? Truth.False : Truth.Unknown, false);
+            }
+
             var node = clause.Node;
             if (node == null || !Mentions(method, node).Any(bindings.Has))
                 return (Truth.Unknown, false);

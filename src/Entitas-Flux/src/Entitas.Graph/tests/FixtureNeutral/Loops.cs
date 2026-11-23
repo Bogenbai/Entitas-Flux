@@ -69,7 +69,7 @@ namespace Harbor
         }
     }
 
-    /// <summary>Probes are charged, deployed, projected, then launched and pinged.</summary>
+    /// <summary>Probes are charged, deployed, projected, then launched and pinged; the quay's systems come last, so the order numbers before them stay.</summary>
     public sealed class Probes : Feature
     {
         public Probes(Contexts contexts)
@@ -82,6 +82,11 @@ namespace Harbor
             Add(new PingProbesSystem(contexts.port));
             Add(new BeamToShipsSystem(contexts.port));
             Add(new ClearCustomsSystem(contexts.port));
+            Add(new BunkerHullsSystem(contexts.port));
+            Add(new LowerGangwaysSystem(contexts.port));
+            Add(new MoorHullsSystem(contexts.port));
+            Add(new SlackenMooringsSystem(contexts.port));
+            Add(new HaulKeelsSystem(contexts.signal, contexts.port));
         }
     }
 

@@ -177,7 +177,8 @@ namespace Entitas.Graph.Tests
             messages.Should().BeEquivalentTo(new Dictionary<string, string>
             {
                 ["DockingOrder"] = "request", ["RefuelOrder"] = "request", ["SaleOrder"] = "request", ["ScrapFleetOrder"] = "request",
-                ["RepaintOrder"] = "request", ["PilotOrder"] = "request", ["LaunchDue"] = "request", ["PingDue"] = "request", ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
+                ["RepaintOrder"] = "request", ["PilotOrder"] = "request", ["LaunchDue"] = "request", ["PingDue"] = "request", ["GangwayCall"] = "request",
+                ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
             });
 
             // Who consumes a request is the reader whose loop destroys it, or marks it Doomed.
@@ -268,6 +269,54 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_call_skipped_by_a_jump_nested_in_an_if_waits_and_its_destroy_says_so()
+        {
+            // `if (ship != null) { if (ship.isWrecked) continue; … } call.Destroy();`: the call is
+            // destroyed unless both hold; the Ballast is put inside the if, where the ship is not wrecked.
+            Edges("BunkerHullsSystem", Relation.Destroys, "BunkerCall").Should().ContainSingle(e => e.Condition == "!(ship != null && ship.isWrecked)");
+            Edges("BunkerHullsSystem", Relation.Creates, "Ballast").Should().ContainSingle(e => e.Condition == "ship != null && !ship.isWrecked");
+            Lines(Queries.Flow("BunkerCall")).Should().Contain(l => l.StartsWith("read+destroyed by BunkerHullsSystem", StringComparison.Ordinal) &&
+                                                                  l.Contains(", destroys it only once !(ship != null && ship.isWrecked)  "));
+
+            // Turned down on the way to the nested `continue` (`ship != null && !ship.isDocked`),
+            // answered after it (`!(ship != null && !ship.isDocked)`): every call goes.
+            Edges("LowerGangwaysSystem", Relation.Destroys, "GangwayCall").Should().ContainSingle(e => e.Condition == null);
+            Queries.Flow("GangwayCall").Should().Contain("read+destroyed by LowerGangwaysSystem").And.NotContain("only once");
+            Node("GangwayCall").ConsumedBy.Select(Label).Should().Equal("LowerGangwaysSystem");
+            Node("BunkerCall").Message.Should().BeNull("a wrecked ship's call stays");
+        }
+
+        [Fact]
+        public void A_jump_nested_where_it_cannot_be_read_says_nothing_and_one_in_an_else_says_both_sides()
+        {
+            // A `continue` of a loop of its own; jumps under a switch and a try; a goto landing
+            // before the write, which the `continue` next to it then says nothing about.
+            Edges("MoorHullsSystem", Relation.Creates, "Hawser").Should().ContainSingle(e => e.Condition == null);
+            Edges("MoorHullsSystem", Relation.Creates, "Keel").Should().ContainSingle(e => e.Condition == null);
+            Edges("MoorHullsSystem", Relation.Creates, "Ballast").Should().ContainSingle(e => e.Condition == null);
+
+            // `if (mooring.hasHawser) {…} else { if (mooring.hasBilge) continue; }`
+            Edges("MoorHullsSystem", Relation.Creates, "Bilge").Should().ContainSingle(e => e.Condition == "!(!mooring.hasHawser && mooring.hasBilge)");
+
+            // Nested at the top of Execute, it says when the system runs at all: no condition on
+            // the destroy, but the loop does not run every time, so the calls may wait.
+            Edges("HaulKeelsSystem", Relation.Destroys, "KeelCall").Should().ContainSingle(e => e.Condition == null);
+            Node("KeelCall").Message.Should().BeNull("HaulKeelsSystem destroys the calls only on odd ticks");
+        }
+
+        [Fact]
+        public void A_constant_argument_decides_a_helper_s_nested_jump()
+        {
+            // Moorings.Secure: `if (mooring.hasHawser) { if (slack) return; } mooring.ReplaceBollard(1);`
+            // false for slack decides the clause; true leaves it to the hawser, so it stays.
+            Edges("Moorings", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Condition == "!(mooring.hasHawser && slack)");
+            Edges("MoorHullsSystem", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Through == "Moorings.Secure" && e.Condition == null,
+                "slack: false never returns there");
+            Edges("SlackenMooringsSystem", Relation.Creates, "Bollard").Should().ContainSingle(e => e.Through == "Moorings.Secure" &&
+                                                                                                    e.Condition == "!(mooring.hasHawser && slack)");
+        }
+
+        [Fact]
         public void Flow_does_not_list_again_the_removal_its_taker_line_already_names()
         {
             var flow = Queries.Flow("RepaintOrder");
@@ -297,7 +346,7 @@ namespace Entitas.Graph.Tests
             Section(report, "Flags set once on purpose?").Should().Contain(
                 "- `Registered` set by `RegisterShipsSystem` — the setter only sees entities while they have `Fresh`, which `ForgetFreshSystem` removes");
             Section(report, "State flags that are never cleared").Should().Contain("None.");
-            report.Should().Contain("- messages: 0 requests by name (`*Request`), 8 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
+            report.Should().Contain("- messages: 0 requests by name (`*Request`), 9 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
             report.Should().NotContain("JustCreated").And.NotContain("GameCleanupSystems");
             Section(report, "Requests without a handler").Should().Contain("go by name (`--request-suffix`, `--event-suffix`)");
         }

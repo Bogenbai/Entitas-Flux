@@ -24,13 +24,22 @@ namespace Entitas.Graph.Analysis
         public readonly Microsoft.CodeAnalysis.SyntaxNode? Node;
         public readonly Clause? Residual;
 
-        public Clause(string text, string? site, bool negated, Microsoft.CodeAnalysis.SyntaxNode? node = null, Clause? residual = null)
+        /// <summary>
+        /// For a jump nested in an earlier statement (`if (a) { if (b) continue; }`): the ifs on the
+        /// way to it, each a clause of its own, which this one says do not all hold — `!(a &amp;&amp;
+        /// b)`. Such a clause has no <see cref="Node"/>; its parts have theirs.
+        /// </summary>
+        public readonly IReadOnlyList<Clause>? Parts;
+
+        public Clause(string text, string? site, bool negated, Microsoft.CodeAnalysis.SyntaxNode? node = null, Clause? residual = null,
+                      IReadOnlyList<Clause>? parts = null)
         {
             Text = text;
             Site = site;
             Negated = negated;
             Node = node;
             Residual = residual;
+            Parts = parts;
         }
 
         /// <summary>Whether this and <paramref name="other"/> cannot both hold: the two sides of one branch point, or one written as the other's negation.</summary>
@@ -185,16 +194,43 @@ namespace Entitas.Graph.Analysis
             return list;
         }
 
-        /// <summary>`p &amp;&amp; a` and `p &amp;&amp; !a` → `p`; null unless they differ in exactly one clause each, and those exclude each other.</summary>
+        /// <summary>
+        /// `p &amp;&amp; a` and `p &amp;&amp; !a` → `p`: they differ in exactly one clause each, and those
+        /// exclude each other. Also `p &amp;&amp; a &amp;&amp; b` and `p &amp;&amp; !(a &amp;&amp; b)` → `p`, the
+        /// second a write after a jump nested in `if (a) { if (b) … }` and the first one made on the
+        /// way there (<see cref="NegatesAll"/>). Null otherwise.
+        /// </summary>
         static Condition? Merge(Condition a, Condition b)
         {
-            if (a.Clauses.Count != b.Clauses.Count)
-                return null;
             var onlyA = a.Clauses.Where(c => b.Clauses.All(x => x.Text != c.Text)).ToList();
             var onlyB = b.Clauses.Where(c => a.Clauses.All(x => x.Text != c.Text)).ToList();
-            return onlyA.Count == 1 && onlyB.Count == 1 && onlyA[0].Excludes(onlyB[0])
-                ? new Condition(a.Clauses.Where(c => c != onlyA[0]).ToList())
-                : null;
+            if (a.Clauses.Count == b.Clauses.Count && onlyA.Count == 1 && onlyB.Count == 1 && onlyA[0].Excludes(onlyB[0]))
+                return new Condition(a.Clauses.Where(c => c != onlyA[0]).ToList());
+            if (onlyB.Count == 1 && onlyA.Count > 0 && NegatesAll(onlyB[0].Text, onlyA, b.Clauses.Where(c => c != onlyB[0])))
+                return new Condition(b.Clauses.Where(c => c != onlyB[0]).ToList());
+            if (onlyA.Count == 1 && onlyB.Count > 0 && NegatesAll(onlyA[0].Text, onlyB, a.Clauses.Where(c => c != onlyA[0])))
+                return new Condition(a.Clauses.Where(c => c != onlyA[0]).ToList());
+            return null;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="text"/>, `!(x &amp;&amp; y &amp;&amp; …)`, says that not all of
+        /// <paramref name="clauses"/> hold, where <paramref name="shared"/> hold: every one of them
+        /// is among its parts, and every other part is a shared clause. Clauses are compared as
+        /// written, split at their own top-level &amp;&amp; (`a &amp;&amp; b` as a clause is a and b).
+        /// </summary>
+        static bool NegatesAll(string text, IEnumerable<Clause> clauses, IEnumerable<Clause> shared)
+        {
+            if (!text.StartsWith("!(", StringComparison.Ordinal) || !text.EndsWith(")", StringComparison.Ordinal) || !Balanced(text.Substring(2, text.Length - 3)))
+                return false;
+            var parts = new HashSet<string>(SplitTopLevel(text.Substring(2, text.Length - 3), " && "), StringComparer.Ordinal);
+            var negated = new HashSet<string>(clauses.SelectMany(c => Conjuncts(c.Text)), StringComparer.Ordinal);
+            var held = new HashSet<string>(shared.SelectMany(c => Conjuncts(c.Text)), StringComparer.Ordinal);
+            return negated.All(parts.Contains) && parts.All(p => negated.Contains(p) || held.Contains(p));
+
+            // As a part of `!(…)` writes it: whole and in parentheses when it has an || (or ?? or ?:) of its own.
+            static IEnumerable<string> Conjuncts(string clause) =>
+                NeedsParentheses(clause) ? new[] { "(" + clause + ")" } : (IEnumerable<string>)SplitTopLevel(clause, " && ");
         }
 
         /// <summary>"a or b or c or +2 more", ordinal, each cut to <see cref="Length"/>; null when there is none, or the ways cover every case.</summary>
@@ -265,6 +301,39 @@ namespace Entitas.Graph.Analysis
             }
             parts.Add(text.Substring(start));
             return parts;
+        }
+
+        /// <summary>Whether every bracket <paramref name="text"/> closes it opened itself (outside string literals): `a) &amp;&amp; (b` is not.</summary>
+        static bool Balanced(string text)
+        {
+            var depth = 0;
+            char? quote = null;
+            for (var i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (quote != null)
+                {
+                    if (c == '\\') i++;
+                    else if (c == quote) quote = null;
+                    continue;
+                }
+
+                switch (c)
+                {
+                    case '"' or '\'':
+                        quote = c;
+                        break;
+                    case '(' or '[' or '{':
+                        depth++;
+                        break;
+                    case ')' or ']' or '}':
+                        if (--depth < 0)
+                            return false;
+                        break;
+                }
+            }
+
+            return depth == 0 && quote == null;
         }
 
         /// <summary>Where <paramref name="token"/> occurs outside brackets and string literals, from <paramref name="from"/>; -1 when it does not.</summary>
