@@ -43,12 +43,16 @@ namespace Entitas.Graph.Output
     /// that is a gate the graph knows for sure: a component the reader's group requires and that
     /// another system adds to the entity later — Ready, which MarkEventsReadySystem adds to every
     /// Event entity, as the `through` of an inferred destroy records ("created with Event + X;
-    /// Ready by MarkEventsReadySystem"). What can stop a reader from seeing it at all is a system
-    /// taking the component off before it runs (a handler destroying its request, the generated
-    /// cleanup clearing XChanged). Anything else — a system under another root, a creator outside
-    /// the systems, a gate only some creations get — is "frame unknown", never a guess. The graph
-    /// keeps no group's full matcher, so a requirement that is no such gate (a view component the
-    /// entity gets later) is not seen: a frame says when the taker can see the data first.
+    /// Ready by MarkEventsReadySystem"). The build records the other such gates on the write
+    /// (graph.json `waits`, Analysis.Waits): a component the reader's groups require that the
+    /// entity the producer has just made is made without — the reader runs after the system
+    /// adding it, or the frame is unknown when it is added after an await or outside the systems
+    /// (the View a view factory adds once the asset is loaded). What can stop a reader from seeing
+    /// it at all is a system taking the component off before it runs (a handler destroying its
+    /// request, the generated cleanup clearing XChanged). Anything else — a system under another
+    /// root, a creator outside the systems, a gate only some creations get — is "frame unknown",
+    /// never a guess. Where the entity or the reader's way to it is not known for certain, no gate
+    /// is recorded: a frame says when the taker can see the data first.
     /// </summary>
     internal sealed class FlowWalk
     {
@@ -58,6 +62,7 @@ namespace Entitas.Graph.Output
         readonly Dictionary<string, List<GraphEdge>> _in = new Dictionary<string, List<GraphEdge>>(StringComparer.Ordinal);
         readonly Dictionary<string, int> _written = new Dictionary<string, int>(StringComparer.Ordinal);
         readonly Dictionary<string, List<FlowGate>> _gates = new Dictionary<string, List<FlowGate>>(StringComparer.Ordinal);
+        readonly Dictionary<string, List<FlowWait>> _waits = new Dictionary<string, List<FlowWait>>(StringComparer.Ordinal);
         readonly HashSet<string> _expandedSystems = new HashSet<string>(StringComparer.Ordinal);
         readonly HashSet<string> _expandedComponents = new HashSet<string>(StringComparer.Ordinal);
         readonly Queue<FlowStep> _queue = new Queue<FlowStep>();
@@ -724,24 +729,101 @@ namespace Entitas.Graph.Output
 
             // Gates hold the component back, not its [Watched] marker: the change sets the marker
             // on an entity that already carries what the reacting group needs, or it never would.
-            if (!marker)
-                foreach (var g in Gates(component).Where(g => Requires(system, g.Component)))
+            if (marker)
+                return (ready.Next(slot), null, gate, gateOrder);
+
+            foreach (var g in Gates(component).Where(g => Requires(system, g.Component)))
+            {
+                if (g.Partial)
+                    return (null, FlowFrame.Unknown($"waits for {g.Component.Label}, which only some {component.Label} get later"), null, 0);
+                var setter = g.Setter.Id == producer.Id ? from : Slot(g.Setter, root);
+                if (setter == null)
+                    return (null, FlowFrame.Unknown($"waits for {g.Component.Label}; {g.Setter.Label} {NotRunning(g.Setter, root)}"), null, 0);
+                var set = g.Setter.Id == producer.Id ? from : from.Next(setter.Value);
+                if (gate == null || set.CompareTo(ready) > 0)
                 {
-                    if (g.Partial)
-                        return (null, FlowFrame.Unknown($"waits for {g.Component.Label}, which only some {component.Label} get later"), null, 0);
-                    var setter = g.Setter.Id == producer.Id ? from : Slot(g.Setter, root);
-                    if (setter == null)
-                        return (null, FlowFrame.Unknown($"waits for {g.Component.Label}; {g.Setter.Label} {NotRunning(g.Setter, root)}"), null, 0);
-                    var set = g.Setter.Id == producer.Id ? from : from.Next(setter.Value);
-                    if (gate == null || set.CompareTo(ready) > 0)
+                    ready = set.CompareTo(ready) > 0 ? set : ready;
+                    gate = g;
+                    gateOrder = setter.Value.Order;
+                }
+            }
+
+            // What the system's groups require and the producer's new entity is made without
+            // (graph.json `waits`): it sees the entity once a system adds that, at the earliest
+            // after that system's next run. Added after an await, outside the systems, or by
+            // systems after which it would see it in different frames, and no frame is certain.
+            foreach (var wait in WaitsOf(producer, component, system))
+            {
+                var needs = wait.Component.Label;
+                if (wait.Added != null)
+                    return (null, FlowFrame.Unknown($"waits for {needs}, added {wait.Added}"), null, 0);
+
+                int? seen = null;
+                FlowTime? latest = null;
+                GraphNode? by = null;
+                var order = 0;
+                foreach (var setter in wait.Setters)
+                {
+                    var at = setter.Id == producer.Id ? from : Slot(setter, root) is { } s ? from.Next(s) : (FlowTime?)null;
+                    if (at == null)
+                        return (null, FlowFrame.Unknown($"waits for {needs}; {setter.Label} {NotRunning(setter, root)}"), null, 0);
+                    var frame = (at.Value.CompareTo(ready) > 0 ? at.Value : ready).Next(slot).Frame;
+                    if (seen != null && seen != frame)
+                        return (null, FlowFrame.Unknown($"waits for {needs}; the frame depends on which of {wait.Setters.Count} systems adds it"), null, 0);
+                    seen = frame;
+                    if (latest == null || at.Value.CompareTo(latest.Value) > 0)
                     {
-                        ready = set.CompareTo(ready) > 0 ? set : ready;
-                        gate = g;
-                        gateOrder = setter.Value.Order;
+                        latest = at;
+                        by = setter;
+                        order = setter.Id == producer.Id ? from.Order : Slot(setter, root)!.Value.Order;
                     }
                 }
 
+                if (latest is { } added && added.CompareTo(ready) > 0)
+                {
+                    ready = added;
+                    gate = new FlowGate(wait.Component, by!, false, wait.Setters.Count - 1);
+                    gateOrder = order;
+                }
+            }
+
             return (ready.Next(slot), null, gate, gateOrder);
+        }
+
+        /// <summary>
+        /// What <paramref name="system"/> waits for on the entities <paramref name="producer"/>
+        /// makes the component on: what every one of its creates of it records (graph.json
+        /// `waits`), since the system may see it through any of them. Added after an await or
+        /// outside the systems when one of them says so; otherwise every setter any names.
+        /// </summary>
+        List<FlowWait> WaitsOf(GraphNode producer, GraphNode component, GraphNode system)
+        {
+            var key = producer.Id + "\u0001" + component.Id + "\u0001" + system.Id;
+            if (_waits.TryGetValue(key, out var known))
+                return known;
+
+            var waits = new List<FlowWait>();
+            var creates = WritesOf(producer, component).Where(e => e.Relation == Relation.Creates).ToList();
+            if (creates.Count > 0 && creates.All(e => e.Waits.Count > 0))
+            {
+                foreach (var needs in creates[0].Waits.Where(w => w.System == system.Id).Select(w => w.Needs).Distinct(StringComparer.Ordinal))
+                {
+                    var all = creates.Select(e => e.Waits.FirstOrDefault(w => w.System == system.Id && w.Needs == needs)).ToList();
+                    if (all.Any(w => w == null) || _graph.Node(needs) is not { } node)
+                        continue;
+                    var added = all.Select(w => w!.Added).Where(a => a != null)
+                        .OrderBy(a => a == "after an await" ? 0 : a == "after a yield" ? 1 : 2)
+                        .FirstOrDefault();
+                    var setters = added != null
+                        ? new List<GraphNode>()
+                        : all.SelectMany(w => w!.AddedBy).Distinct(StringComparer.Ordinal).Select(id => _graph.Node(id)).OfType<GraphNode>().ToList();
+                    if (added != null || setters.Count > 0)
+                        waits.Add(new FlowWait(node, added, setters));
+                }
+            }
+
+            _waits[key] = waits;
+            return waits;
         }
 
         /// <summary>
@@ -1112,11 +1194,34 @@ namespace Entitas.Graph.Output
         /// <summary>Named for only some of the shapes the component is created with.</summary>
         public readonly bool Partial;
 
-        public FlowGate(GraphNode component, GraphNode setter, bool partial)
+        /// <summary>Other systems adding it, after which the taker sees it in the same frame as after <see cref="Setter"/>.</summary>
+        public readonly int More;
+
+        public FlowGate(GraphNode component, GraphNode setter, bool partial, int more = 0)
         {
             Component = component;
             Setter = setter;
             Partial = partial;
+            More = more;
+        }
+    }
+
+    /// <summary>
+    /// A component a taker's groups require that the producer's new entity is made without
+    /// (graph.json `waits`): how it arrives, after an await or outside the systems, or the
+    /// systems adding it.
+    /// </summary>
+    internal sealed class FlowWait
+    {
+        public readonly GraphNode Component;
+        public readonly string? Added;
+        public readonly IReadOnlyList<GraphNode> Setters;
+
+        public FlowWait(GraphNode component, string? added, IReadOnlyList<GraphNode> setters)
+        {
+            Component = component;
+            Added = added;
+            Setters = setters;
         }
     }
 

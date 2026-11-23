@@ -54,4 +54,15 @@ namespace Sample
     [Game] public sealed class Till : IComponent { public int Value; }
     [Game] public sealed class CoinsSpentEvent : IComponent { public int Value; }
     [Game] public sealed class CoinsEarnedEvent : IComponent { public int Value; }
+
+    // Parcels, made with the asset of their model: the Model is attached once the asset has
+    // loaded, after an await; a Stamp comes from a system of its own. Each pending flag is a
+    // request its handler takes off, and each handler needs one of the two.
+    [Game] public sealed class Parcel : IComponent { }
+    [Game] public sealed class ModelAsset : IComponent { public string Value; }
+    [Game] public sealed class Model : IComponent { public object Value; }
+    [Game] public sealed class Stamp : IComponent { public int Value; }
+    [Game] public sealed class DispatchPending : IComponent { }   // DispatchParcelsSystem needs Model
+    [Game] public sealed class FrankPending : IComponent { }      // FrankParcelsSystem needs Stamp
+    [Game] public sealed class Postage : IComponent { public int Value; }
 }

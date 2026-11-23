@@ -117,4 +117,19 @@ namespace Harbor
     {
         public static void Coat(PortEntity hull, int colour) => hull.ReplacePaint(colour);
     }
+
+    /// <summary>Waits for a hologram's asset, then has the emitter mount it: the Hologram arrives after an await.</summary>
+    public sealed class HoloProjector
+    {
+        public async System.Threading.Tasks.Task ProjectAsync(PortEntity probe)
+        {
+            await System.Threading.Tasks.Task.Delay(10);
+            new HoloEmitter().Mount(probe);
+        }
+    }
+
+    public sealed class HoloEmitter
+    {
+        public void Mount(PortEntity probe) => probe.AddHologram(this);
+    }
 }

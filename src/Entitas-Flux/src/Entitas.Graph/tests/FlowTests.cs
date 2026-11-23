@@ -280,6 +280,81 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_reader_waits_for_what_the_new_entity_is_made_without()
+        {
+            // ReturnParcelsSystem (#10) makes a parcel with its model's asset and both requests on it.
+            // DispatchParcelsSystem needs the Model, which ModelBehaviour attaches once ModelLoader's
+            // await is over: no frame can be told. FrankParcelsSystem needs the Stamp, which
+            // StampParcelsSystem (#9) adds — the next frame, since it runs before the parcel is made.
+            var output = Queries.Flow("ReturnParcelsSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "ReturnParcelsSystem  #10 [+0]  Systems/ParcelSystems.cs:20",
+                "creates DispatchPending  [request]  ParcelSystems.cs:27",
+                "read+removed by DispatchParcelsSystem  #13  frame unknown (waits for Model, added after an await)  ParcelSystems.cs:68",
+                "creates FrankPending  [request]  ParcelSystems.cs:28",
+                "read+removed by FrankParcelsSystem  #14  next frame (waits for Stamp from StampParcelsSystem #9) [+1]  ParcelSystems.cs:86");
+
+            // A parcel made with its Model is dispatched by order alone, the same frame.
+            Lines(Queries.Flow("ResendParcelsSystem")).Should().Contain(
+                "read+removed by DispatchParcelsSystem  #13  same frame [+0]  ParcelSystems.cs:68");
+
+            // Without the waits, as graph.json before them said it: the same frame for both.
+            var unaware = EcsGraph.FromJson(FixtureProject.Graph.ToJson());
+            foreach (var edge in unaware.Edges)
+                edge.Waits.Clear();
+            Lines(new GraphQueries(unaware).Flow("ReturnParcelsSystem")).Should().Contain(
+                "read+removed by FrankParcelsSystem  #14  same frame [+0]  ParcelSystems.cs:86");
+        }
+
+        [Fact]
+        public void A_wait_names_its_setters_and_leaves_the_frame_unknown_where_they_disagree_or_run_elsewhere()
+        {
+            // MakerSystem (#10) makes an entity without Lit and puts LookRequest on it; five readers
+            // each need what a different set of systems adds.
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "MainRoot", Label = "MainRoot", Kind = NodeKind.Feature, Root = true });
+            graph.Nodes.Add(new GraphNode { Id = "OtherRoot", Label = "OtherRoot", Kind = NodeKind.Feature, Root = true });
+            var request = Component(graph, "LookRequest", role: "request");
+            var maker = System(graph, "MakerSystem", "MainRoot", 10);
+            var early = System(graph, "EarlyLightSystem", "MainRoot", 2);
+            var earlier = System(graph, "EarlierLightSystem", "MainRoot", 1);
+            var later = System(graph, "LateLightSystem", "MainRoot", 20);
+            var elsewhere = System(graph, "ElsewhereLightSystem", "OtherRoot", 1);
+            foreach (var lit in new[] { "Lit", "Glow", "Shine", "Spark", "Flare" })
+                Component(graph, lit);
+
+            Edge(graph, maker, Relation.Creates, request);
+            var waits = graph.Edges[0].Waits;
+            void Reader(string system, int order, string needs, string? added, params string[] by)
+            {
+                Edge(graph, System(graph, system, "MainRoot", order), Relation.Reads, request);
+                var wait = new ReaderWait { System = system, Needs = needs, Added = added };
+                wait.AddedBy.AddRange(by);
+                waits.Add(wait);
+            }
+
+            Reader("OneSetterSystem", 30, "Lit", null, early);
+            Reader("TwoSettersSystem", 31, "Glow", null, early, earlier);
+            Reader("DisagreeSystem", 32, "Shine", null, early, later);
+            Reader("ElsewhereSystem", 33, "Spark", null, elsewhere);
+            Reader("OutsideSystem", 34, "Flare", "outside the systems");
+
+            var lines = Lines(new GraphQueries(graph, budget: 0).Flow("MakerSystem"));
+
+            lines.Should().Contain(l => l.StartsWith("read by OneSetterSystem  #30  next frame (waits for Lit from EarlyLightSystem #2) [+1]", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by TwoSettersSystem  #31  next frame (waits for Glow from EarlyLightSystem #2 or 1 more) [+1]", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by DisagreeSystem  #32  frame unknown (waits for Shine; the frame depends on which of 2 systems adds it)", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by ElsewhereSystem  #33  frame unknown (waits for Spark; ElsewhereLightSystem runs under OtherRoot, not MainRoot)", StringComparison.Ordinal));
+            lines.Should().Contain(l => l.StartsWith("read by OutsideSystem  #34  frame unknown (waits for Flare, added outside the systems)", StringComparison.Ordinal));
+
+            // One write of the producer that leaves a reader out is enough for it to see the request whenever it runs.
+            graph.Edges.Add(new GraphEdge { Source = maker, Target = request, Relation = Relation.Creates, Via = "Replace", SourceFile = "Code.cs", Line = 99 });
+            Lines(new GraphQueries(graph, budget: 0).Flow("MakerSystem")).Should().Contain(l =>
+                l.StartsWith("read by OutsideSystem  #34  same frame [+0]", StringComparison.Ordinal));
+        }
+
+        [Fact]
         public void The_install_block_names_flow_and_stays_short()
         {
             var block = Setup.InstructionBlock.Build("/repo", "/repo/game", "/repo/game/Assets/Entitas/Entitas/Tools~/entitas-graph.dll", "/repo");

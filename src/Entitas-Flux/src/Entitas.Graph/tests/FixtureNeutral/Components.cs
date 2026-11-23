@@ -64,4 +64,15 @@ namespace Harbor
     // the work. A beacon is lit every frame, watched and doused at its end: no one's request.
     [Port] public sealed class PilotOrder : IComponent { public int Value; }  // PilotShipsSystem: `goto done;` lands on its Destroy()
     [Port] public sealed class Beacon : IComponent { public int Value; }      // DouseBeaconsSystem sweeps it in Cleanup, nothing else
+
+    // Probes, deployed with the asset of their hologram: the projector mounts the Hologram once
+    // the asset has loaded, after an await; a Charge comes from a system of its own. Each due
+    // flag is an order its handler takes off, and each handler needs one of the two.
+    [Port] public sealed class Probe : IComponent { }
+    [Port] public sealed class HoloAsset : IComponent { public string Value; }
+    [Port] public sealed class Hologram : IComponent { public object Value; }
+    [Port] public sealed class Charge : IComponent { public int Value; }
+    [Port] public sealed class LaunchDue : IComponent { }   // LaunchProbesSystem needs Hologram
+    [Port] public sealed class PingDue : IComponent { }     // PingProbesSystem needs Charge
+    [Port] public sealed class Telemetry : IComponent { public int Value; }
 }

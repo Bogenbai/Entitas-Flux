@@ -298,9 +298,20 @@ namespace Entitas.Graph.Analysis
                 (message.Kind == Messages.Request ? node.ConsumedBy : node.CarriedBy).AddRange(message.By);
             }
 
-            // Which systems reacting to a [Watched] write can never match the entity it lands on:
-            // creation sites, groups and the calls between them exist only here.
-            UnseenReactors.Mark(context, accesses, calls, results.SelectMany(r => r.Arguments).ToList(), results.Any(r => r.UntracedWrites > 0), edges);
+            // Which systems reacting to a [Watched] write can never match the entity it lands on,
+            // and what the readers of a message made on a new entity wait for: creation sites,
+            // groups and the calls between them exist only here. Nothing of the kind is known
+            // where a project adds components the generated API does not name.
+            if (!results.Any(r => r.UntracedWrites > 0))
+            {
+                var creations = new Creations(context, accesses, calls, results.SelectMany(r => r.Arguments).ToList());
+                UnseenReactors.Mark(context, creations, accesses, edges);
+                var handOffs = new HashSet<string>(graph.Nodes
+                    .Where(n => n.Kind == NodeKind.Component &&
+                                (n.MessageRole != null || n.TransientRemovedBy.Count > 0 || n.Attributes.Any(a => a.StartsWith("Cleanup", StringComparison.Ordinal))))
+                    .Select(n => n.Label), StringComparer.Ordinal);
+                Waits.Mark(context, creations, accesses, calls, handOffs, edges);
+            }
 
             graph.Edges.AddRange(edges.Values);
             graph.Nodes.Sort((a, b) => string.CompareOrdinal(a.Id, b.Id));
@@ -990,6 +1001,12 @@ namespace Entitas.Graph.Analysis
         /// <summary>For writes: where the entity written comes from, when that is certain (<see cref="EntityOrigins"/>).</summary>
         public EntityOrigin Origin = EntityOrigin.Unknown;
 
+        /// <summary>For writes: "an await" or "a yield" when it may run only after its method was suspended (TreeWalker.Suspended).</summary>
+        public string? Late;
+
+        /// <summary>For a system's reads on an entity (not a matcher): the group whose foreach the entity comes from, when it does.</summary>
+        public ISymbol? ReadGroup;
+
         public GraphEdge ToEdge(string confidence, string? through, string? source = null)
         {
             var component = Component;
@@ -1045,6 +1062,9 @@ namespace Entitas.Graph.Analysis
 
         /// <summary>As <see cref="Access.Within"/>.</summary>
         public string? Within;
+
+        /// <summary>As <see cref="Access.Late"/>: the call may be made only after the caller was suspended.</summary>
+        public string? Late;
     }
 
     sealed class RegistrationSite

@@ -67,4 +67,19 @@ namespace Sample
             return keeper;
         }
     }
+
+    /// <summary>Loads a model's asset, then has the behaviour attach it: the Model arrives after an await.</summary>
+    public sealed class ModelLoader
+    {
+        public async System.Threading.Tasks.Task LoadAsync(GameEntity parcel)
+        {
+            await System.Threading.Tasks.Task.Yield();
+            new ModelBehaviour().Attach(parcel);
+        }
+    }
+
+    public sealed class ModelBehaviour
+    {
+        public void Attach(GameEntity entity) => entity.AddModel(this);
+    }
 }

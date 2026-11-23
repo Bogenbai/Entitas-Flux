@@ -124,6 +124,34 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_launcher_waits_for_the_hologram_mounted_after_an_await_and_a_pinger_for_the_charging_system()
+        {
+            // DeployProbesSystem makes a probe with its hologram's asset and both orders on it.
+            // LaunchProbesSystem needs the Hologram, which HoloEmitter mounts once HoloProjector's
+            // await is over; PingProbesSystem needs the Charge, which ChargeProbesSystem adds —
+            // the next frame, since it runs before the probe is deployed.
+            var output = Queries.Flow("DeployProbesSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "DeployProbesSystem  #16 (Probes) [+0]  Systems/ProbeSystems.cs:20",
+                "creates LaunchDue  [request]  ProbeSystems.cs:27",
+                "read+removed by LaunchProbesSystem  #19 (Probes)  frame unknown (waits for Hologram, added after an await)  ProbeSystems.cs:65",
+                "creates PingDue  [request]  ProbeSystems.cs:28",
+                "read+removed by PingProbesSystem  #20 (Probes)  next frame (waits for Charge from ChargeProbesSystem #15) [+1]  ProbeSystems.cs:83");
+
+            // A probe deployed with its Hologram is launched by order alone, the same frame.
+            Lines(Queries.Flow("RedeployProbesSystem")).Should().Contain(
+                "read+removed by LaunchProbesSystem  #19 (Probes)  same frame [+0]  ProbeSystems.cs:65");
+
+            // Recorded on the writes in graph.json.
+            string Waits(string system, string order) => string.Join("; ", Edges(system, Relation.Creates, order).Single().Waits
+                .Select(w => $"{Label(w.System)} needs {Label(w.Needs)}: {w.Added ?? "by " + string.Join(", ", w.AddedBy.Select(Label))}"));
+            Waits("DeployProbesSystem", "LaunchDue").Should().Be("LaunchProbesSystem needs Hologram: after an await");
+            Waits("DeployProbesSystem", "PingDue").Should().Be("PingProbesSystem needs Charge: by ChargeProbesSystem");
+            Waits("RedeployProbesSystem", "LaunchDue").Should().BeEmpty();
+        }
+
+        [Fact]
         public void Over_the_budget_a_flow_drops_what_it_does_not_follow_before_it_folds_its_endings()
         {
             var full = Queries.Flow("DockingOrder");
@@ -149,7 +177,7 @@ namespace Entitas.Graph.Tests
             messages.Should().BeEquivalentTo(new Dictionary<string, string>
             {
                 ["DockingOrder"] = "request", ["RefuelOrder"] = "request", ["SaleOrder"] = "request", ["ScrapFleetOrder"] = "request",
-                ["RepaintOrder"] = "request", ["PilotOrder"] = "request", ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
+                ["RepaintOrder"] = "request", ["PilotOrder"] = "request", ["LaunchDue"] = "request", ["PingDue"] = "request", ["ShipDocked"] = "event", ["CargoUnloaded"] = "event"
             });
 
             // Who consumes a request is the reader whose loop destroys it, or marks it Doomed.
@@ -248,7 +276,7 @@ namespace Entitas.Graph.Tests
             Section(report, "Flags set once on purpose?").Should().Contain(
                 "- `Registered` set by `RegisterShipsSystem` — the setter only sees entities while they have `Fresh`, which `ForgetFreshSystem` removes");
             Section(report, "State flags that are never cleared").Should().Contain("None.");
-            report.Should().Contain("- messages: 0 requests by name (`*Request`), 6 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
+            report.Should().Contain("- messages: 0 requests by name (`*Request`), 8 by structure, 0 of them both; 0 events by name (`*Event`), 2 by structure, 0 of them both");
             report.Should().NotContain("JustCreated").And.NotContain("GameCleanupSystems");
             Section(report, "Requests without a handler").Should().Contain("go by name (`--request-suffix`, `--event-suffix`)");
         }

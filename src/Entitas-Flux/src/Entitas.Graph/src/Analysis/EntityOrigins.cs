@@ -10,7 +10,8 @@ namespace Entitas.Graph.Analysis
 {
     /// <summary>
     /// Where an entity comes from, when that is certain: made right there (a context's
-    /// CreateEntity(), or a call to a project method that returns a new one), whatever the callers
+    /// CreateEntity(), or a call to a project method that returns a new one — through an
+    /// interface too, when the project implements it once), whatever the callers
     /// of a method pass for one of its parameters, one of a group's entities, or the entity a
     /// primary index finds. Anything else is unknown. It decides which systems reacting to a
     /// [Watched] change can ever see it (<see cref="UnseenReactors"/>), so nothing is guessed: an
@@ -309,7 +310,9 @@ namespace Entitas.Graph.Analysis
                         if (IsCreateEntity(method))
                             return EntityOrigin.New(Key(invocation), null);
 
-                        var definition = (method.ReducedFrom ?? method).OriginalDefinition;
+                        var definition = Implementation((method.ReducedFrom ?? method).OriginalDefinition);
+                        if (definition == null)
+                            return EntityOrigin.Unknown;
                         var facts = _context.EntityMethods.Of(_context, definition, trace);
                         if (facts == null)
                             return EntityOrigin.Unknown;
@@ -358,6 +361,19 @@ namespace Entitas.Graph.Analysis
             }
 
             return EntityOrigin.Unknown;
+        }
+
+        /// <summary>
+        /// The body a call runs: the method itself, or for an interface's or abstract method the
+        /// project's one implementation of it — a factory injected as IShipFactory is the
+        /// ShipFactory the project has. Null when there are several, or none with a body.
+        /// </summary>
+        IMethodSymbol? Implementation(IMethodSymbol method)
+        {
+            if (!method.IsAbstract)
+                return method;
+            var implementations = _context.Dispatch(new[] { method }).Distinct(SymbolEqualityComparer.Default).ToList();
+            return implementations.Count == 1 ? (IMethodSymbol)implementations[0]! : null;
         }
 
         /// <summary>`x` in `entity.With(x =&gt; …)`: the receiver, when With runs the lambda on it alone; null otherwise.</summary>

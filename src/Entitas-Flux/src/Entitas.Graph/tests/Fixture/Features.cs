@@ -60,6 +60,12 @@ namespace Sample
             Add(systems.Create<UnstackCratesSystem>());
             Add(systems.Create<UnwrapCratesSystem>());
             Add(systems.Create<UnmarkJustSpawnedSystem>());
+            Add(systems.Create<StampParcelsSystem>());
+            Add(systems.Create<ReturnParcelsSystem>());
+            Add(systems.Create<ResendParcelsSystem>());
+            Add(systems.Create<LoadModelsSystem>());
+            Add(systems.Create<DispatchParcelsSystem>());
+            Add(systems.Create<FrankParcelsSystem>());
         }
     }
 

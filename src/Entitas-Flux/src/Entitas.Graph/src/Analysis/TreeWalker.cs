@@ -26,6 +26,8 @@ namespace Entitas.Graph.Analysis
             new Dictionary<(IMethodSymbol, int), (ISymbol?, string?)>();
         readonly Dictionary<ForEachStatementSyntax, bool> _steady = new Dictionary<ForEachStatementSyntax, bool>();
         readonly Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?> _enumMembers = new Dictionary<MemberAccessExpressionSyntax, IFieldSymbol?>();
+        readonly Dictionary<SyntaxNode, List<SyntaxNode>?> _suspensions = new Dictionary<SyntaxNode, List<SyntaxNode>?>();
+        readonly Dictionary<ForEachStatementSyntax, ISymbol?> _loopGroups = new Dictionary<ForEachStatementSyntax, ISymbol?>();
         readonly EntityOrigins _origins;
 
         public TreeWalker(BuildContext context, SyntaxTree tree)
@@ -176,7 +178,7 @@ namespace Entitas.Graph.Analysis
                     var (call, entity) = IndexCall(name);
                     if (call is "AddComponent" or "ReplaceComponent") Emit(access, Relation.Creates, call, name, entity);
                     else if (call == "RemoveComponent") Emit(access, Relation.Removes, call, name, entity);
-                    else Emit(access, Relation.Reads, "Index", name);
+                    else Emit(access, Relation.Reads, "Index", name, entity);
                     break;
                 case ApiKind.EntityIndex: Emit(access, Relation.Reads, "EntityIndex", name); break;
 
@@ -247,6 +249,11 @@ namespace Entitas.Graph.Analysis
                 access.Origin = _origins.Of(entity ?? Receiver(name));
                 access.Condition = ConditionOf(name);
                 access.Within = OuterLoop(name);
+                access.Late = Suspended(name);
+            }
+            else if (access.Relation == Relation.Reads && access.Clause == null && access.Accessor.Kind == NodeKind.System && !_generated)
+            {
+                access.ReadGroup = GroupOfEntity(entity ?? Receiver(name));
             }
 
             _result.Accesses.Add(access);
@@ -343,10 +350,146 @@ namespace Entitas.Graph.Analysis
             };
         }
 
+        // -- suspension points ---------------------------------------------------------------
+
+        /// <summary>
+        /// Whether <paramref name="node"/> may run only after its method was suspended: "an await"
+        /// when an await comes before it in an async method, lambda or local function — or in a
+        /// loop around it, whose next turn comes after it — "a yield" when a yield return does in
+        /// an iterator (a Unity coroutine resumes frames later), null otherwise. Inside a lambda or
+        /// local function, any suspension of the method around it counts, wherever it is: a
+        /// lambda may be run after the await that follows it. What runs after one happens when
+        /// the awaited work finishes, which no feature order tells (EntityViewFactory adding the
+        /// view once the asset is loaded). Syntax only, and only for methods that can suspend.
+        /// </summary>
+        string? Suspended(SyntaxNode node)
+        {
+            var anywhere = false;
+            for (var current = node.Parent; current != null; current = current.Parent)
+            {
+                var method = current is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax;
+                if (!method && current is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                {
+                    if (current is MemberDeclarationSyntax)
+                        return null;
+                    continue;
+                }
+
+                if (Suspensions(current) is { } points)
+                {
+                    var found = points.Where(p => anywhere || Before(p, node, current)).ToList();
+                    if (found.Count > 0)
+                        return found.Any(p => p is not YieldStatementSyntax) ? "an await" : "a yield";
+                }
+                if (method)
+                    return null;
+                anywhere = true;
+            }
+            return null;
+        }
+
+        /// <summary>Whether <paramref name="point"/> is passed before <paramref name="node"/> runs: it comes first, or a loop of the method holds both.</summary>
+        static bool Before(SyntaxNode point, SyntaxNode node, SyntaxNode method)
+        {
+            if (point.Span.End <= node.SpanStart)
+                return true;
+            if (point is CommonForEachStatementSyntax awaited && awaited.Statement.Span.Contains(node.Span))
+                return true;
+            for (var loop = point.Parent; loop != null && loop != method; loop = loop.Parent)
+                if (loop is CommonForEachStatementSyntax or ForStatementSyntax or WhileStatementSyntax or DoStatementSyntax && loop.Span.Contains(node.Span))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Where a method, lambda or local function may suspend: its awaits (await foreach and
+        /// await using too) when it is async, its yield returns. Not those of the functions inside
+        /// it. Null for one that cannot suspend — which is decided from its modifiers and return
+        /// type before its body is read.
+        /// </summary>
+        List<SyntaxNode>? Suspensions(SyntaxNode function)
+        {
+            if (_suspensions.TryGetValue(function, out var known))
+                return known;
+
+            var (async, body) = function switch
+            {
+                MethodDeclarationSyntax m => (m.Modifiers.Any(SyntaxKind.AsyncKeyword), (SyntaxNode?)m.Body ?? m.ExpressionBody),
+                LocalFunctionStatementSyntax l => (l.Modifiers.Any(SyntaxKind.AsyncKeyword), (SyntaxNode?)l.Body ?? l.ExpressionBody),
+                AnonymousFunctionExpressionSyntax a => (a.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword), a.Body),
+                AccessorDeclarationSyntax x => (false, (SyntaxNode?)x.Body ?? x.ExpressionBody),
+                _ => (false, null)
+            };
+            var iterates = function switch
+            {
+                MethodDeclarationSyntax m => MayIterate(m.ReturnType),
+                LocalFunctionStatementSyntax l => MayIterate(l.ReturnType),
+                AccessorDeclarationSyntax { Parent.Parent: BasePropertyDeclarationSyntax property } => MayIterate(property.Type),
+                _ => false
+            };
+
+            List<SyntaxNode>? points = null;
+            if (body != null && (async || iterates))
+            {
+                foreach (var node in body.DescendantNodes(n => n is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax))
+                {
+                    var suspends = node switch
+                    {
+                        AwaitExpressionSyntax => async,
+                        CommonForEachStatementSyntax loop => async && loop.AwaitKeyword.IsKind(SyntaxKind.AwaitKeyword),
+                        UsingStatementSyntax @using => async && @using.AwaitKeyword.IsKind(SyntaxKind.AwaitKeyword),
+                        LocalDeclarationStatementSyntax declaration => async && declaration.AwaitKeyword.IsKind(SyntaxKind.AwaitKeyword),
+                        YieldStatementSyntax yield => yield.IsKind(SyntaxKind.YieldReturnStatement),
+                        _ => false
+                    };
+                    if (suspends)
+                        (points ??= new List<SyntaxNode>()).Add(node);
+                }
+            }
+
+            _suspensions[function] = points;
+            return points;
+        }
+
+        /// <summary>IEnumerator, IEnumerable, IAsyncEnumerable, generic or not: a return type an iterator may have.</summary>
+        static bool MayIterate(TypeSyntax type)
+        {
+            var name = type switch
+            {
+                SimpleNameSyntax simple => simple.Identifier.ValueText,
+                QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
+                AliasQualifiedNameSyntax alias => alias.Name.Identifier.ValueText,
+                _ => string.Empty
+            };
+            return name.StartsWith("IEnumera", StringComparison.Ordinal) || name.StartsWith("IAsyncEnumera", StringComparison.Ordinal);
+        }
+
         // -- following an entity -----------------------------------------------------------------
 
         static ExpressionSyntax? Receiver(SimpleNameSyntax name) =>
             name.Parent is MemberAccessExpressionSyntax access && access.Name == name ? access.Expression : null;
+
+        /// <summary>
+        /// For a read: the group whose foreach the entity read comes from — directly, or through
+        /// the parameter of a helper the loop passes it to (<see cref="LoopOfArgument"/>). Null
+        /// for any other entity: one an index finds, a context's unique, a local, a lambda's.
+        /// </summary>
+        ISymbol? GroupOfEntity(ExpressionSyntax? receiver)
+        {
+            if (ChainRoot(receiver) is not IdentifierNameSyntax identifier)
+                return null;
+            switch (_model.GetSymbolInfo(identifier).Symbol)
+            {
+                case ILocalSymbol local when local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ForEachStatementSyntax forEach:
+                    if (!_loopGroups.TryGetValue(forEach, out var group))
+                        _loopGroups[forEach] = group = GroupOf(forEach.Expression);
+                    return group;
+                case IParameterSymbol parameter:
+                    return LoopOfArgument(parameter).Group;
+                default:
+                    return null;
+            }
+        }
 
         /// <summary>
         /// Where the written entity comes from: a fluent chain or local (the creation site and
@@ -1263,7 +1406,11 @@ namespace Entitas.Graph.Analysis
 
             var caller = EnclosingMethod(invocation);
             if (caller != null)
-                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation), Syntax = invocation, Within = OuterLoop(invocation) });
+                _result.Calls.Add(new CallSite
+                {
+                    Caller = caller, Callee = callee, Condition = ConditionOf(invocation), Syntax = invocation, Within = OuterLoop(invocation),
+                    Late = Suspended(invocation)
+                });
             else
                 _result.CalledOutsideMethods.Add(callee);
         }

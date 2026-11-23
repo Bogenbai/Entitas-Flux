@@ -57,7 +57,7 @@ namespace Harbor
         }
     }
 
-    /// <summary>A root of its own, run after the frame: the sweepers, then the yard.</summary>
+    /// <summary>A root of its own, run after the frame: the sweepers, the yard, then the probes.</summary>
     public sealed class LateLoop : Feature
     {
         public LateLoop(Contexts contexts)
@@ -65,6 +65,21 @@ namespace Harbor
             Add(new SweepPulsesSystem(contexts.port));
             Add(new SweepDoomedSystem(contexts.port));
             Add(new Yard(contexts));
+            Add(new Probes(contexts));
+        }
+    }
+
+    /// <summary>Probes are charged, deployed, projected, then launched and pinged.</summary>
+    public sealed class Probes : Feature
+    {
+        public Probes(Contexts contexts)
+        {
+            Add(new ChargeProbesSystem(contexts.port));
+            Add(new DeployProbesSystem());
+            Add(new RedeployProbesSystem());
+            Add(new ProjectHologramsSystem(contexts.port));
+            Add(new LaunchProbesSystem(contexts.port));
+            Add(new PingProbesSystem(contexts.port));
         }
     }
 

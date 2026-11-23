@@ -440,7 +440,7 @@ namespace Entitas.Graph.Output
                     return words;
                 var gate = frame.Gate;
                 return spell && _named.Add("gate\u0001" + gate.Component.Id + "\u0001" + gate.Setter.Id)
-                    ? $"{words} (waits for {gate.Component.Label} from {gate.Setter.Label} #{frame.GateOrder})"
+                    ? $"{words} (waits for {gate.Component.Label} from {gate.Setter.Label} #{frame.GateOrder}{(gate.More > 0 ? $" or {gate.More} more" : string.Empty)})"
                     : $"{words} (waits for {gate.Component.Label})";
             }
 

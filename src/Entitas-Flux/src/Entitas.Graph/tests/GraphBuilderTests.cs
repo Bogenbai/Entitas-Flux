@@ -134,9 +134,12 @@ namespace Entitas.Graph.Tests
             Graph.Nodes.Where(n => n.Role != null && n.Role != n.Message).Select(n => n.Label).Should().Equal("OrphanRequest");
 
             // Till has no suffix, and is one all the same: OpenShopSystem hands it over, and
-            // SettleTillSystem turns it into an event and takes it off.
-            var till = Graph.Nodes.Where(n => n.Message != null && n.Role == null).Should().ContainSingle().Subject;
-            till.Label.Should().Be("Till");
+            // SettleTillSystem turns it into an event and takes it off. So are the parcels' pending
+            // flags, each taken off by the handler that posts the parcel.
+            var unnamed = Graph.Nodes.Where(n => n.Message != null && n.Role == null).ToList();
+            unnamed.Select(n => n.Label).Should().BeEquivalentTo("Till", "DispatchPending", "FrankPending");
+            unnamed.Should().OnlyContain(n => n.Message == "request" && n.ConsumedByRemoval);
+            var till = unnamed.Single(n => n.Label == "Till");
             till.ConsumedBy.Select(Label).Should().Equal("SettleTillSystem");
             till.ConsumedByRemoval.Should().BeTrue();
             Graph.Nodes.Single(n => n.Label == "PlaceFurnitureRequest").ConsumedBy.Select(Label).Should().Equal("PlaceFurnitureByRequestSystem");
@@ -969,6 +972,188 @@ namespace Entitas.Graph.Tests
                     public void Execute() => _to.AddComponent(_index, _from.GetComponent(_index));
                 }");
             untraced.Edges.Should().OnlyContain(e => e.UnseenBy.Count == 0);
+        }
+
+        const string Loading = @"
+            [Game] public sealed class GoRequest : IComponent { }
+
+            public static class Make
+            {
+                public static GameContext Game;
+                public static GameEntity New() => Game.CreateEntity();
+            }
+
+            // Each of C…I reaches entities a different way: after an await, before one, in a loop
+            // around one, in a lambda of an async method, after a yield, from a plain system, from
+            // a method also handed out as a delegate.
+            public sealed class Loader
+            {
+                public async System.Threading.Tasks.Task LoadAsync(GameEntity e)
+                {
+                    e.isD = true;
+                    await System.Threading.Tasks.Task.Yield();
+                    Attach(e);
+                }
+
+                static void Attach(GameEntity e) => e.isC = true;
+
+                public async System.Threading.Tasks.Task EachAsync(List<GameEntity> all)
+                {
+                    foreach (var e in all)
+                    {
+                        e.isE = true;
+                        await System.Threading.Tasks.Task.Yield();
+                    }
+                }
+
+                public async System.Threading.Tasks.Task LaterAsync(GameEntity e)
+                {
+                    Action set = () => e.isF = true;
+                    set();
+                    await System.Threading.Tasks.Task.Yield();
+                }
+
+                public System.Collections.IEnumerator Routine(GameEntity e)
+                {
+                    yield return null;
+                    e.isG = true;
+                }
+            }
+
+            public static class Tags
+            {
+                public static void Tag(GameEntity e) => e.isI = true;
+            }
+
+            public sealed class LoadSystem : IExecuteSystem
+            {
+                readonly Loader _loader = new Loader();
+                readonly IGroup<GameEntity> _all;
+                public Action<GameEntity> Later = Tags.Tag;
+                public LoadSystem(GameContext game) => _all = game.GetGroup(GameMatcher.A);
+                public void Execute()
+                {
+                    foreach (GameEntity e in _all.GetEntities())
+                    {
+                        _ = _loader.LoadAsync(e);
+                        _ = _loader.LaterAsync(e);
+                        _loader.Routine(e);
+                        Tags.Tag(e);
+                    }
+                    _ = _loader.EachAsync(new List<GameEntity>(_all.GetEntities()));
+                }
+            }
+
+            public sealed class MarkSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _unmarked;
+                public MarkSystem(GameContext game) => _unmarked = game.GetGroup(GameMatcher.AllOf(GameMatcher.A).NoneOf(GameMatcher.H));
+                public void Execute() { foreach (GameEntity e in _unmarked.GetEntities()) e.isH = true; }
+            }
+
+            // A new entity with A, and the request on it; the second is made with C as well.
+            public sealed class AskSystem : IExecuteSystem
+            {
+                public void Execute() { GameEntity e = Make.New(); e.AddA(1); e.isGoRequest = true; }
+            }
+
+            public sealed class AskLoadedSystem : IExecuteSystem
+            {
+                public void Execute() { GameEntity e = Make.New(); e.AddA(1); e.isC = true; e.isGoRequest = true; }
+            }
+
+            public sealed class NeedsCSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsCSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.C));
+                public void Execute() { foreach (GameEntity e in _asked.GetEntities()) e.isGoRequest = false; }
+            }
+            public sealed class NeedsDSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsDSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.D));
+                public void Execute() { foreach (GameEntity e in _asked.GetEntities()) e.isGoRequest = false; }
+            }
+            public sealed class NeedsESystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsESystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.E));
+                public void Execute() { }
+            }
+            public sealed class NeedsFSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsFSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.F));
+                public void Execute() { }
+            }
+            public sealed class NeedsGSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsGSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.G));
+                public void Execute() { }
+            }
+            public sealed class NeedsHSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsHSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.H));
+                public void Execute() { foreach (GameEntity e in _asked.GetEntities()) if (e.isGoRequest) e.isB = true; }
+            }
+            public sealed class NeedsISystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public NeedsISystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.I));
+                public void Execute() { }
+            }
+
+            // Its group needs C, but it reads the request on an entity it keeps: one it may see whenever.
+            public sealed class PeekSystem : IExecuteSystem
+            {
+                readonly IGroup<GameEntity> _asked;
+                public GameEntity Kept;
+                public PeekSystem(GameContext game) => _asked = game.GetGroup(GameMatcher.AllOf(GameMatcher.GoRequest, GameMatcher.C));
+                public void Execute() { if (Kept != null && Kept.isGoRequest) Kept.isB = true; }
+            }";
+
+        [Fact]
+        public void A_reader_of_a_request_on_a_new_entity_waits_for_what_its_group_needs_and_says_how_it_arrives()
+        {
+            var graph = Snippet(Loading);
+            IEnumerable<string> Waits(string system) => graph.Edges
+                .Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Target == "component:GoRequest" && e.Relation == Relation.Creates)
+                .Waits.Select(w => $"{w.System.Split(':')[1]} needs {w.Needs.Split(':')[1]}: " + (w.Added ?? "by " + string.Join(", ", w.AddedBy.Select(s => s.Split(':')[1]))));
+
+            Waits("AskSystem").Should().Equal(
+                "NeedsCSystem needs C: after an await",
+                "NeedsDSystem needs D: by LoadSystem",
+                "NeedsESystem needs E: after an await",
+                "NeedsFSystem needs F: after an await",
+                "NeedsGSystem needs G: after a yield",
+                "NeedsHSystem needs H: by MarkSystem");
+
+            // Made with C, the second entity holds nothing NeedsCSystem waits for.
+            Waits("AskLoadedSystem").Should().NotContain(w => w.StartsWith("NeedsCSystem", StringComparison.Ordinal))
+                .And.Contain("NeedsDSystem needs D: by LoadSystem");
+
+            // I is left out because Tags.Tag is also handed out as a delegate, which may run any time, on anything.
+            var called = Snippet(Loading.Replace("public Action<GameEntity> Later = Tags.Tag;", string.Empty));
+            called.Edges.Single(e => e.Source == "system:AskSystem" && e.Target == "component:GoRequest" && e.Relation == Relation.Creates)
+                .Waits.Should().Contain(w => w.System == "system:NeedsISystem" && w.AddedBy.SequenceEqual(new[] { "system:LoadSystem" }));
+
+            // In graph.json, on the write, and back.
+            var json = graph.ToJson();
+            json.Should().Contain("\"waits\": [\n        {\n          \"system\": \"system:NeedsCSystem\",\n          \"needs\": \"component:C\",\n          \"added\": \"after an await\"\n        },");
+            json.Should().Contain("\"needs\": \"component:D\",\n          \"added_by\": [\n            \"system:LoadSystem\"\n          ]");
+            EcsGraph.FromJson(json).ToJson().Should().Be(json);
+
+            // One component added where the code does not say which, and no entity's components are certain.
+            var untraced = Snippet(Loading + @"
+                public sealed class CopySystem : IExecuteSystem
+                {
+                    GameEntity _from, _to;
+                    int _index;
+                    public void Execute() => _to.AddComponent(_index, _from.GetComponent(_index));
+                }");
+            untraced.Edges.Should().OnlyContain(e => e.Waits.Count == 0);
         }
 
         static string? ConditionIn(EcsGraph graph, string system, string relation, string component) =>

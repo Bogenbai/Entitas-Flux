@@ -200,6 +200,16 @@ namespace Entitas.Graph
         /// </summary>
         public List<UnseenReactor> UnseenBy = new List<UnseenReactor>();
 
+        /// <summary>
+        /// For a system's creates of a request, event or transient component on an entity it has
+        /// just made: the systems reading it whose groups require a component the entity is made
+        /// without, which they wait for — and how it arrives: <see cref="ReaderWait.Added"/> when
+        /// that is after an await or outside the systems (no frame can be told), otherwise the
+        /// systems adding it (Analysis.Waits). Absent where the entity, its components or the
+        /// reader's way to it are not known for certain.
+        /// </summary>
+        public List<ReaderWait> Waits = new List<ReaderWait>();
+
         public string Key => $"{Source}\u0001{Target}\u0001{Relation}\u0001{Via}\u0001{Confidence}\u0001{Through}\u0001{Entity}";
     }
 
@@ -210,6 +220,21 @@ namespace Entitas.Graph
 
         /// <summary>The component the reacting group requires and the written entity never gets.</summary>
         public string Needs = string.Empty;
+    }
+
+    /// <summary>A system reading what a write makes that sees it only once the entity gets a component it is made without.</summary>
+    public sealed class ReaderWait
+    {
+        public string System = string.Empty;
+
+        /// <summary>The component the reader's groups require and the new entity is made without.</summary>
+        public string Needs = string.Empty;
+
+        /// <summary>"after an await", "after a yield" or "outside the systems": when some way it arrives can be, so no frame is certain.</summary>
+        public string? Added;
+
+        /// <summary>Otherwise: the systems adding it to existing entities, one of which the reader waits for.</summary>
+        public List<string> AddedBy = new List<string>();
     }
 
     public sealed class GraphMetadata
@@ -392,6 +417,20 @@ namespace Entitas.Graph
                         }
                         w.WriteEndArray();
                     }
+                    if (e.Waits.Count > 0)
+                    {
+                        w.WriteStartArray("waits");
+                        foreach (var wait in e.Waits)
+                        {
+                            w.WriteStartObject();
+                            w.WriteString("system", wait.System);
+                            w.WriteString("needs", wait.Needs);
+                            if (wait.Added != null) w.WriteString("added", wait.Added);
+                            if (wait.AddedBy.Count > 0) WriteStrings(w, "added_by", wait.AddedBy);
+                            w.WriteEndObject();
+                        }
+                        w.WriteEndArray();
+                    }
                     if (e.Order > 0) w.WriteNumber("order", e.Order);
                     if (e.Count > 1) w.WriteNumber("count", e.Count);
                     if (e.SourceFile != null) w.WriteString("source_file", e.SourceFile);
@@ -482,10 +521,19 @@ namespace Entitas.Graph
                 if (e.TryGetProperty("unseen_by", out var unseenBy) && unseenBy.ValueKind == JsonValueKind.Array)
                     foreach (var u in unseenBy.EnumerateArray())
                         unseen.Add(new UnseenReactor { System = Str(u, "system") ?? string.Empty, Needs = Str(u, "needs") ?? string.Empty });
+                var waits = new List<ReaderWait>();
+                if (e.TryGetProperty("waits", out var waitList) && waitList.ValueKind == JsonValueKind.Array)
+                    foreach (var x in waitList.EnumerateArray())
+                    {
+                        var wait = new ReaderWait { System = Str(x, "system") ?? string.Empty, Needs = Str(x, "needs") ?? string.Empty, Added = Str(x, "added") };
+                        wait.AddedBy.AddRange(Strs(x, "added_by"));
+                        waits.Add(wait);
+                    }
 
                 graph.Edges.Add(new GraphEdge
                 {
                     UnseenBy = unseen,
+                    Waits = waits,
                     Source = e.GetProperty("source").GetString()!,
                     Target = e.GetProperty("target").GetString()!,
                     Relation = e.GetProperty("relation").GetString()!,
