@@ -1,0 +1,75 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v6.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v6.0": {
+      "entitas-rename/0.6.0": {
+        "dependencies": {
+          "Entitas.SourceGenerator": "0.6.0",
+          "Microsoft.CodeAnalysis.CSharp": "4.3.0"
+        },
+        "runtime": {
+          "entitas-rename.dll": {}
+        }
+      },
+      "Microsoft.CodeAnalysis.Common/4.3.0": {
+        "runtime": {
+          "lib/netcoreapp3.1/Microsoft.CodeAnalysis.dll": {
+            "assemblyVersion": "4.3.0.0",
+            "fileVersion": "4.300.22.43017",
+            "localPath": "Microsoft.CodeAnalysis.dll"
+          }
+        }
+      },
+      "Microsoft.CodeAnalysis.CSharp/4.3.0": {
+        "dependencies": {
+          "Microsoft.CodeAnalysis.Common": "4.3.0"
+        },
+        "runtime": {
+          "lib/netcoreapp3.1/Microsoft.CodeAnalysis.CSharp.dll": {
+            "assemblyVersion": "4.3.0.0",
+            "fileVersion": "4.300.22.43017",
+            "localPath": "Microsoft.CodeAnalysis.CSharp.dll"
+          }
+        }
+      },
+      "Entitas.SourceGenerator/0.6.0": {
+        "runtime": {
+          "Entitas.SourceGenerator.dll": {
+            "assemblyVersion": "0.6.0.0",
+            "fileVersion": "0.6.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "entitas-rename/0.6.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.CodeAnalysis.Common/4.3.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Hhaw6DKZHiR+vgOdIqvndfUntJhmDR7MjylUJ55EvWtDyJFLDf2eij8r9tcwXP35FLD+bVNNCO0+KIYuvJjNnA==",
+      "path": "microsoft.codeanalysis.common/4.3.0",
+      "hashPath": "microsoft.codeanalysis.common.4.3.0.nupkg.sha512"
+    },
+    "Microsoft.CodeAnalysis.CSharp/4.3.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-0PU4a2h7L6N9SlF/oNHwj2A/+n0LK/7n6PEGvXyIZq8hc7r/TztB+47mhVLvapT6bWSV7nMT78cNxbQuC6tk6g==",
+      "path": "microsoft.codeanalysis.csharp/4.3.0",
+      "hashPath": "microsoft.codeanalysis.csharp.4.3.0.nupkg.sha512"
+    },
+    "Entitas.SourceGenerator/0.6.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
