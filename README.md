@@ -483,6 +483,8 @@ When the whole subgraph does not fit the budget, the walk follows only each node
 | `query <words…>` | The connected subgraph around the nodes the words match best: seeds first, then what is one and two data-flow steps away. |
 | `report` | Prints `GRAPH_REPORT.md`. |
 | `diff <old.json> [<new.json>]`, `diff --ref <git-ref>` | What changed in the data flow between two versions: the edges each component gained and lost, systems added, removed and moved, findings. See [below](#comparing-two-versions--diff). |
+| `install` | Tells the project's AI assistant to use these commands: a short block in `CLAUDE.md` (and `AGENTS.md`), see [For AI coding assistants](#for-ai-coding-assistants). |
+| `uninstall` | Takes that block out again. |
 
 Names may drop the `Component` suffix. A name that matches several nodes is never guessed: the tool lists them and exits with 3; an unknown name exits with 4 and suggestions. The queries reuse `graph.json` and rebuild it first when a `.cs` file is newer.
 
@@ -501,7 +503,7 @@ Selected — read by 4 (4 direct, 0 inferred)
 | --- | --- |
 | `-r`, `--root <dir>` | Unity project root (default: current directory). |
 | `-p`, `--project <csproj>` | The project declaring the contexts (default: found under the root). |
-| `-o`, `--out <dir>` | Output folder (default: `entitas-graph-out` in the root — add it to `.gitignore`). |
+| `-o`, `--out <dir>` | Output folder (default: `entitas-graph-out` in the root — `install` adds it to `.gitignore`). |
 | `--request-suffix <s>`, `--event-suffix <s>` | How requests and events are recognised (default: `Request`, `Event`). |
 | `--budget <tokens>` | Cap each answer at about this many tokens (default: 2000; `0` = no cap). |
 | `--limit <n>` | Seed nodes for `query` (default: 5). |
@@ -575,18 +577,30 @@ An assistant answering "who uses this component?" with grep reads every file tha
 | Any answer, at most | ~2 000 (the budget) |
 | `graph.json` | ~1 400 000 — never let an assistant read it; it is for programs |
 
-Tell the assistant so in the project's `CLAUDE.md` or `AGENTS.md`. The path is the manual install's; with UPM it is `Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll`:
+`install` tells the project's assistant so. Run it once from the Unity project root (or pass `-r`):
+```bash
+dotnet Library/PackageCache/com.bogenbai.entitas-flux*/Tools~/entitas-graph.dll install
+```
+It writes a short block into `CLAUDE.md` in the repository root: the nearest folder above the Unity project that holds `.git`, because that is where assistants run, or the Unity root when there is none. When the project has an `AGENTS.md` there, the block goes into it too; a `CLAUDE.md` that pulls `AGENTS.md` in with `@AGENTS.md` is left alone, so the block is not loaded twice. `--target <file>` (repeatable) writes to other files instead, `.github/copilot-instructions.md` for example.
+
+The block names the tool that ran `install`, by a path relative to the file's folder, with `-r` pointing at the Unity root when that is a different folder. A UPM install is named by glob, because the package folder's name changes with every update. The block sits between `<!-- entitas-graph:begin -->` and `<!-- entitas-graph:end -->`: running `install` again replaces it and leaves the rest of the file as it was, line endings included. Run it again after switching between a manual and a UPM install. `install` also adds `entitas-graph-out/` to the repository's `.gitignore` unless a line there already covers it (`--no-gitignore` skips that). `entitas-graph uninstall` takes the block out again and deletes a file that held nothing else.
+
+With the Unity project in `src/cat-caffeine` and a manual install, the block reads:
 ```md
+<!-- entitas-graph:begin -->
 ## ECS data flow
 This is an Entitas project. To find who creates, reads, filters, removes or destroys a
 component, what a feature runs and in what order, or how data gets from one system to
-another, run entitas-graph from the Unity project root instead of searching the code:
+another, run entitas-graph from this file's folder instead of searching the code:
 
-    dotnet Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component>
+    dotnet src/cat-caffeine/Assets/Entitas/Entitas/Tools~/entitas-graph.dll who-reads <Component> -r src/cat-caffeine
 
-Commands: who-creates, who-reads, lifecycle, systems-of, path, explain, query. Each answer
-is capped at ~2000 tokens. entitas-graph-out/GRAPH_REPORT.md is a short overview worth
-reading once; never read entitas-graph-out/graph.json.
+Commands: who-creates, who-reads, lifecycle <Component>; systems-of <Feature>; path <A> <B>;
+explain <Name>; query "<words>" (the connected subgraph around the matching nodes);
+diff --ref <branch or commit> (data-flow changes since then, for reviewing a branch);
+report (= `src/cat-caffeine/entitas-graph-out/GRAPH_REPORT.md`, an overview worth reading once).
+Each answer is capped at ~2000 tokens. Never read graph.json: ~1.4 M tokens on a 2000-file project, it is for programs.
+<!-- entitas-graph:end -->
 ```
 
 ## License

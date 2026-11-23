@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using Entitas.Graph.Analysis;
 using Entitas.Graph.Output;
+using Entitas.Graph.Setup;
 using Entitas.SourceGenerator.Cli;
 
 namespace Entitas.Graph
@@ -29,6 +30,9 @@ namespace Entitas.Graph
                     PrintUsage();
                     return Usage;
                 }
+
+                if (options.Command is "install" or "uninstall")
+                    return InstallOrUninstall(options);
 
                 if (options.Command == "build")
                 {
@@ -63,6 +67,11 @@ namespace Entitas.Graph
             {
                 Console.Error.WriteLine($"error: {ex.Message}");
                 PrintUsage();
+                return Usage;
+            }
+            catch (SetupException ex)
+            {
+                Console.Error.WriteLine($"error: {ex.Message}");
                 return Usage;
             }
             catch (AmbiguousNameException ex)
@@ -101,6 +110,9 @@ namespace Entitas.Graph
             Console.Error.WriteLine("  report                      Print GRAPH_REPORT.md (findings).");
             Console.Error.WriteLine("  diff <old> [<new>]          What changed in the data flow between two graph.json (new: the current project).");
             Console.Error.WriteLine("  diff --ref <git-ref>        The same, against the project at a branch or commit.");
+            Console.Error.WriteLine("  install                     Tell the project's AI assistant to use these commands: a block in CLAUDE.md");
+            Console.Error.WriteLine("                              (and AGENTS.md, if present) in the git root; entitas-graph-out/ in .gitignore.");
+            Console.Error.WriteLine("  uninstall                   Remove that block again.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  -r, --root <dir>            Unity project root (default: current directory).");
             Console.Error.WriteLine("  -p, --project <csproj>      The project declaring the contexts (default: found under the root).");
@@ -112,10 +124,34 @@ namespace Entitas.Graph
             Console.Error.WriteLine("      --depth <n>             Steps query walks from the seeds (1-4, default: 2).");
             Console.Error.WriteLine("      --no-html               Skip graph.html on build.");
             Console.Error.WriteLine("      --ref <git-ref>         For diff: build the old graph at this commit (git archive; the checkout is not touched).");
+            Console.Error.WriteLine("      --target <file>         Instruction file for install/uninstall instead of the default (repeatable).");
+            Console.Error.WriteLine("      --no-gitignore          install: leave .gitignore alone.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("Queries reuse graph.json and rebuild it first when a source file is newer. An answer over");
             Console.Error.WriteLine("the budget starts with a summary by feature and says how much it left out.");
             Console.Error.WriteLine("Exit codes: 0 answer, 1 error, 2 usage, 3 ambiguous name, 4 not found.");
+        }
+
+        // -- install / uninstall ------------------------------------------------------------
+
+        static int InstallOrUninstall(Options options)
+        {
+            if (options.Positional.Count > 0) throw new UsageException($"'{options.Command}' takes no arguments");
+
+            // The block names the dll that is running, so it points at the copy the project has.
+            var tool = typeof(Program).Assembly.Location;
+            if (tool.Length == 0) tool = Path.Combine(AppContext.BaseDirectory, "entitas-graph.dll");
+
+            var result = options.Command == "install"
+                ? AssistantSetup.Install(options.Root, options.Targets, options.Gitignore, tool)
+                : AssistantSetup.Uninstall(options.Root, options.Targets);
+
+            var cwd = Directory.GetCurrentDirectory();
+            foreach (var file in result.Files)
+                Console.WriteLine($"{file.Outcome.ToString().ToLowerInvariant(),-10} {Relative(file.Path, cwd)}{(file.Detail != null ? "  — " + file.Detail : string.Empty)}");
+            foreach (var note in result.Notes)
+                Console.Error.WriteLine($"note: {note}");
+            return Ok;
         }
 
         // -- building -----------------------------------------------------------------------
@@ -335,6 +371,8 @@ namespace Entitas.Graph
             public int Budget = GraphQueries.DefaultBudget;
             public bool Html = true;
             public string? Ref;
+            public readonly List<string> Targets = new List<string>();
+            public bool Gitignore = true;
 
             public string Out => OutOverride ?? Path.Combine(Root, "entitas-graph-out");
 
@@ -390,6 +428,13 @@ namespace Entitas.Graph
                         case "--ref":
                             if (++i >= args.Length) return null;
                             options.Ref = args[i];
+                            break;
+                        case "--target":
+                            if (++i >= args.Length) return null;
+                            options.Targets.Add(args[i]);
+                            break;
+                        case "--no-gitignore":
+                            options.Gitignore = false;
                             break;
                         case "-h": case "--help":
                             return null;
