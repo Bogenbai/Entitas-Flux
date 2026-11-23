@@ -520,7 +520,7 @@ When the whole subgraph does not fit the budget, the walk follows only each node
 | `who-creates <Component>` / `who-reads <Component>` | Every site that creates it, or reads, reacts to or filters on it. |
 | `lifecycle <Component>` | Create → read → remove/destroy, per root feature in execution order. |
 | `systems-of <Feature>` | The systems a feature runs, in order. |
-| `explain <Name>` | One node and every connection it has. |
+| `explain <Name>` | One node and every connection it has; for a system, also who else reads the requests it handles. |
 | `path <A> <B>` | The shortest data-flow chain from A to B. |
 | `flow <Component\|System>` | What happens after it: the systems its requests, events and `[Watched]` changes reach, as a tree, each step labelled same frame, next frame or frame unknown. |
 | `query <words…>` | The connected subgraph around the nodes the words match best: seeds first, then what is one and two data-flow steps away. |

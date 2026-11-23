@@ -130,6 +130,35 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void Explain_names_the_other_readers_of_the_requests_a_system_handles()
+        {
+            // The shape that hid the floating "+coins" text on a real project: a second reader of
+            // the request, outside everything the handler itself creates.
+            var graph = new EcsGraph();
+            void Node(string kind, string name, string? role = null) =>
+                graph.Nodes.Add(new GraphNode { Id = name, Label = name, Kind = kind, FullName = "Game." + name, Role = role });
+            void Edge(string source, string relation, string target) =>
+                graph.Edges.Add(new GraphEdge { Source = source, Target = target, Relation = relation, Via = relation == Relation.Reads ? "AllOf" : "Add", SourceFile = "Code.cs", Line = graph.Edges.Count + 1 });
+
+            Node(NodeKind.Component, "ChangeCurrencyRequest", "request");
+            Node(NodeKind.Component, "CoinsSpentEvent", "event");
+            foreach (var system in new[] { "ChangeCurrencyByRequestSystem", "PlayTextOnCurrencyChangeByRequestSystem", "DestroyChangeCurrencyRequestsSystem", "PayForOrdersSystem" })
+                Node(NodeKind.System, system);
+            Edge("PayForOrdersSystem", Relation.Creates, "ChangeCurrencyRequest");
+            Edge("ChangeCurrencyByRequestSystem", Relation.Reads, "ChangeCurrencyRequest");
+            Edge("ChangeCurrencyByRequestSystem", Relation.Creates, "CoinsSpentEvent");
+            Edge("PlayTextOnCurrencyChangeByRequestSystem", Relation.Reads, "ChangeCurrencyRequest");
+            Edge("DestroyChangeCurrencyRequestsSystem", Relation.Reads, "ChangeCurrencyRequest");
+            Edge("DestroyChangeCurrencyRequestsSystem", Relation.Destroys, "ChangeCurrencyRequest");
+            var queries = new GraphQueries(graph);
+
+            queries.Explain("ChangeCurrencyByRequestSystem").Should().Contain(
+                "  its requests are also read by:\n    ChangeCurrencyRequest → DestroyChangeCurrencyRequestsSystem (unregistered), PlayTextOnCurrencyChangeByRequestSystem (unregistered)\n");
+            queries.Explain("PayForOrdersSystem").Should().NotContain("also read by", "it creates the request, it does not handle it");
+            queries.Explain("ChangeCurrencyRequest").Should().NotContain("also read by", "a component lists its readers anyway");
+        }
+
+        [Fact]
         public void Names_are_never_guessed()
         {
             Action ambiguous = () => Queries.Resolve("Sample");

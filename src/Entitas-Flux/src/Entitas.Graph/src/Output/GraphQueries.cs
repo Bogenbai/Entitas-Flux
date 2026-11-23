@@ -338,8 +338,58 @@ namespace Entitas.Graph.Output
             var entries = new List<string>();
             var counts = new List<string>();
             AddEdges(entries, counts, node, _graph.Outgoing(node.Id), outgoing: true);
+            AddSharedRequests(entries, counts, node);
             AddEdges(entries, counts, node, _graph.Incoming(node.Id), outgoing: false);
             return Render(head, () => new[] { "  connections: " + string.Join(", ", counts) }, entries, "connections");
+        }
+
+        /// <summary>
+        /// For a system: who else reads the requests it handles. A request is usually one system's
+        /// input, but not always: on a real project the floating "+coins" text came from a second
+        /// reader of ChangeCurrencyRequest, and an assistant asking what the player sees from the
+        /// handler never found it, because explain listed only the handler's own edges.
+        /// </summary>
+        void AddSharedRequests(List<string> entries, List<string> counts, GraphNode node)
+        {
+            if (node.Kind != NodeKind.System) return;
+
+            var requests = _graph.Outgoing(node.Id)
+                .Where(e => e.Relation == Relation.Reads && e.Confidence == Confidence.Extracted && _graph.Node(e.Target)?.Role == "request")
+                .Select(e => e.Target)
+                .Distinct()
+                .OrderBy(Label, StringComparer.Ordinal)
+                .ToList();
+
+            const int shown = 6;
+            var title = "  its requests are also read by:\n";
+            var total = 0;
+            foreach (var request in requests)
+            {
+                var others = _graph.Incoming(request)
+                    .Where(e => e.Relation is Relation.Reads or Relation.Reacts && e.Source != node.Id && _graph.Node(e.Source) is { Generated: false })
+                    .Select(e => e.Source)
+                    .Distinct()
+                    .OrderBy(SortKey, StringComparer.Ordinal)
+                    .ToList();
+                if (others.Count == 0) continue;
+
+                total += others.Count;
+                var names = others.Take(shown).Select(id => Label(id) + WhereItRuns(id));
+                entries.Add(title + $"    {Label(request)} → {string.Join(", ", names)}{(others.Count > shown ? $", +{others.Count - shown} more" : string.Empty)}\n");
+                title = string.Empty;
+            }
+
+            if (total > 0) counts.Add($"other readers of its requests {total}");
+        }
+
+        /// <summary>A short place for a name in a list: the feature that registers it and its order, or its kind.</summary>
+        string WhereItRuns(string id)
+        {
+            var node = _graph.Node(id)!;
+            var placement = node.Placements.OrderBy(p => p.Root, StringComparer.Ordinal).FirstOrDefault();
+            if (placement == null) return node.Kind == NodeKind.System ? " (unregistered)" : $" [{node.Kind}]";
+            var feature = placement.Chain.Count > 0 ? placement.Chain[placement.Chain.Count - 1] : placement.Root;
+            return $" ({Label(feature)}, {Label(placement.Root)} #{placement.Order})";
         }
 
         void AddEdges(List<string> entries, List<string> counts, GraphNode node, IEnumerable<GraphEdge> edges, bool outgoing)
