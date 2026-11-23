@@ -302,12 +302,45 @@ namespace Entitas.Graph.Output
 
             var verbs = consuming.Select(e => e.Relation).Distinct().ToList();
             var verb = verbs.Count > 1 ? "takes" : verbs[0] == Relation.Destroys ? "destroys" : "removes";
-            var late = asked
+            var late = Awaited(condition)
                 .Select(name => _graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Component && n.Label == name && (n.AddedLate ?? n.SometimesLate) != null))
                 .Where(n => n != null)
                 .Select(n => n!.AddedLate != null ? $"{n.Label} is added only {n.AddedLate}" : $"{n.Label} can arrive {n.SometimesLate}")
                 .ToList();
             return (condition, verb, late.Count == 0 ? null : string.Join("; ", late));
+        }
+
+        /// <summary>
+        /// The components a condition waits for an entity to get: each `x.hasX` / `x.isX` it asks
+        /// for as it is, not negated by a `!` before it or by the `!( … )` around it. In
+        /// `!(target != null &amp;&amp; target.isLoadingView)` the request waits for LoadingView to go,
+        /// so a hint that LoadingView arrives late would point the wrong way.
+        /// </summary>
+        static IEnumerable<string> Awaited(string condition)
+        {
+            var found = new List<string>();
+            foreach (Match match in Regex.Matches(condition, @"\.(?:has|is)([A-Z]\w*)\b"))
+            {
+                var start = match.Index;
+                while (start > 0 && (char.IsLetterOrDigit(condition[start - 1]) || condition[start - 1] is '_' or '.'))
+                    start--;
+                var negated = start > 0 && condition[start - 1] == '!';
+                var depth = 0;
+                for (var i = start - 1; i >= 0; i--)
+                {
+                    if (condition[i] == ')')
+                        depth++;
+                    else if (condition[i] == '(' && depth-- == 0)
+                    {
+                        depth = 0;
+                        if (i > 0 && condition[i - 1] == '!')
+                            negated = !negated;
+                    }
+                }
+                if (!negated && !found.Contains(match.Groups[1].Value))
+                    found.Add(match.Groups[1].Value);
+            }
+            return found;
         }
 
         /// <summary>

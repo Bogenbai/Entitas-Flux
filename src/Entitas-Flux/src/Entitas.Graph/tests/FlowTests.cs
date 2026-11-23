@@ -308,6 +308,40 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_request_taken_only_once_something_arrives_names_what_arrives_late_not_what_must_go()
+        {
+            // WaitForViewSystem destroys its request only once the target has a View; SkipLoadingSystem
+            // only once it is no longer Loading. Both View and Loading can arrive after an await, but
+            // only the first is waited for: the second request waits for Loading to go.
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "MainRoot", Label = "MainRoot", Kind = NodeKind.Feature, Root = true });
+            var maker = System(graph, "MakerSystem", "MainRoot", 1);
+            foreach (var (request, taker, condition) in new[]
+                     {
+                         ("ShowRequest", "WaitForViewSystem", "target != null && target.hasView"),
+                         ("HideRequest", "SkipLoadingSystem", "!(target != null && target.isLoading)"),
+                     })
+            {
+                var id = Component(graph, request, role: "request");
+                var system = System(graph, taker, "MainRoot", 2);
+                Edge(graph, maker, Relation.Creates, id);
+                Edge(graph, system, Relation.Reads, id);
+                Edge(graph, system, Relation.Destroys, id);
+                graph.Edges[graph.Edges.Count - 1].Condition = condition;
+            }
+            foreach (var late in new[] { "View", "Loading" })
+            {
+                var id = Component(graph, late);
+                graph.Nodes.Single(n => n.Id == id).SometimesLate = "after an await";
+            }
+
+            var lines = Lines(new GraphQueries(graph, budget: 0).Flow("MakerSystem"));
+
+            lines.Should().Contain(l => l.Contains("destroys it only once target != null && target.hasView (View can arrive after an await)"));
+            lines.Should().Contain(l => l.Contains("destroys it only once !(target != null && target.isLoading)") && !l.Contains("can arrive"));
+        }
+
+        [Fact]
         public void A_wait_names_its_setters_and_leaves_the_frame_unknown_where_they_disagree_or_run_elsewhere()
         {
             // MakerSystem (#10) makes an entity without Lit and puts LookRequest on it; five readers
