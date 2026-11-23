@@ -45,10 +45,12 @@ namespace Entitas.Graph.Output
         public const int DefaultQuerySeeds = 5, DefaultQueryDepth = 2, MaxQueryDepth = 4;
 
         /// <summary>
-        /// query: a node with more data-flow neighbours than this is a hub — reached, never walked
-        /// through. On a 2000-file project about 30 nodes are over it (Id, WorldPosition, the
-        /// Event and Destructed flags, spawners creating 50 components through a factory), and
-        /// walking through any of them turns a question about one feature into half the project.
+        /// query: a node with more distinct data-flow neighbours than this, over edges written in
+        /// the code, is a hub — reached, never walked through. On a 2000-file project 9 nodes are
+        /// over it (Id, WorldPosition, the Ready and Destructed flags, a factory adding 50
+        /// components), and walking through any of them turns a question about one feature into
+        /// half the project. Inferred edges do not count: with them, 31 nodes were over it,
+        /// among them the very system that places furniture, because its factory call adds 50.
         /// </summary>
         public const int DefaultHubThreshold = 40;
 
@@ -386,7 +388,8 @@ namespace Entitas.Graph.Output
         {
             var words = text.Trim();
             depth = Math.Max(1, Math.Min(MaxQueryDepth, depth));
-            var subgraph = QuerySubgraph.Build(_graph, words, limit, depth, _hubThreshold, int.MaxValue);
+            var index = QuerySubgraph.Prepare(_graph, words, _hubThreshold);
+            var subgraph = QuerySubgraph.Build(index, limit, depth, int.MaxValue);
 
             // Like an unknown name: nothing on stdout that could pass for an answer, exit 4, and
             // what the words come close to.
@@ -405,7 +408,7 @@ namespace Entitas.Graph.Output
             {
                 if (!Capped || head.Sum(l => l.Length + Environment.NewLine.Length) + entries.Sum(e => e.Length) <= _budget * CharsPerToken)
                     break;
-                subgraph = QuerySubgraph.Build(_graph, words, limit, depth, _hubThreshold, links);
+                subgraph = QuerySubgraph.Build(index, limit, depth, links);
                 entries = QueryEntries(subgraph);
             }
 
@@ -478,7 +481,7 @@ namespace Entitas.Graph.Output
             if (!node.Hub)
                 return string.Empty;
             if (node.Node.Kind != NodeKind.Component)
-                return $"  (hub: touches {node.Neighbours} components — not expanded; use explain)";
+                return $"  (hub: touches {node.Written} components in its own code — not expanded; use explain)";
 
             var incoming = _graph.Incoming(node.Node.Id).ToList();
             var counts = new[]

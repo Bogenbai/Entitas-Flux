@@ -443,10 +443,10 @@ GameplayFeature (root) — 11 systems
     …
 ```
 
-`query` answers a question in words with the connected piece of the graph around it, like Graphify's `query`. The nodes whose names match the words best are the seeds (`--limit`, default 5). From them it walks data flow two steps out (`--depth`, 1 to 4): a component leads to whoever creates, reads or destroys it, a system to the components it touches. Each node lists its links to the nodes after it, so every edge appears once, on the side nearer the seeds. Feature registration is not walked; it shows as the system's place. A hub (a node with more than 40 neighbours: an `Id`, a position, the `Event` flag) is reached but not walked through, and marked as such. Link lines name the file; a system's header carries its full path.
+`query` answers a question in words with the connected piece of the graph around it, like Graphify's `query`. The nodes whose names match the words best are the seeds (`--limit`, default 5). Names are matched word by word, by stem, so `placement` finds `PlaceFurnitureByRequestSystem` and `FurniturePlacedEvent`, `cat` does not find `Indicator`, and words like `how`, `does` and `on` are skipped. A word in the name counts for more than one in the namespace, which every system of a feature shares. Among names that match equally, the one with the fewest other words wins (`PlaceFurnitureByRequestSystem` before `EndFurniturePlacementOnBuildModeStopSystem`), then the one with more edges written in its own code. From the seeds it walks data flow two steps out (`--depth`, 1 to 4): a component leads to whoever creates, reads or destroys it, a system to the components it touches. Each node lists its links to the nodes after it, so every edge appears once, on the side nearer the seeds. Feature registration is not walked; it shows as the system's place. A hub is a node with more than 40 neighbours over edges written in the code: an `Id`, a position, a factory. It is reached but not walked through, and marked as such. Inferred edges do not count toward a hub, because a system whose factory call adds 50 components is often the very system the question is about. Link lines name the file; a system's header carries its full path.
 ```text
 $ entitas-graph query placed event --limit 1
-query "placed event": 4 nodes match; seeds: FurniturePlacedEvent (also: DestroyEventsSystem, Event, MarkEventsReadySystem)
+query "placed event": 7 nodes match; seeds: FurniturePlacedEvent (also: RequestPlacementSystem, Event, DestroyEventsSystem, PlaceFurnitureByRequestSystem, PlaceFurnitureRequest, MarkEventsReadySystem)
 
 Seeds:
   FurniturePlacedEvent  [component; Game, data, event]
@@ -470,7 +470,7 @@ Seeds:
   Event  [component; Game, flag]
   …
 ```
-When the whole subgraph does not fit the budget, the walk follows only each node's strongest links: to a seed, written in the system itself rather than inferred through a factory, to a request or an event, to what the words name. So the part that fits is still one connected piece, and a `… N more links` line counts the rest. On a 2000-file project, `query furniture placement` lists five placement systems with the requests and events between them, then the components they share and who else reads those, in ~2000 tokens. Words that match nothing exit with 4 and the labels closest to them.
+When the whole subgraph does not fit the budget, the walk follows only each node's strongest links: to a seed, written in the system itself rather than inferred through a factory, to a request or an event, to what the words name. So the part that fits is still one connected piece, and a `… N more links` line counts the rest. On a 2000-file project, `query furniture placement` seeds the system that places furniture with its request and its event, then the systems that cancel and place a piece, followed by the readers of that event and the systems that create the request, in ~2000 tokens. Words that match nothing exit with 4 and the labels closest to them.
 
 | Command | Answers |
 | --- | --- |
@@ -566,7 +566,7 @@ An edge is its source, target and relation. A moved line, a read moved into a he
   - `Destroy()` calls the tool could not trace to a group.
 
   These are leads, not errors. A component read but never created may be added from data, from a prefab's component list for example, which the tool cannot see.
-- **`graph.html`**: the graph in a browser, offline. Search a node, see its neighbours one or two steps out, filter by kind and relation; the side panel lists who creates, reads and destroys it. It inlines [vis-network](https://visjs.github.io/vis-network/) 9.1.9 (Apache-2.0 or MIT; its licence ships next to the tool).
+- **`graph.html`**: the graph in a browser, offline. Search a node, see its neighbours one or two steps out, filter by kind and relation; the side panel lists who creates, reads and destroys it. Arrows follow the data: from a system to what it creates, removes or destroys, from a component into the systems that read, filter on or react to it, from a feature to the systems it runs. A legend gives each relation's colour and direction; dashed edges are inferred. It inlines [vis-network](https://visjs.github.io/vis-network/) 9.1.9 (Apache-2.0 or MIT; its licence ships next to the tool).
 
 Out of scope: dependency injection, scenes, prefabs and other assets. The graph covers code in the assembly that declares the contexts.
 

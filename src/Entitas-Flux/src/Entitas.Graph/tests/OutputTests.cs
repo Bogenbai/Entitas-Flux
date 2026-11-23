@@ -183,5 +183,30 @@ namespace Entitas.Graph.Tests
             var end = html.IndexOf("</script>", start, StringComparison.Ordinal);
             html.Substring(start, end - start).Should().NotContain("</", "a '</' inside the data would close the script early");
         }
+
+        [Fact]
+        public void Graph_html_draws_reads_from_the_component_into_the_system()
+        {
+            var html = GraphHtml.Build(FixtureProject.Graph);
+            var start = html.IndexOf("const GRAPH = ", StringComparison.Ordinal) + "const GRAPH = ".Length;
+            var end = html.IndexOf(";</script>", start, StringComparison.Ordinal);
+            using var data = System.Text.Json.JsonDocument.Parse(html.Substring(start, end - start));
+            string Label(string id) => FixtureProject.Graph.Node(id)!.Label;
+
+            // The data keeps the stored direction (the side panel reads it as "reads" / "read by")
+            // and names the relations the page turns around: data flows from the component into
+            // whoever reads, filters on or reacts to it.
+            data.RootElement.GetProperty("reversed").EnumerateArray().Select(r => r.GetString())
+                .Should().Equal(Relation.Reads, Relation.Filters, Relation.Reacts);
+            data.RootElement.GetProperty("edges").EnumerateArray()
+                .Where(e => e.GetProperty("relation").GetString() == Relation.Reads)
+                .Select(e => (Label(e.GetProperty("from").GetString()!), Label(e.GetProperty("to").GetString()!)))
+                .Should().Contain(("UnlockAchievementSystem", "FurniturePlacedEvent"));
+            html.Should().Contain("const back = REVERSED.has(e.relation)")
+                .And.Contain("from: back ? e.to : e.from, to: back ? e.from : e.to", "a reversed relation is drawn component → system");
+
+            html.Should().Contain("<div id=\"legend\"></div>").And.Contain("Arrows follow the data")
+                .And.Contain("REVERSED.has(r) ? 'component → system' : 'system → component'", "the legend gives each relation's direction");
+        }
     }
 }

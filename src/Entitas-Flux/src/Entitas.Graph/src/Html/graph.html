@@ -16,7 +16,12 @@
   header .group { display:flex; gap:10px; align-items:center; }
   header button, header select { padding:4px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); cursor:pointer; }
   main { flex:1; display:flex; min-height:0; }
-  #network { flex:1; min-width:0; }
+  #stage { flex:1; min-width:0; position:relative; }
+  #network { position:absolute; inset:0; }
+  #legend { position:absolute; left:10px; bottom:10px; display:grid; grid-template-columns:auto auto auto; gap:1px 8px; align-items:center;
+            padding:6px 9px; font-size:11px; color:var(--muted); background:var(--panel); border:1px solid var(--border); border-radius:6px; opacity:.94; pointer-events:none; }
+  #legend .title { grid-column:1 / -1; color:var(--text); font-weight:600; margin-bottom:2px; }
+  #legend .rel { color:var(--text); }
   aside { width:380px; max-width:45vw; overflow:auto; border-left:1px solid var(--border); background:var(--panel); padding:12px 14px; }
   aside h2 { font-size:15px; margin:0 0 4px; }
   aside .meta { color:var(--muted); margin-bottom:10px; word-break:break-all; }
@@ -46,8 +51,8 @@
   </div>
 </header>
 <main>
-  <div id="network"></div>
-  <aside id="panel"><p class="hint">Search for a node, or click one. Dashed edges are inferred — through a query, factory or the components an entity is created with.</p></aside>
+  <div id="stage"><div id="network"></div><div id="legend"></div></div>
+  <aside id="panel"><p class="hint">Search for a node, or click one. Arrows follow the data: from a system to what it creates, removes or destroys, from a component to the systems that read it. Dashed edges are inferred — through a query, factory or the components an entity is created with.</p></aside>
 </main>
 <script>/*__VIS__*/</script>
 <script>/*__DATA__*/</script>
@@ -65,8 +70,19 @@
     destroys: '#b91c1c', reacts: '#f59e0b', contains: '#94a3b8'
   };
   const PASSIVE = { creates:'created by', reads:'read by', filters:'filtered by', removes:'removed by', destroys:'destroyed by', reacts:'reacted to by', contains:'registered by' };
+  // Edges are stored as what a system does to a component. Drawn that way, a reader looks like
+  // a writer, so these relations are drawn the way the data flows: component → system.
+  const REVERSED = new Set(GRAPH.reversed || []);
+  const ENDS = r => r === 'contains' ? 'feature → system' : REVERSED.has(r) ? 'component → system' : 'system → component';
 
   document.getElementById('title').textContent = 'ECS graph — ' + (GRAPH.project || '');
+
+  const arrow = (color, dashed) =>
+    '<svg width="30" height="10" viewBox="0 0 30 10" aria-hidden="true"><line x1="1" y1="5" x2="23" y2="5" stroke="' + color + '" stroke-width="2"' +
+    (dashed ? ' stroke-dasharray="4 3"' : '') + '/><path d="M22 1 L29 5 L22 9 z" fill="' + color + '"/></svg>';
+  document.getElementById('legend').innerHTML = '<div class="title">Arrows follow the data</div>' +
+    Object.keys(REL).map(r => arrow(REL[r]) + '<span class="rel">' + r + '</span><span>' + ENDS(r) + '</span>').join('') +
+    arrow('#94a3b8', true) + '<span class="rel">dashed</span><span>inferred</span>';
   const byId = new Map(GRAPH.nodes.map(n => [n.id, n]));
   const out = new Map(), inc = new Map();
   GRAPH.edges.forEach((e, i) => {
@@ -144,10 +160,19 @@
         title: n.kind + (n.file ? '\n' + n.file + (n.line ? ':' + n.line : '') : '')
       };
     }));
-    edges.add(GRAPH.edges.filter(e => shownRelations.has(e.relation) && ids.has(e.from) && ids.has(e.to)).map(e => ({
-      id: e.id, from: e.from, to: e.to, color: { color: REL[e.relation], opacity: e.confidence === 'INFERRED' ? 0.55 : 0.9 },
-      dashes: e.confidence === 'INFERRED', title: e.relation + ' via ' + e.via + (e.through ? ' (' + e.through + ')' : '') + (e.file ? '\n' + e.file + ':' + e.line : '')
-    })));
+    const label = id => (byId.get(id) || {}).label || id;
+    edges.add(GRAPH.edges.filter(e => shownRelations.has(e.relation) && ids.has(e.from) && ids.has(e.to)).map(e => {
+      const back = REVERSED.has(e.relation), color = REL[e.relation];
+      return {
+        id: e.id, from: back ? e.to : e.from, to: back ? e.from : e.to,
+        // Highlight and hover too: vis-network's grey default would hide the relation on the
+        // selected node's edges, the very ones being looked at.
+        color: { color, highlight: color, hover: color, opacity: e.confidence === 'INFERRED' ? 0.55 : 0.9 },
+        dashes: e.confidence === 'INFERRED',
+        // The tooltip names who does what, so the sentence reads the same whichever way the arrow points.
+        title: label(e.from) + ' ' + e.relation + ' ' + label(e.to) + ' via ' + e.via + (e.through ? ' (' + e.through + ')' : '') + (e.file ? '\n' + e.file + ':' + e.line : '')
+      };
+    }));
     network.setOptions({ physics: true });
     network.stabilize(150);
   }

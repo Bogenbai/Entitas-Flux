@@ -12,6 +12,15 @@ namespace Entitas.Graph.Output
     /// </summary>
     public static class GraphHtml
     {
+        /// <summary>
+        /// Relations the page draws against their stored direction. Every edge is stored as what
+        /// a system does to a component, so a reader's arrow pointed into the component like a
+        /// writer's and the picture showed every system writing. Drawn as data flows, the arrow of
+        /// a read, a NoneOf or a [Watched] reaction runs from the component into the system;
+        /// creates, removes and destroys keep system → component, contains feature → system.
+        /// </summary>
+        public static readonly string[] DrawnComponentToSystem = { Relation.Reads, Relation.Filters, Relation.Reacts };
+
         public static string Build(EcsGraph graph)
         {
             var template = Resource("graph.html");
@@ -22,6 +31,10 @@ namespace Entitas.Graph.Output
             {
                 w.WriteStartObject();
                 w.WriteString("project", graph.Metadata.Project);
+                w.WriteStartArray("reversed");
+                foreach (var relation in DrawnComponentToSystem)
+                    w.WriteStringValue(relation);
+                w.WriteEndArray();
                 w.WriteStartArray("nodes");
                 foreach (var n in graph.Nodes)
                 {
