@@ -219,6 +219,40 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void An_older_hook_of_ours_is_reported_and_replaced_not_added_twice()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Settings)!);
+            var older = ProjectSettings.Replace("\n    ]\n  }\n}\n",
+                ",\n      {\n        \"matcher\": \"Read|Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"\\\"$CLAUDE_PROJECT_DIR\\\"/entitas-graph --claude-hook\"\n          }\n        ]\n      }\n    ]\n  }\n}\n");
+            older.Should().Contain("\"Read|Bash\"", "the test starts from an older entry");
+            File.WriteAllText(Settings, older);
+
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().Contain(Settings, "build says to run install again");
+
+            Install();
+            var text = File.ReadAllText(Settings);
+            Count(text, "--claude-hook").Should().Be(1, "the older entry is replaced");
+            text.Should().Contain("\"Read|Grep|Glob|Bash\"").And.NotContain("\"Read|Bash\"").And.Contain("\"Edit|Write\"");
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().NotContain(Settings);
+        }
+
+        [Fact]
+        public void Settings_with_CRLF_line_breaks_keep_them()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Settings)!);
+            var crlf = ProjectSettings.Replace("\n", "\r\n");
+            File.WriteAllText(Settings, crlf);
+
+            Install();
+            var text = File.ReadAllText(Settings);
+            text.Should().Contain("--claude-hook").And.EndWith("}\r\n");
+            text.Replace("\r\n", string.Empty).Should().NotContain("\n", "every line break stays CRLF");
+
+            AssistantSetup.Uninstall(_unity, None);
+            File.ReadAllText(Settings).Should().Be(crlf);
+        }
+
+        [Fact]
         public void Without_settings_install_creates_them_uninstall_deletes_them_and_an_opt_out_leaves_them_alone()
         {
             AssistantSetup.Install(_unity, None, gitignore: false, _tool, claudeHook: false);
