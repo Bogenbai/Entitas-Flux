@@ -572,6 +572,8 @@ An assistant answering "who uses this component?" with grep reads every file tha
 | --- | --- |
 | `who-reads` or `lifecycle` of an event | ~350–400 |
 | `path` between two systems | ~110 |
+| `query` about a topic (`cart commit`): the connected piece of the graph | ~1 800 |
+| `diff --ref` across one commit | ~250 |
 | The same question by grep, then reading the 8 files that mention the event | ~5 900 |
 | `GRAPH_REPORT.md`, once, for an overview | ~3 900 |
 | Any answer, at most | ~2 000 (the budget) |

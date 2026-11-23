@@ -25,7 +25,7 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   never named, and every system gets its position under each one.
 
   Commands: `build`, `who-creates`, `who-reads`, `lifecycle`, `path`, `systems-of`,
-  `explain`, `query`, `report`. `build` writes `graph.json` (node-link, close to
+  `explain`, `query`, `diff`, `report`, `install`. `build` writes `graph.json` (node-link, close to
   Graphify's format), `GRAPH_REPORT.md` (components nobody reads, read but never created,
   requests without a handler, events without a consumer, flags never cleared, unregistered
   systems…) and `graph.html`, an offline viewer with vis-network inlined. Requests and
@@ -37,8 +37,27 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   otherwise answer with hundreds of readers (~23 000 tokens). An answer over the cap starts
   with a summary by feature or root, then says what it left out. `who-reads` of an event costs
   ~400 tokens where grep and reading the files that mention it costs ~6000. `graph.json`
-  (~1.4 M tokens on that project) is for programs, and the README says so, with a snippet
-  for the project's `CLAUDE.md` / `AGENTS.md`.
+  (~1.4 M tokens on that project) is for programs, and the README says so.
+
+  `query <words>` answers with the connected piece of the graph, like Graphify's: the
+  best-matching nodes seed a breadth-first walk over data flow (`--depth`, default 2;
+  `--limit` seeds, default 5), each edge listed once, each system with its feature and order.
+  Nodes with more than 40 neighbours (an `Id`, a position, the `Event` flag) are marked as
+  hubs and not walked through; when the subgraph does not fit the budget, each node keeps
+  only its strongest links, so what fits stays connected.
+
+  `diff --ref <branch|commit>` (or `diff old.json [new.json]`) shows what changed in the data
+  flow: the edges each component gained and lost, systems added, removed or moved, findings
+  that appeared or went away. The old side is built from `git archive` in a temporary folder,
+  so the checkout is never touched; ~4 s on a 2000-file project. Against the commit before a
+  change that moved three statistics systems from one event to another, it shows exactly
+  those six edges.
+
+  `install` tells the project's AI assistant to use all this instead of grepping: a short
+  block in `CLAUDE.md` in the repository root (and `AGENTS.md` when present) naming the tool
+  by a path relative to that file — by glob for a UPM install, whose folder name changes
+  with every update — plus `entitas-graph-out/` in `.gitignore`. Re-running replaces the
+  block and leaves the rest of the file alone; `uninstall` takes it out.
 
   On a production project (1906 files plus ~900 generated, 772 components, 747 systems,
   88 features) a build takes 2.2–2.8 s. The tree-sitter graph that missed both producers and
