@@ -229,6 +229,57 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_watched_change_through_a_call_that_its_reactor_never_sees_is_listed_with_the_note()
+        {
+            // HireSystem (#10) calls Factory.Convert, which sets Role and, through Cats.Release,
+            // clears the [Watched] Busy. Its one reactor runs at #5, and the generated cleanup — a
+            // cleanup system, so after every execute one — clears BusyChanged before #5 comes round.
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "Root", Label = "Root", Kind = NodeKind.Feature, Root = true });
+            var busy = Component(graph, "Busy", "Watched");
+            var role = Component(graph, "Role");
+            var hire = System(graph, "HireSystem", "Root", 10);
+            graph.Edges.Add(new GraphEdge
+            {
+                Source = hire, Target = role, Relation = Relation.Creates, Via = "Replace", Confidence = Confidence.Inferred,
+                Through = "Factory.Convert", SourceFile = "Factory.cs", Line = 3, Condition = "slots > 0 && cat.isCustomer"
+            });
+            graph.Edges.Add(new GraphEdge
+            {
+                Source = hire, Target = busy, Relation = Relation.Removes, Via = "Flag", Confidence = Confidence.Inferred,
+                Through = "Cats.Release", Called = "Factory.Convert", SourceFile = "Cats.cs", Line = 7, Condition = "slots > 0 && cat.isCustomer"
+            });
+            Edge(graph, System(graph, "AnimateSystem", "Root", 5), Relation.Reacts, busy);
+            Edge(graph, System(graph, "RemoveBusyChangedSystem", "Root", 3, "Cleanup", generated: true), Relation.Reacts, busy);
+
+            var output = new GraphQueries(graph, budget: 0).Flow("HireSystem");
+
+            Lines(output).Should().ContainInOrder(
+                "by calling Factory.Convert: creates Role; removes Busy  (if slots > 0 && cat.isCustomer)  Factory.cs:3",
+                "removes Busy  [Watched → BusyChanged]  Cats.cs:7",
+                "reacted to by AnimateSystem  #5  never sees it (RemoveBusyChangedSystem #3 clears BusyChanged first)  Code.cs:3");
+            Indent(output, "removes Busy").Should().Be(Indent(output, "by calling Factory.Convert") + 2, "listed under the call's line, which carries the condition");
+        }
+
+        [Fact]
+        public void A_line_whose_writes_are_made_in_an_if_and_its_else_keeps_only_what_they_share()
+        {
+            // AddX in the if, ReplaceX in the else: two edges, one line, the same enclosing case.
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "Root", Label = "Root", Kind = NodeKind.Feature, Root = true });
+            var request = Component(graph, "PayRequest", role: "request");
+            var payer = System(graph, "PayerSystem", "Root", 1);
+            foreach (var (via, condition) in new[] { ("Add", "cart.isReady && !wallet.hasPending"), ("Replace", "cart.isReady && wallet.hasPending") })
+                graph.Edges.Add(new GraphEdge
+                {
+                    Source = payer, Target = request, Relation = Relation.Creates, Via = via, SourceFile = "Pay.cs", Line = via == "Add" ? 4 : 6, Condition = condition
+                });
+            Edge(graph, System(graph, "PaySystem", "Root", 2), Relation.Reads, request);
+
+            Lines(new GraphQueries(graph, budget: 0).Flow("PayerSystem")).Should().Contain("creates PayRequest  [request]  (if cart.isReady)  Pay.cs:4");
+        }
+
+        [Fact]
         public void The_install_block_names_flow_and_stays_short()
         {
             var block = Setup.InstructionBlock.Build("/repo", "/repo/game", "/repo/game/Assets/Entitas/Entitas/Tools~/entitas-graph.dll", "/repo");

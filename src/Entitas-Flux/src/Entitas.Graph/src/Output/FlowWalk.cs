@@ -272,11 +272,13 @@ namespace Entitas.Graph.Output
         /// Requests and events written that way are still followed, under the call's line: they
         /// are messages, sent on purpose. A [Watched] or transient component is followed only
         /// when the call changes it — a replace, a removal, a flag; an AddX there is the initial
-        /// value of what a factory builds (MaxCapacity, Scale on new furniture) — and some system
-        /// is known to see the change (a frame, not "never" or "unknown"): factories also set up
-        /// flags whose reactors never see them, the generated cleanup clearing the marker first.
-        /// A helper changing a live entity is followed (UsablesExtensions.UnOccupy, the role a
-        /// hired cat gets from CatFactory.ConvertToWorker). Everything else is named on the line.
+        /// value of what a factory builds (MaxCapacity, Scale on new furniture). A [Watched] change
+        /// is then followed whenever a system reacts to it, also one that never sees it: that the
+        /// generated cleanup clears the marker before CatsAnimationSystem runs is likely a bug in
+        /// the project, and folded into the call's line it went unseen. A transient component only
+        /// when some system is known to see it (a frame, not "never" or "unknown"). A helper
+        /// changing a live entity is followed (UsablesExtensions.UnOccupy, the role a hired cat
+        /// gets from CatFactory.ConvertToWorker). Everything else is named on the line.
         /// A call that writes one component and hands nothing on is no line of its own: the write
         /// joins those not followed, marked inferred (`Event*` from CreateEntity.Event).
         /// </summary>
@@ -326,7 +328,7 @@ namespace Entitas.Graph.Output
                     if (_expandedComponents.Contains(component.Id) || edges.All(e => e.Via is "Add" or "AddComponent"))
                         continue;
                     var (takers, skipped) = Takers(component, kind, relations, step.Node);
-                    if (takers.Any(t => Frame(new[] { step.Node }, t, link, Root) is { Frames: not null, Never: false }))
+                    if (kind.HasFlag(HandOff.Watched) ? takers.Count > 0 : takers.Any(t => Frame(new[] { step.Node }, t, link, Root) is { Frames: not null, Never: false }))
                         Follow(step, link, call.HandOffs, takers, skipped);
                 }
 

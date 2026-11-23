@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -52,7 +53,8 @@ namespace Entitas.Graph.Analysis
                 }
             }
 
-            return _result.Accesses.Count + _result.Destroys.Count + _result.Calls.Count + _result.Registrations.Count + _result.GroupUses.Count > 0 ? _result : null;
+            return _result.Accesses.Count + _result.Destroys.Count + _result.Calls.Count + _result.Registrations.Count + _result.GroupUses.Count +
+                   _result.CalledOutsideMethods.Count > 0 ? _result : null;
         }
 
         // -- the generated API ---------------------------------------------------------------
@@ -367,33 +369,44 @@ namespace Entitas.Graph.Analysis
 
         // -- conditions ---------------------------------------------------------------------
 
-        /// <summary>Conditions are cut to this many characters; past it an enum member loses its type first.</summary>
-        const int ConditionLength = 40;
+        /// <summary>
+        /// Parameter names that make a bool argument the condition of a lambda passed with it:
+        /// `With(x =&gt; x.isExcluded = true, when: request.isExcluded)` sets the flag only when the
+        /// request says so. A convention, not a guarantee, so the list is short and literal;
+        /// matched without case, so `onlyIf` and `OnlyIf` both count.
+        /// </summary>
+        static readonly HashSet<string> ConditionParameters = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "when", "if", "condition", "onlyIf", "predicate"
+        };
 
         /// <summary>
         /// The condition <paramref name="node"/> runs under inside its method, or null when it runs
-        /// whenever the method does: the innermost of an if/else, a switch section or arm, ?:, the
-        /// right side of &amp;&amp;, || or ??, ?., a catch, or a guard — an if before it, in a block
-        /// enclosing it, that returns, continues, breaks or jumps. " &amp;&amp; …" says more
-        /// conditions enclose it; the innermost is the one that tells this write from its
-        /// neighbours (`amount &lt; 0` rather than the loop's `request.hasAmount`).
+        /// whenever the method does: every if/else, switch section or arm, ?:, right side of
+        /// &amp;&amp;, || or ??, ?., catch, guard — an if before it, in a block enclosing it, that
+        /// returns, continues, breaks or jumps — and the `when:` of a helper it is passed to as a
+        /// lambda (<see cref="ConditionParameters"/>). Outermost first, as the code reads: the
+        /// line cut at the tail loses the innermost detail, not the case it belongs to
+        /// (`currencyTypeId == Coins &amp;&amp; amount &gt; 0 &amp;&amp; request.isRefund`).
         ///
         /// Not conditions: loops (a write per entity is what a loop is for; RunsForEveryEntity
         /// covers what that means for removals), lambdas (walked through: a callback runs where it
         /// is passed, under the conditions there), an if that throws (an assertion: what follows it
         /// is the normal path), and the guards a method starts with (<see cref="Leading"/>).
         /// </summary>
-        string? ConditionOf(SyntaxNode node)
+        Condition? ConditionOf(SyntaxNode node)
         {
-            using var clauses = Clauses(node).GetEnumerator();
-            if (!clauses.MoveNext())
+            List<Clause>? clauses = null;
+            foreach (var (clause, negate) in Clauses(node))
+                (clauses ??= new List<Clause>()).Add(ClauseOf(clause, negate));
+            if (clauses == null)
                 return null;
-            var innermost = clauses.Current;
-            return RenderClause(innermost.Node, innermost.Negate, more: clauses.MoveNext());
+            clauses.Reverse();
+            return new Condition(clauses);
         }
 
-        /// <summary>The clauses <paramref name="node"/> runs under, innermost first, lazily: usually only two are asked for.</summary>
-        static IEnumerable<(SyntaxNode Node, bool Negate)> Clauses(SyntaxNode node)
+        /// <summary>The clauses <paramref name="node"/> runs under, innermost first.</summary>
+        IEnumerable<(SyntaxNode Node, bool Negate)> Clauses(SyntaxNode node)
         {
             var child = node;
             for (var parent = node.Parent; parent != null && !IsBoundary(parent); child = parent, parent = parent.Parent)
@@ -442,8 +455,41 @@ namespace Entitas.Graph.Analysis
                     case CatchClauseSyntax catchClause when child == catchClause.Block:
                         yield return (catchClause, false);
                         break;
+                    case ArgumentSyntax argument when child is AnonymousFunctionExpressionSyntax && WhenArgument(argument) is { } when:
+                        yield return (when, false);
+                        break;
                 }
             }
+        }
+
+        /// <summary>
+        /// For a lambda passed as <paramref name="lambda"/>: the other argument of the same call
+        /// whose parameter — resolved through the call's method, so positional arguments count —
+        /// is a bool named as a condition (<see cref="ConditionParameters"/>). Null when there is
+        /// none, or when it is a constant: `when: true` says nothing.
+        /// </summary>
+        ArgumentSyntax? WhenArgument(ArgumentSyntax lambda)
+        {
+            if (lambda.Parent is not ArgumentListSyntax { Arguments.Count: > 1 } list || list.Parent is not InvocationExpressionSyntax call)
+                return null;
+            var info = _model.GetSymbolInfo(call);
+            if ((info.Symbol ?? info.CandidateSymbols.FirstOrDefault()) is not IMethodSymbol method)
+                return null;
+
+            for (var i = 0; i < list.Arguments.Count; i++)
+            {
+                var argument = list.Arguments[i];
+                if (argument == lambda)
+                    continue;
+                var parameter = argument.NameColon != null
+                    ? method.Parameters.FirstOrDefault(p => p.Name == argument.NameColon.Name.Identifier.ValueText)
+                    : i < method.Parameters.Length && list.Arguments.Take(i).All(a => a.NameColon == null) ? method.Parameters[i] : null;
+                if (parameter is { Type.SpecialType: SpecialType.System_Boolean } && ConditionParameters.Contains(parameter.Name) &&
+                    !_model.GetConstantValue(argument.Expression).HasValue)
+                    return argument;
+            }
+
+            return null;
         }
 
         static bool IsBoundary(SyntaxNode node) =>
@@ -495,21 +541,46 @@ namespace Entitas.Graph.Analysis
             };
         }
 
-        /// <summary>The clause as text — `amount &lt; 0`, `!(amount &lt; 0)` for an else, `case Kind.X` — cut to <see cref="ConditionLength"/>.</summary>
-        string RenderClause(SyntaxNode clause, bool negate, bool more)
+        /// <summary>
+        /// The clause as text — `amount &lt; 0`, `!(amount &lt; 0)` for an else, `case Kind.X` —
+        /// whole, and compact for when the line is too long (<see cref="Condition.Render"/> cuts
+        /// it). The compact form binds member accesses, so it is worked out only where it can
+        /// differ: where a member is accessed on a name that may be an enum type.
+        /// </summary>
+        Clause ClauseOf(SyntaxNode clause, bool negate)
         {
-            var text = Clause(clause, negate, compact: false);
-            if (text.Length > ConditionLength)
-                text = Clause(clause, negate, compact: true);
-            if (text.Length > ConditionLength)
-                text = text.Substring(0, ConditionLength - 1).TrimEnd() + "…";
-            return more ? text + Guards.More : text;
+            var text = ClauseText(clause, negate, compact: false);
+            var compact = Written(clause).Any(n => n.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>().Any(MayBeEnumMember))
+                ? ClauseText(clause, negate, compact: true)
+                : text;
+            return new Clause(text, compact, $"{_file}:{clause.SpanStart}", negate);
+
+            static bool MayBeEnumMember(MemberAccessExpressionSyntax member) =>
+                member.Expression is IdentifierNameSyntax { Identifier.ValueText: var name } ? name.Length > 0 && char.IsUpper(name[0])
+                : member.Expression is MemberAccessExpressionSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax;
         }
 
-        string Clause(SyntaxNode clause, bool negate, bool compact)
+        /// <summary>The parts of a clause <see cref="ClauseText"/> writes out: an if's condition, not its body.</summary>
+        static IEnumerable<SyntaxNode> Written(SyntaxNode clause) => clause switch
+        {
+            ArgumentSyntax argument => new[] { argument.Expression },
+            IfStatementSyntax ifStatement => new[] { ifStatement.Condition },
+            ConditionalExpressionSyntax conditional => new[] { conditional.Condition },
+            BinaryExpressionSyntax binary => new[] { binary.Left },
+            AssignmentExpressionSyntax assignment => new[] { assignment.Left },
+            ConditionalAccessExpressionSyntax access => new[] { access.Expression },
+            CatchClauseSyntax catchClause => catchClause.Declaration == null ? Array.Empty<SyntaxNode>() : new[] { catchClause.Declaration },
+            SwitchSectionSyntax section => section.Labels,
+            SwitchExpressionArmSyntax arm => arm.WhenClause == null ? new SyntaxNode[] { arm.Pattern } : new SyntaxNode[] { arm.Pattern, arm.WhenClause },
+            _ => new[] { clause }
+        };
+
+        string ClauseText(SyntaxNode clause, bool negate, bool compact)
         {
             switch (clause)
             {
+                case ArgumentSyntax argument:
+                    return Condition(argument.Expression, negate, compact);
                 case IfStatementSyntax ifStatement:
                     return Condition(ifStatement.Condition, negate, compact);
                 case ConditionalExpressionSyntax conditional:
@@ -885,6 +956,8 @@ namespace Entitas.Graph.Analysis
             var caller = EnclosingMethod(invocation);
             if (caller != null)
                 _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation) });
+            else
+                _result.CalledOutsideMethods.Add(callee);
         }
 
         /// <summary>Add(systems.Create&lt;T&gt;()), Add(new T(...)), or anything statically typed as a system.</summary>

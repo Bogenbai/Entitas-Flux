@@ -136,11 +136,20 @@ namespace Entitas.Graph.Analysis
 
             // Per edge, the conditions of its sites — null once one site has none, since then the
             // write happens whenever the method runs — and the methods the system called to get
-            // there. Sets, so the order sites arrive in changes nothing in graph.json.
-            var conditions = new Dictionary<string, SortedSet<string>?>(StringComparer.Ordinal);
+            // there. Guards.Format sorts and simplifies, so the order sites arrive in changes
+            // nothing in graph.json.
+            var conditions = new Dictionary<string, List<Condition>?>(StringComparer.Ordinal);
             var called = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
 
-            void AddEdge(GraphEdge edge, IReadOnlyCollection<string>? condition = null, IReadOnlyCollection<string>? entries = null)
+            // A write in a private method takes the conditions its own type calls it under.
+            var callerGuards = new CallerGuards(calls, results.SelectMany(r => r.CalledOutsideMethods));
+            foreach (var access in accesses)
+                if (access.Relation is Relation.Creates or Relation.Removes)
+                    access.Guard = Guards.And(callerGuards.Of(access.Method), access.Condition);
+            foreach (var destroy in destroys)
+                destroy.Guard = Guards.And(callerGuards.Of(destroy.Method), destroy.Condition);
+
+            void AddEdge(GraphEdge edge, IReadOnlyList<Condition>? condition = null, IReadOnlyCollection<string>? entries = null)
             {
                 if (!nodeIds.Contains(edge.Source) || !nodeIds.Contains(edge.Target))
                     return;
@@ -159,12 +168,12 @@ namespace Entitas.Graph.Analysis
                     if (condition == null)
                         conditions[key] = null;
                     else
-                        conditions[key]?.UnionWith(condition);
+                        conditions[key]?.AddRange(condition);
                 }
                 else
                 {
                     edges.Add(key, edge);
-                    conditions[key] = condition == null ? null : new SortedSet<string>(condition, StringComparer.Ordinal);
+                    conditions[key] = condition?.ToList();
                 }
 
                 if (entries != null)
@@ -177,7 +186,7 @@ namespace Entitas.Graph.Analysis
 
             // Direct accesses.
             foreach (var access in accesses)
-                AddEdge(access.ToEdge(Confidence.Extracted, null), Guards.One(access.Condition));
+                AddEdge(access.ToEdge(Confidence.Extracted, null), access.Guard);
 
             // Groups: field/local symbol -> matcher shape.
             var groups = new Dictionary<ISymbol, GroupShape>(SymbolEqualityComparer.Default);
@@ -213,7 +222,7 @@ namespace Entitas.Graph.Analysis
                         Confidence = shape.AllOf.Count > 0 ? Confidence.Extracted : Confidence.Inferred,
                         SourceFile = destroy.File,
                         Line = destroy.Line
-                    }, Guards.One(destroy.Condition));
+                    }, destroy.Guard);
                 }
             }
 
@@ -238,17 +247,17 @@ namespace Entitas.Graph.Analysis
             }
 
             // Access through queries, factories and services, credited to the systems calling them.
-            foreach (var (edge, condition, entries) in Propagate(context, accesses, destroys, calls, groupUses, groups))
+            foreach (var (edge, condition, entries) in Propagate(context, accesses, destroys, calls, groupUses, groups, callerGuards))
                 AddEdge(edge, condition, entries);
 
             // Destroyers of an entity shape destroy every component created on that shape.
             foreach (var (edge, condition) in InferDestroysFromShapes(context, accesses, destroys, groups))
-                AddEdge(edge, Guards.One(condition));
+                AddEdge(edge, condition);
 
             // ...and what a loop marks for them (isDestructed = true) carries along.
             var known = new HashSet<(string, string)>(edges.Values.Where(e => e.Relation == Relation.Destroys).Select(e => (e.Source, e.Target)));
             foreach (var (edge, condition) in InferDestroysFromMarking(context, accesses, destroys, groups, known))
-                AddEdge(edge, Guards.One(condition));
+                AddEdge(edge, condition);
 
             foreach (var pair in conditions)
                 if (pair.Value != null)
@@ -286,20 +295,22 @@ namespace Entitas.Graph.Analysis
         /// the implementations in the project — as INFERRED, naming the method it happens in, the
         /// methods the system called to get there, and the conditions it happens under.
         ///
-        /// A write in a helper is conditional when the system's call is, when a call on the way
-        /// is, or when the write is in the helper. The text shown is the one nearest the system:
-        /// its call's condition is in the code the reader of a flow is looking at, and says which
-        /// of the system's cases runs the factory (`request.isGhost`); the factory's own `if` is
-        /// shown only when everything above it is unconditional. " &amp;&amp; …" marks the rest.
-        /// A method called both under a condition and without one is reached unconditionally.
+        /// A write in a helper is conditional when the system's call is (or the private method of
+        /// the system making it is only called under one, <see cref="CallerGuards"/>), when a call
+        /// on the way is, or when the write is in the helper. All of them, in that order: the
+        /// system's call comes first, since it is in the code the reader of a flow is looking at
+        /// and says which of the system's cases runs the factory (`request.isGhost`), and the
+        /// factory's own `if` last, the first to go when the text is cut. A method called both
+        /// under a condition and without one is reached unconditionally.
         /// </summary>
-        static IEnumerable<(GraphEdge Edge, IReadOnlyCollection<string>? Condition, IReadOnlyCollection<string> Called)> Propagate(
+        static IEnumerable<(GraphEdge Edge, IReadOnlyList<Condition>? Condition, IReadOnlyCollection<string> Called)> Propagate(
             BuildContext context,
             List<Access> accesses,
             List<DestroySite> destroys,
             List<CallSite> calls,
             List<GroupUse> groupUses,
-            Dictionary<ISymbol, GroupShape> groups)
+            Dictionary<ISymbol, GroupShape> groups,
+            CallerGuards callerGuards)
         {
             // A query's matchers sit in its constructor; the methods using the group read them.
             var matchersByGroup = accesses
@@ -370,7 +381,7 @@ namespace Entitas.Graph.Analysis
                 // method: the calls in its code first, then down the calls the walk followed, until
                 // nothing changes (a method reached twice, the second time unconditionally).
                 var paths = new Dictionary<IMethodSymbol, Path>(SymbolEqualityComparer.Default);
-                bool Arrive(IMethodSymbol method, IReadOnlyCollection<string>? condition, IEnumerable<string> entries)
+                bool Arrive(IMethodSymbol method, IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
                 {
                     if (!depths.ContainsKey(method))
                         return false;
@@ -382,9 +393,13 @@ namespace Entitas.Graph.Analysis
                     return path.Join(condition, entries);
                 }
 
-                foreach (var call in roots.SelectMany(r => callees[r]))
-                    foreach (var method in Dispatch(call.Callee))
-                        Arrive(method, Guards.One(call.Condition), new[] { Name(method) });
+                foreach (var root in roots)
+                {
+                    var guard = callerGuards.Of(root);
+                    foreach (var call in callees[root])
+                        foreach (var method in Dispatch(call.Callee))
+                            Arrive(method, Guards.And(guard, call.Condition), new[] { Name(method) });
+                }
 
                 for (var changed = true; changed;)
                 {
@@ -445,17 +460,22 @@ namespace Entitas.Graph.Analysis
         /// <summary>How a system gets to a method: the conditions on the way (null: none) and its own calls that lead there.</summary>
         sealed class Path
         {
-            public SortedSet<string>? Condition;
+            public List<Condition>? Condition;
             public readonly SortedSet<string> Entries = new SortedSet<string>(StringComparer.Ordinal);
 
-            public Path(IReadOnlyCollection<string>? condition, IEnumerable<string> entries)
+            public Path(IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
             {
-                Condition = condition == null ? null : new SortedSet<string>(condition, StringComparer.Ordinal);
+                if (condition != null)
+                {
+                    Condition = new List<Condition>();
+                    foreach (var way in condition)
+                        Guards.Join(Condition, way);
+                }
                 Entries.UnionWith(entries);
             }
 
             /// <summary>Another way there: unconditional if either is; true when anything changed.</summary>
-            public bool Join(IReadOnlyCollection<string>? condition, IEnumerable<string> entries)
+            public bool Join(IReadOnlyList<Condition>? condition, IEnumerable<string> entries)
             {
                 var changed = false;
                 if (Condition != null)
@@ -467,9 +487,8 @@ namespace Entitas.Graph.Analysis
                     }
                     else
                     {
-                        var before = Condition.Count;
-                        Condition.UnionWith(condition);
-                        changed = Condition.Count != before;
+                        foreach (var way in condition)
+                            changed |= Guards.Join(Condition, way);
                     }
                 }
 
@@ -486,7 +505,7 @@ namespace Entitas.Graph.Analysis
         /// that entity carries — directly, or once another system adds them to entities like
         /// it (Ready, added to every Event) — destroys every component of that entity.
         /// </summary>
-        static IEnumerable<(GraphEdge Edge, string? Condition)> InferDestroysFromShapes(
+        static IEnumerable<(GraphEdge Edge, IReadOnlyList<Condition>? Condition)> InferDestroysFromShapes(
             BuildContext context,
             List<Access> accesses,
             List<DestroySite> destroys,
@@ -552,7 +571,7 @@ namespace Entitas.Graph.Analysis
                         {
                             Source = destroy.Accessor.Id, Target = component.Id, Relation = Relation.Destroys, Via = "Destroy",
                             Confidence = Confidence.Inferred, Through = through, SourceFile = destroy.File, Line = destroy.Line
-                        }, destroy.Condition);
+                        }, destroy.Guard);
                     }
                 }
             }
@@ -570,7 +589,7 @@ namespace Entitas.Graph.Analysis
         /// marked are not known to be the ones carrying the flag. A component the loop also
         /// removes is not credited, and neither is a pair the shapes already gave.
         /// </summary>
-        static IEnumerable<(GraphEdge Edge, string? Condition)> InferDestroysFromMarking(
+        static IEnumerable<(GraphEdge Edge, IReadOnlyList<Condition>? Condition)> InferDestroysFromMarking(
             BuildContext context,
             List<Access> accesses,
             List<DestroySite> destroys,
@@ -638,7 +657,7 @@ namespace Entitas.Graph.Analysis
                     Source = pair.Key.Source, Target = pair.Key.Target, Relation = Relation.Destroys, Via = "Destroy",
                     Confidence = Confidence.Inferred, SourceFile = pair.Value.Destroy.File, Line = pair.Value.Destroy.Line,
                     Through = through[0] + (through.Count > 1 ? $" (and {through.Count - 1} more)" : string.Empty)
-                }, pair.Value.Destroy.Condition);
+                }, pair.Value.Destroy.Guard);
             }
         }
 
@@ -730,61 +749,6 @@ namespace Entitas.Graph.Analysis
     }
 
     // -- model used while building ------------------------------------------------------
-
-    /// <summary>
-    /// Conditions as they travel from sites to edges: null means none (the write happens whenever
-    /// its method runs), otherwise the distinct texts, any of which may be the one that holds.
-    /// </summary>
-    static class Guards
-    {
-        /// <summary>Appended when further conditions enclose the one shown: they all hold together.</summary>
-        public const string More = " && …";
-
-        /// <summary>Edges name this many conditions, then count the rest.</summary>
-        const int Named = 3;
-
-        public static IReadOnlyCollection<string>? One(string? condition) => condition == null ? null : new[] { condition };
-
-        /// <summary>
-        /// <paramref name="inner"/> reached under <paramref name="outer"/>: the outer text stays —
-        /// nearer the system, it is what tells its cases apart — with " &amp;&amp; …" for the inner.
-        /// </summary>
-        public static IReadOnlyCollection<string>? And(IReadOnlyCollection<string>? outer, string? inner) =>
-            outer == null ? One(inner) : inner == null ? outer : outer.Select(t => t.EndsWith(More, StringComparison.Ordinal) ? t : t + More).ToList();
-
-        /// <summary>
-        /// "a or b or c or +2 more", ordinal; "x &amp;&amp; …" goes when "x" is there, since x
-        /// covers it. Null when a condition and its negation are both there — the write is in the
-        /// if and in the else (`if (x) AddX(a); else AddX(b);`), so it happens either way.
-        /// </summary>
-        public static string? Format(IReadOnlyCollection<string> conditions)
-        {
-            if (conditions.Any(t => Negations(t).Any(conditions.Contains)))
-                return null;
-            var texts = conditions
-                .Where(t => !(t.EndsWith(More, StringComparison.Ordinal) && conditions.Contains(t.Substring(0, t.Length - More.Length))))
-                .OrderBy(t => t, StringComparer.Ordinal)
-                .ToList();
-            return string.Join(" or ", texts.Take(Named)) + (texts.Count > Named ? $" or +{texts.Count - Named} more" : string.Empty);
-        }
-
-        /// <summary>
-        /// How TreeWalker writes the negation of a condition it wrote as <paramref name="text"/>:
-        /// `!x`, `!(a &lt; b)`, `a != b` for `a == b`. Only whole conditions: one cut short or
-        /// followed by " &amp;&amp; …" has no exact negation.
-        /// </summary>
-        static IEnumerable<string> Negations(string text)
-        {
-            if (text.EndsWith("…", StringComparison.Ordinal))
-                yield break;
-            yield return "!" + text;
-            yield return $"!({text})";
-            if (text.IndexOf(" == ", StringComparison.Ordinal) is var eq && eq > 0 && text.IndexOf(" == ", eq + 1, StringComparison.Ordinal) < 0 && !text.Contains("&&") && !text.Contains("||"))
-                yield return text.Substring(0, eq) + " != " + text.Substring(eq + 4);
-            if (text.IndexOf(" != ", StringComparison.Ordinal) is var ne && ne > 0 && text.IndexOf(" != ", ne + 1, StringComparison.Ordinal) < 0 && !text.Contains("&&") && !text.Contains("||"))
-                yield return text.Substring(0, ne) + " == " + text.Substring(ne + 4);
-        }
-    }
 
     sealed class ComponentInfo
     {
@@ -902,7 +866,13 @@ namespace Entitas.Graph.Analysis
         public string? Clause;
 
         /// <summary>For writes: the condition it sits under in its method (TreeWalker.ConditionOf), null when none.</summary>
-        public string? Condition;
+        public Condition? Condition;
+
+        /// <summary>
+        /// For writes: <see cref="Condition"/> under the conditions its method is called with in
+        /// its own type (<see cref="CallerGuards"/>) — what the accessor's own edge carries.
+        /// </summary>
+        public IReadOnlyList<Condition>? Guard;
 
         public GraphEdge ToEdge(string confidence, string? through, string? source = null)
         {
@@ -931,7 +901,10 @@ namespace Entitas.Graph.Analysis
         public ISymbol? Group;
         public string File = string.Empty;
         public int Line;
-        public string? Condition;
+        public Condition? Condition;
+
+        /// <summary>As <see cref="Access.Guard"/>.</summary>
+        public IReadOnlyList<Condition>? Guard;
     }
 
     sealed class CallSite
@@ -940,7 +913,7 @@ namespace Entitas.Graph.Analysis
         public IMethodSymbol Callee = null!;
 
         /// <summary>The condition the call sits under in the caller, null when none.</summary>
-        public string? Condition;
+        public Condition? Condition;
     }
 
     sealed class RegistrationSite
@@ -965,5 +938,8 @@ namespace Entitas.Graph.Analysis
         public readonly List<DestroySite> Destroys = new List<DestroySite>();
         public readonly List<CallSite> Calls = new List<CallSite>();
         public readonly List<RegistrationSite> Registrations = new List<RegistrationSite>();
+
+        /// <summary>Methods called from no method — a field initializer's lambda — so from anywhere, at any time.</summary>
+        public readonly List<IMethodSymbol> CalledOutsideMethods = new List<IMethodSymbol>();
     }
 }

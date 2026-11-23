@@ -150,11 +150,13 @@ namespace Entitas.Graph
         public string? OnlyWhile;
 
         /// <summary>
-        /// For creates, removes and destroys made only under a condition: its code, shortened
-        /// ("amount &lt; 0", "!(amount &lt; 0)" for an else, "case Kind.X", " &amp;&amp; …" when
-        /// more conditions enclose it). Absent when any site of the edge is unconditional; the
-        /// distinct conditions of several sites are joined with " or ", the first three named.
-        /// For an edge inferred through a call, the call's condition in the system comes first.
+        /// For creates, removes and destroys made only under a condition: its code, every clause
+        /// outermost first ("currencyTypeId == Coins &amp;&amp; amount &gt; 0 &amp;&amp;
+        /// request.isRefund", "!(amount &lt; 0)" for an else, "case Kind.X"), cut at the tail past
+        /// about 70 characters (" &amp;&amp; …"). For an edge inferred through a call, the
+        /// system's call comes first; a private method called only under a condition passes it
+        /// on. Absent when any site of the edge is unconditional, or when the sites cover an if
+        /// and its else; the conditions of several sites are joined with " or ", three named.
         /// </summary>
         public string? Condition;
 

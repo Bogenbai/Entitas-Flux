@@ -149,7 +149,7 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
-        public void Writes_carry_the_innermost_condition_they_run_under()
+        public void Writes_carry_every_condition_they_run_under_outermost_first()
         {
             var graph = Snippet(@"
                 public static class Marks
@@ -230,34 +230,209 @@ namespace Entitas.Graph.Tests
                     }
                 }");
 
-            string? Condition(string relation, string component, string system = "WriteSystem") =>
-                graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;
+            string? Condition(string relation, string component, string system = "WriteSystem") => ConditionIn(graph, system, relation, component);
 
             // The guard Execute starts with says when the system runs, not which write happens.
             Condition(Relation.Creates, "B").Should().BeNull();
             Condition(Relation.Creates, "D").Should().Be("!e.isC", "a guard before it in its block");
-            Condition(Relation.Creates, "E").Should().Be("_amount < 0 && …", "the innermost, and the guard above it");
-            Condition(Relation.Creates, "F").Should().Be("!(_amount < 0) && …");
-            Condition(Relation.Creates, "G").Should().Be("case Kind.One && …");
-            Condition(Relation.Creates, "A").Should().Be("_amount > 9 && …");
-            Condition(Relation.Removes, "A").Should().Be("_target != null && …");
-            Condition(Relation.Creates, "H").Should().Be("caught InvalidOperationException && …");
-            Condition(Relation.Creates, "I").Should().Be("!e.isB && …", "x == false reads as !x");
-            Condition(Relation.Creates, "J").Should().Be("_kind == Two && _amount < -1000 && _amo… && …", "past 40 characters an enum member loses its type, then the text is cut");
+            Condition(Relation.Creates, "E").Should().Be("!e.isC && _amount < 0", "the guard above it, then its own if");
+            Condition(Relation.Creates, "F").Should().Be("!e.isC && !(_amount < 0)");
+            Condition(Relation.Creates, "G").Should().Be("!e.isC && case Kind.One");
+            Condition(Relation.Creates, "A").Should().Be("!e.isC && _amount > 9");
+            Condition(Relation.Removes, "A").Should().Be("!e.isC && _target != null");
+            Condition(Relation.Creates, "H").Should().Be("!e.isC && caught InvalidOperationException");
+            Condition(Relation.Creates, "I").Should().Be("!e.isC && _amount > 100 && !e.isB", "x == false reads as !x");
+            Condition(Relation.Creates, "J").Should().Be("!e.isC && _kind == Kind.Two && _amount < -1000 && _amount != 5");
             Condition(Relation.Creates, "L").Should().Be("_amount != 3", "a guard after a loop tells the writes after it from those before");
 
             // Made in the if and in the else, it happens either way.
             Condition(Relation.Creates, "C", "EitherSystem").Should().BeNull();
             Condition(Relation.Creates, "D", "EitherSystem").Should().Be("!_flag");
 
-            // Through a helper, the call's condition in the system.
+            // Through a helper, the call's condition in the system, then the helper's own (none here).
             var mark = graph.Edges.Single(e => e.Target == "component:K" && e.Source.EndsWith("WriteSystem", StringComparison.Ordinal));
             mark.Confidence.Should().Be(Confidence.Inferred);
-            mark.Condition.Should().Be("_amount == 7 && …");
+            mark.Condition.Should().Be("!e.isC && _amount == 7");
             mark.Called.Should().BeNull("the system calls the method the write is in");
 
             graph.Edges.Where(e => e.Relation is Relation.Reads or Relation.Filters).Should().OnlyContain(e => e.Condition == null, "only writes are conditional");
         }
+
+        [Fact]
+        public void A_long_condition_loses_enum_types_then_its_tail()
+        {
+            var graph = Snippet(@"
+                public sealed class LongSystem : IExecuteSystem
+                {
+                    readonly IGroup<GameEntity> _all;
+                    readonly Kind _kind;
+                    readonly int _alphaAmount, _betaAmount, _gammaAmount, _deltaAmount;
+                    readonly bool _first, _second;
+
+                    public LongSystem(GameContext game) => _all = game.GetGroup(GameMatcher.A);
+
+                    public void Execute()
+                    {
+                        foreach (GameEntity e in _all.GetEntities())
+                        {
+                            e.isB = true;
+                            if (_first)
+                                continue;
+                            if (_second)
+                                continue;
+                            if (_kind == Kind.Two)
+                                e.isC = true;
+                        }
+
+                        if (_alphaAmount > 1000)
+                            if (_betaAmount > 2000)
+                                if (_gammaAmount > 3000)
+                                    if (_deltaAmount > 4000)
+                                        _all.GetEntities()[0].isD = true;
+
+                        if (_alphaAmount > 1000)
+                            if (_kind == Kind.Two && _betaAmount + _gammaAmount + _deltaAmount > 4000 + _alphaAmount)
+                                _all.GetEntities()[0].isE = true;
+
+                        if (_kind == Kind.Two && _alphaAmount > 1000 && _betaAmount > 2000 && _first)
+                            _all.GetEntities()[0].isF = true;
+
+                        if (_alphaAmount > 1000)
+                            if (_betaAmount > 2000)
+                                if (_gammaAmount > _deltaAmount)
+                                    _all.GetEntities()[0].isG = true;
+
+                        if (_first || _second)
+                            if (_alphaAmount > 1)
+                                _all.GetEntities()[0].isH = true;
+                    }
+                }");
+
+            string? Condition(string component) => ConditionIn(graph, "LongSystem", Relation.Creates, component);
+
+            Condition("C").Should().Be("!_first && !_second && _kind == Kind.Two", "guards in the order they are written, its own if last");
+            Condition("F").Should().Be("_kind == Two && _alphaAmount > 1000 && _betaAmount > 2000 && _first",
+                "past 70 characters an enum member loses its type first");
+            Condition("D").Should().Be("_alphaAmount > 1000 && _betaAmount > 2000 && _gammaAmount > 3000 && …",
+                "then the innermost clauses go, the outermost stay");
+            Condition("E").Should().Be("_alphaAmount > 1000 && _kind == Two && _betaAmount + _gammaAmount + _…",
+                "a clause with enough room left is cut, not dropped");
+            Condition("G").Should().Be("_alphaAmount > 1000 && _betaAmount > 2000 && _gammaAmount > _deltaAmount",
+                "a last clause running over by less than ' && …' is kept whole");
+            Condition("H").Should().Be("(_first || _second) && _alphaAmount > 1", "an || keeps its meaning among the &&s");
+        }
+
+        [Fact]
+        public void A_private_method_called_only_under_a_condition_writes_under_it()
+        {
+            var graph = Snippet(@"
+                public static class Marks
+                {
+                    public static void Mark(GameEntity e) => e.isK = true;
+                }
+
+                public sealed class PrivateSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly int _amount;
+                    readonly bool _ready, _flag;
+
+                    public void Execute()
+                    {
+                        if (_amount > 0)
+                        {
+                            if (_ready)
+                                Pay();
+                        }
+
+                        Mixed();
+                        if (_flag)
+                            Mixed();
+
+                        if (_flag)
+                            Either(1);
+                        else
+                            Either(2);
+
+                        if (_amount == 5)
+                            Handed();
+                        Action later = Handed;
+
+                        if (_amount == 6)
+                            Public();
+                    }
+
+                    void Pay()
+                    {
+                        _e.isB = true;
+                        Nested();
+                        Marks.Mark(_e);
+                    }
+
+                    void Nested()
+                    {
+                        if (_amount < 10)
+                            _e.isC = true;
+                    }
+
+                    void Mixed() => _e.isD = true;
+                    void Either(int value) => _e.isE = true;
+                    void Handed() => _e.isF = true;
+                    public void Public() => _e.isG = true;
+                }");
+
+            string? Condition(string component) => ConditionIn(graph, "PrivateSystem", Relation.Creates, component);
+
+            Condition("B").Should().Be("_amount > 0 && _ready", "Execute calls Pay only there");
+            Condition("C").Should().Be("_amount > 0 && _ready && _amount < 10", "nested private calls compose, the write's own if last");
+            Condition("K").Should().Be("_amount > 0 && _ready", "a factory called from Pay is reached under the same condition");
+            Condition("D").Should().BeNull("one of the calls to Mixed is unconditional");
+            Condition("E").Should().BeNull("Either is called in the if and in its else");
+            Condition("F").Should().BeNull("Handed is also handed out as a delegate, which may run it anywhere");
+            Condition("G").Should().BeNull("a public method can be called from elsewhere");
+        }
+
+        [Fact]
+        public void A_lambda_passed_with_a_when_argument_runs_under_it()
+        {
+            var graph = Snippet(@"
+                public static class Functional
+                {
+                    public static T With<T>(this T self, Action<T> apply, bool when) { if (when) apply(self); return self; }
+                    public static T Also<T>(this T self, Action<T> apply, bool force) { apply(self); return self; }
+                    public static T If<T>(this T self, bool condition, Action<T> apply) { if (condition) apply(self); return self; }
+                }
+
+                public sealed class WhenSystem : IExecuteSystem
+                {
+                    readonly GameEntity _e;
+                    readonly int _amount;
+                    readonly bool _flag;
+
+                    public void Execute()
+                    {
+                        _e.With(x => x.isB = true, when: _flag);
+                        _e.With(x => x.isC = true, _amount > 3);
+                        if (_amount < 0)
+                            _e.With(x => x.isD = true, when: !_flag);
+                        _e.Also(x => x.isE = true, force: _flag);
+                        _e.With(x => x.isF = true, when: true);
+                        _e.If(_flag, x => x.isG = true);
+                    }
+                }");
+
+            string? Condition(string component) => ConditionIn(graph, "WhenSystem", Relation.Creates, component);
+
+            Condition("B").Should().Be("_flag");
+            Condition("C").Should().Be("_amount > 3", "the parameter is found by position too");
+            Condition("D").Should().Be("_amount < 0 && !_flag", "inside the conditions around the call");
+            Condition("E").Should().BeNull("force is no condition's name");
+            Condition("F").Should().BeNull("a constant says nothing");
+            Condition("G").Should().Be("_flag", "wherever the condition stands among the arguments");
+        }
+
+        static string? ConditionIn(EcsGraph graph, string system, string relation, string component) =>
+            graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;
 
         /// <summary>
         /// A one-file project with components A (data) and B…L (flags), an enum Kind, and
