@@ -85,7 +85,7 @@ namespace Entitas.Graph.Output
             var verb = walk.StartLink!.Kind.HasFlag(HandOff.Watched) ? "changed" : "created";
             string Name(GraphNode n) => n.Kind == NodeKind.System ? $"{n.Label} {FlowPlace(n, walk.Root)}" : $"{n.Label} [{n.Kind}]";
             if (creators.Count == 1)
-                return $"{verb} by {Name(creators[0])}{counted}  {ShortLocation(walk.Creators[0])}";
+                return $"{verb} by {Name(creators[0])}{counted}{If(walk.Creators)}  {ShortLocation(walk.Creators[0])}";
 
             const int shown = 3;
             var some = walk.Producers.Count > 0 && walk.Producers.Count < creators.Count
@@ -120,8 +120,8 @@ namespace Entitas.Graph.Output
             yield return $"  flow: {Count(walk.Systems, "system")}, {Count(walk.HandOffs, "hand-off")}, {Count(walk.DeepestHop, "hop")}{beyond}";
 
             var branches = walk.StartStep != null
-                ? walk.StartStep.HandOffs
-                : walk.StartLink!.Takers.Where(t => t.Step.Expanded).SelectMany(t => t.Step.HandOffs).ToList();
+                ? walk.StartStep.AllHandOffs.ToList()
+                : walk.StartLink!.Takers.Where(t => t.Step.Expanded).SelectMany(t => t.Step.AllHandOffs).ToList();
             if (walk.StartLink != null)
                 yield return "  taken by: " + Names(walk.StartLink.Takers.Select(t => t.Step.Node.Label), 6);
             foreach (var branch in branches.Where(b => b.Expanded))
@@ -132,7 +132,8 @@ namespace Entitas.Graph.Output
                 var taken = systems.Count > 0 ? Names(systems.Distinct(), 3)
                     : branch.Beyond > 0 ? $"{Count(branch.Beyond, "system")} past --depth {walk.Depth}"
                     : "no system takes it";
-                yield return $"  {branch.Component.Label} → {taken}" + (handOffs.Count > 0 ? $"; then {Names(handOffs, 5)}" : string.Empty);
+                var condition = FlowWalk.ConditionOf(branch.Writes) is { } c ? $" (if {c})" : string.Empty;
+                yield return $"  {branch.Component.Label}{condition} → {taken}" + (handOffs.Count > 0 ? $"; then {Names(handOffs, 5)}" : string.Empty);
             }
 
             // Every taker is named, also one expanded under another branch; only expanded ones lead on.
@@ -143,7 +144,7 @@ namespace Entitas.Graph.Output
                     systems.Add(take.Step.Node.Label);
                     if (!take.Step.Expanded)
                         continue;
-                    foreach (var next in take.Step.HandOffs.Where(h => h.Expanded))
+                    foreach (var next in take.Step.AllHandOffs.Where(h => h.Expanded))
                     {
                         handOffs.Add(next.Component.Label);
                         Gather(next, systems, handOffs);
@@ -159,6 +160,11 @@ namespace Entitas.Graph.Output
         }
 
         static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? string.Empty : "s")}";
+
+        /// <summary>"  (if amount &lt; 0)" when every write on the line happens under a condition.</summary>
+        static string If(IEnumerable<GraphEdge> edges) => If(FlowWalk.ConditionOf(edges));
+
+        static string If(string? condition) => condition == null ? string.Empty : $"  (if {condition})";
 
         /// <summary>A system's place as flow lists it: its order under the flow's root, or where it runs instead.</summary>
         string FlowPlace(GraphNode node, string? root)
@@ -227,20 +233,76 @@ namespace Entitas.Graph.Output
             void Writes(FlowStep step, string indent)
             {
                 foreach (var link in step.HandOffs)
-                {
-                    Line($"{indent}{WriteVerb(link.Relations)} {link.Component.Label}  [{Tag(link)}]{Inferred(link.Writes)}  {ShortLocation(link.Writes[0])}" +
-                         (link.Expanded ? string.Empty : Where(link.Component.Id)));
-                    if (!link.Expanded)
-                        continue;
-                    _shown.Add(link.Component.Id);
-                    Takers(link, indent + "  ");
-                    if (link.Beyond > 0)
-                        Line($"{indent}  … taken by {link.Beyond} more system{(link.Beyond == 1 ? string.Empty : "s")}, past --depth {_walk.Depth}");
-                    Ends(link, indent + "  ");
-                }
+                    Link(link, indent, string.Empty, null);
 
                 if (_detail != FlowDetail.Bare && step.NotFollowed.Count > 0)
                     Line($"{indent}also, not followed: {NotFollowed(step.NotFollowed)}");
+
+                // After the system's own writes, what it writes by calling a factory or a helper:
+                // the system is the subject of the line, as of every line at this indent.
+                foreach (var call in step.Calls)
+                {
+                    if (_detail == FlowDetail.Bare && call.HandOffs.Count == 0)
+                        continue;
+                    if (call.Writes.Count == 1 && call.HandOffs.Count == 1)
+                    {
+                        Link(call.HandOffs[0], indent, $"  by calling {call.Method}", null);
+                        continue;
+                    }
+
+                    // Located in the called method itself, not in a helper it calls in turn.
+                    var first = call.Edges.OrderBy(e => call.Methods.Contains(e.Through ?? string.Empty) ? 0 : 1)
+                        .ThenBy(e => e.SourceFile, StringComparer.Ordinal).ThenBy(e => e.Line).First();
+                    var condition = FlowWalk.ConditionOf(call.Edges);
+                    Line($"{indent}by calling {call.Method}: {CallWrites(call)}{If(condition)}  {ShortLocation(first)}");
+                    foreach (var link in call.HandOffs)
+                        Link(link, indent + "  ", string.Empty, condition);
+                }
+            }
+
+            /// <param name="call">"  by calling X" when the call's line is this one.</param>
+            /// <param name="above">The condition of the call line above: the same one is not said twice.</param>
+            void Link(FlowLink link, string indent, string call, string? above)
+            {
+                var condition = FlowWalk.ConditionOf(link.Writes);
+                Line($"{indent}{WriteVerb(link.Relations)} {link.Component.Label}  [{Tag(link)}]{call}{(condition == above ? string.Empty : If(condition))}  {ShortLocation(link.Writes[0])}" +
+                     (link.Expanded ? string.Empty : Where(link.Component.Id)));
+                if (!link.Expanded)
+                    return;
+                _shown.Add(link.Component.Id);
+                Takers(link, indent + "  ");
+                if (link.Beyond > 0)
+                    Line($"{indent}  … taken by {link.Beyond} more system{(link.Beyond == 1 ? string.Empty : "s")}, past --depth {_walk.Depth}");
+                Ends(link, indent + "  ");
+            }
+
+            /// <summary>
+            /// "creates 9 (ChangeHueRequest, Scale, TutorialTargetGhost, …); removes 2 (Moving, Velocity)":
+            /// per verb the count, then the names — followed ones first, then other hand-offs, then
+            /// state. Counts only when the answer is cut to the bone.
+            /// </summary>
+            string CallWrites(FlowCall call)
+            {
+                const int shown = 3;
+                var followed = new HashSet<string>(call.HandOffs.Select(h => h.Component.Id), StringComparer.Ordinal);
+                return string.Join("; ", call.Writes
+                    .GroupBy(w => string.Join("+", w.Edges.Select(e => e.Relation).Distinct().OrderBy(r => r == Relation.Creates ? 0 : 1)))
+                    .OrderBy(g => g.Key, StringComparer.Ordinal)
+                    .Select(g =>
+                    {
+                        var count = g.Count();
+                        if (_detail == FlowDetail.Bare)
+                            return $"{g.Key} {count}";
+                        var names = g.OrderBy(w => followed.Contains(w.Component.Id) ? 0 : 1)
+                            .ThenBy(w => w.Component.Role != null || w.Component.Attributes.Contains("Watched") ? 0 : 1)
+                            .ThenBy(w => w.Hub ? 1 : 0)
+                            .ThenBy(w => w.Component.Label, StringComparer.Ordinal)
+                            .Select(w => w.Component.Label + (w.Hub ? " (hub)" : string.Empty))
+                            .ToList();
+                        return count == 1
+                            ? $"{g.Key} {names[0]}"
+                            : $"{g.Key} {count} ({string.Join(", ", names.Take(shown))}{(count > shown ? ", …" : string.Empty)})";
+                    }));
             }
 
             void Takers(FlowLink link, string indent)
@@ -248,7 +310,7 @@ namespace Entitas.Graph.Output
                 var ending = new List<FlowTake>();
                 foreach (var take in link.Takers)
                 {
-                    if (_detail != FlowDetail.Full && (take.Frame.Never || take.Step.Expanded && take.Step.HandOffs.Count == 0))
+                    if (_detail != FlowDetail.Full && (take.Frame.Never || take.Step.Expanded && !take.Step.HandsOn))
                     {
                         ending.Add(take);
                         continue;
@@ -314,7 +376,7 @@ namespace Entitas.Graph.Output
                     : !inferred || edge.Through == null ? string.Empty
                     : _named.Add("end\u0001" + end.By.Id) ? $"  ({edge.Through})"
                     : "  (as above)";
-                return $"{end.Kind} by {end.By.Label}{(inferred ? "*" : string.Empty)}  {place}{how}  {ShortLocation(edge)}";
+                return $"{end.Kind} by {end.By.Label}{(inferred ? "*" : string.Empty)}  {place}{how}{If(end.Edges)}  {ShortLocation(edge)}";
             }
 
             /// <summary>
@@ -368,7 +430,7 @@ namespace Entitas.Graph.Output
                 return string.Join(", ", tags);
             }
 
-            /// <summary>Only when nothing of it is written in the system itself: `via Add* (FurnitureFactory.Create)`, as elsewhere.</summary>
+            /// <summary>For a taker reading only through code it calls: `via AllOf* (FurnitureQuery.Count)`, as elsewhere.</summary>
             static string Inferred(IReadOnlyList<GraphEdge> edges)
             {
                 if (edges.Count == 0 || edges.Any(e => e.Confidence == Confidence.Extracted))

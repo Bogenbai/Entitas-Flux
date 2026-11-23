@@ -186,7 +186,7 @@ namespace Entitas.Graph.Output
                 var sites = group.OrderBy(e => e.Line).ToList();
                 var shown = Capped ? Math.Min(sites.Count, SitesPerSource) : sites.Count;
                 foreach (var edge in sites.Take(shown))
-                    entry.AppendLine($"      {edge.Relation} via {edge.Via}{Through(edge)}  {Location(edge)}");
+                    entry.AppendLine($"      {edge.Relation} via {edge.Via}{Through(edge)}{Condition(edge)}  {Location(edge)}");
                 if (shown < sites.Count)
                     entry.AppendLine($"      … {sites.Count - shown} more sites");
                 entries.Add(entry.ToString());
@@ -359,7 +359,7 @@ namespace Entitas.Graph.Output
                     var reactions = outgoing && edge.Relation is Relation.Creates or Relation.Removes && annotated.Add(other)
                         ? ChangeReactions(edge, node.Id)
                         : string.Empty;
-                    entries.Add(title + $"    {Label(other)}  via {edge.Via}{Through(edge)}  {Location(edge)}{reactions}\n");
+                    entries.Add(title + $"    {Label(other)}  via {edge.Via}{Through(edge)}{Condition(edge)}  {Location(edge)}{reactions}\n");
                     title = string.Empty;
                 }
                 if (shown < list.Count)
@@ -840,6 +840,9 @@ namespace Entitas.Graph.Output
             edges.Where(e => relations.Contains(e.Relation)).Select(e => e.Source).Distinct().Count();
 
         static string Through(GraphEdge edge) => edge.Through == null ? string.Empty : $" ({edge.Through})";
+
+        /// <summary>" (if amount &lt; 0)" on a write made only under a condition.</summary>
+        static string Condition(GraphEdge edge) => edge.Condition == null ? string.Empty : $" (if {edge.Condition})";
 
         static string Location(GraphEdge edge) => edge.SourceFile == null ? string.Empty : $"{edge.SourceFile}:{edge.Line}";
 

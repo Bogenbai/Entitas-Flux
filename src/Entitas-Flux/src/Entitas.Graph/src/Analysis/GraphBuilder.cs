@@ -134,12 +134,19 @@ namespace Entitas.Graph.Analysis
             var nodeIds = new HashSet<string>(graph.Nodes.Select(n => n.Id), StringComparer.Ordinal);
             var edges = new Dictionary<string, GraphEdge>(StringComparer.Ordinal);
 
-            void AddEdge(GraphEdge edge)
+            // Per edge, the conditions of its sites — null once one site has none, since then the
+            // write happens whenever the method runs — and the methods the system called to get
+            // there. Sets, so the order sites arrive in changes nothing in graph.json.
+            var conditions = new Dictionary<string, SortedSet<string>?>(StringComparer.Ordinal);
+            var called = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+
+            void AddEdge(GraphEdge edge, IReadOnlyCollection<string>? condition = null, IReadOnlyCollection<string>? entries = null)
             {
                 if (!nodeIds.Contains(edge.Source) || !nodeIds.Contains(edge.Target))
                     return;
 
-                if (edges.TryGetValue(edge.Key, out var existing))
+                var key = edge.Key;
+                if (edges.TryGetValue(key, out var existing))
                 {
                     existing.Count += edge.Count;
                     if (string.CompareOrdinal(edge.SourceFile ?? string.Empty, existing.SourceFile ?? string.Empty) < 0 ||
@@ -148,16 +155,29 @@ namespace Entitas.Graph.Analysis
                         existing.SourceFile = edge.SourceFile;
                         existing.Line = edge.Line;
                     }
+
+                    if (condition == null)
+                        conditions[key] = null;
+                    else
+                        conditions[key]?.UnionWith(condition);
                 }
                 else
                 {
-                    edges.Add(edge.Key, edge);
+                    edges.Add(key, edge);
+                    conditions[key] = condition == null ? null : new SortedSet<string>(condition, StringComparer.Ordinal);
+                }
+
+                if (entries != null)
+                {
+                    if (!called.TryGetValue(key, out var set))
+                        called[key] = set = new SortedSet<string>(StringComparer.Ordinal);
+                    set.UnionWith(entries);
                 }
             }
 
             // Direct accesses.
             foreach (var access in accesses)
-                AddEdge(access.ToEdge(Confidence.Extracted, null));
+                AddEdge(access.ToEdge(Confidence.Extracted, null), Guards.One(access.Condition));
 
             // Groups: field/local symbol -> matcher shape.
             var groups = new Dictionary<ISymbol, GroupShape>(SymbolEqualityComparer.Default);
@@ -193,7 +213,7 @@ namespace Entitas.Graph.Analysis
                         Confidence = shape.AllOf.Count > 0 ? Confidence.Extracted : Confidence.Inferred,
                         SourceFile = destroy.File,
                         Line = destroy.Line
-                    });
+                    }, Guards.One(destroy.Condition));
                 }
             }
 
@@ -218,17 +238,27 @@ namespace Entitas.Graph.Analysis
             }
 
             // Access through queries, factories and services, credited to the systems calling them.
-            foreach (var edge in Propagate(context, accesses, destroys, calls, groupUses, groups))
-                AddEdge(edge);
+            foreach (var (edge, condition, entries) in Propagate(context, accesses, destroys, calls, groupUses, groups))
+                AddEdge(edge, condition, entries);
 
             // Destroyers of an entity shape destroy every component created on that shape.
-            foreach (var edge in InferDestroysFromShapes(context, accesses, destroys, groups))
-                AddEdge(edge);
+            foreach (var (edge, condition) in InferDestroysFromShapes(context, accesses, destroys, groups))
+                AddEdge(edge, Guards.One(condition));
 
             // ...and what a loop marks for them (isDestructed = true) carries along.
             var known = new HashSet<(string, string)>(edges.Values.Where(e => e.Relation == Relation.Destroys).Select(e => (e.Source, e.Target)));
-            foreach (var edge in InferDestroysFromMarking(context, accesses, destroys, groups, known))
-                AddEdge(edge);
+            foreach (var (edge, condition) in InferDestroysFromMarking(context, accesses, destroys, groups, known))
+                AddEdge(edge, Guards.One(condition));
+
+            foreach (var pair in conditions)
+                if (pair.Value != null)
+                    edges[pair.Key].Condition = Guards.Format(pair.Value);
+            foreach (var pair in called)
+            {
+                var edge = edges[pair.Key];
+                if (pair.Value.Count != 1 || pair.Value.Min != edge.Through)
+                    edge.Called = string.Join("; ", pair.Value);
+            }
 
             // Flags set only while the entity carries a transient component (JustCreated). Group
             // shapes and loops exist only here, so the conclusion goes into the graph for the report.
@@ -253,9 +283,17 @@ namespace Entitas.Graph.Analysis
         /// <summary>
         /// Component access in non-system types (a query's group, a factory's AddX) is credited
         /// to every system that reaches it through calls — interface calls included, resolved to
-        /// the implementations in the project — as INFERRED, naming the method it happens in.
+        /// the implementations in the project — as INFERRED, naming the method it happens in, the
+        /// methods the system called to get there, and the conditions it happens under.
+        ///
+        /// A write in a helper is conditional when the system's call is, when a call on the way
+        /// is, or when the write is in the helper. The text shown is the one nearest the system:
+        /// its call's condition is in the code the reader of a flow is looking at, and says which
+        /// of the system's cases runs the factory (`request.isGhost`); the factory's own `if` is
+        /// shown only when everything above it is unconditional. " &amp;&amp; …" marks the rest.
+        /// A method called both under a condition and without one is reached unconditionally.
         /// </summary>
-        static IEnumerable<GraphEdge> Propagate(
+        static IEnumerable<(GraphEdge Edge, IReadOnlyCollection<string>? Condition, IReadOnlyCollection<string> Called)> Propagate(
             BuildContext context,
             List<Access> accesses,
             List<DestroySite> destroys,
@@ -285,15 +323,25 @@ namespace Entitas.Graph.Analysis
 
             var callees = calls
                 .GroupBy<CallSite, IMethodSymbol>(c => c.Caller, SymbolEqualityComparer.Default)
-                .ToDictionary<IGrouping<IMethodSymbol, CallSite>, IMethodSymbol, List<IMethodSymbol>>(g => g.Key, g => g.Select(c => c.Callee).ToList(), SymbolEqualityComparer.Default);
+                .ToDictionary<IGrouping<IMethodSymbol, CallSite>, IMethodSymbol, List<CallSite>>(g => g.Key, g => g.ToList(), SymbolEqualityComparer.Default);
+            var dispatched = new Dictionary<IMethodSymbol, List<IMethodSymbol>>(SymbolEqualityComparer.Default);
+            List<IMethodSymbol> Dispatch(IMethodSymbol callee)
+            {
+                if (!dispatched.TryGetValue(callee, out var implementations))
+                    dispatched[callee] = implementations = context.Dispatch(new[] { callee }).ToList();
+                return implementations;
+            }
+
+            static string Name(IMethodSymbol method) => $"{method.ContainingType.Name}.{method.Name}";
 
             foreach (var system in context.Types.Values.Where(t => t.Kind == NodeKind.System || t.Kind == NodeKind.Feature))
             {
+                // What the system reaches, breadth-first, each method once at its fewest calls.
+                var roots = callees.Keys.Where(m => SymbolEqualityComparer.Default.Equals(m.ContainingType, system.Symbol)).ToList();
                 var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-                var frontier = new List<IMethodSymbol>();
-                foreach (var method in callees.Keys.Where(m => SymbolEqualityComparer.Default.Equals(m.ContainingType, system.Symbol)))
-                    frontier.AddRange(context.Dispatch(callees[method]));
-
+                var reached = new List<(IMethodSymbol Method, int Depth)>();
+                var depths = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
+                var frontier = roots.SelectMany(r => callees[r]).SelectMany(c => Dispatch(c.Callee)).ToList();
                 for (var depth = 0; depth < context.Options.MaxCallDepth && frontier.Count > 0; depth++)
                 {
                     var next = new List<IMethodSymbol>();
@@ -306,46 +354,128 @@ namespace Entitas.Graph.Analysis
                         if (owner == null || owner.Kind != NodeKind.Type)
                             continue;
 
-                        var through = $"{method.ContainingType.Name}.{method.Name}";
-                        if (byMethod.TryGetValue(method, out var found))
-                        {
-                            foreach (var access in found)
-                                yield return access.ToEdge(Confidence.Inferred, through, system.Id);
-                        }
-
-                        if (groupsByMethod.TryGetValue(method, out var usedGroups))
-                        {
-                            foreach (var group in usedGroups)
-                                if (matchersByGroup.TryGetValue(group, out var matchers))
-                                    foreach (var matcher in matchers)
-                                        yield return matcher.ToEdge(Confidence.Inferred, through, system.Id);
-                        }
-
-                        if (destroysByMethod.TryGetValue(method, out var destroyed))
-                        {
-                            foreach (var destroy in destroyed)
-                            {
-                                if (destroy.Group == null || !groups.TryGetValue(destroy.Group, out var shape))
-                                    continue;
-                                foreach (var name in shape.AllOf)
-                                {
-                                    var component = context.ComponentByName(name);
-                                    if (component == null) continue;
-                                    yield return new GraphEdge
-                                    {
-                                        Source = system.Id, Target = component.Id, Relation = Relation.Destroys, Via = "Destroy",
-                                        Confidence = Confidence.Inferred, Through = through, SourceFile = destroy.File, Line = destroy.Line
-                                    };
-                                }
-                            }
-                        }
-
+                        reached.Add((method, depth));
+                        depths[method] = depth;
                         if (callees.TryGetValue(method, out var further))
-                            next.AddRange(context.Dispatch(further));
+                            next.AddRange(further.SelectMany(c => Dispatch(c.Callee)));
                     }
 
                     frontier = next;
                 }
+
+                if (reached.Count == 0)
+                    continue;
+
+                // Under which conditions, and through which of its own calls, the system gets to each
+                // method: the calls in its code first, then down the calls the walk followed, until
+                // nothing changes (a method reached twice, the second time unconditionally).
+                var paths = new Dictionary<IMethodSymbol, Path>(SymbolEqualityComparer.Default);
+                bool Arrive(IMethodSymbol method, IReadOnlyCollection<string>? condition, IEnumerable<string> entries)
+                {
+                    if (!depths.ContainsKey(method))
+                        return false;
+                    if (!paths.TryGetValue(method, out var path))
+                    {
+                        paths[method] = new Path(condition, entries);
+                        return true;
+                    }
+                    return path.Join(condition, entries);
+                }
+
+                foreach (var call in roots.SelectMany(r => callees[r]))
+                    foreach (var method in Dispatch(call.Callee))
+                        Arrive(method, Guards.One(call.Condition), new[] { Name(method) });
+
+                for (var changed = true; changed;)
+                {
+                    changed = false;
+                    foreach (var (method, depth) in reached)
+                    {
+                        if (depth + 1 >= context.Options.MaxCallDepth || !callees.TryGetValue(method, out var further) || !paths.TryGetValue(method, out var from))
+                            continue;
+                        foreach (var call in further)
+                            foreach (var callee in Dispatch(call.Callee))
+                                changed |= Arrive(callee, Guards.And(from.Condition, call.Condition), from.Entries);
+                    }
+                }
+
+                foreach (var (method, _) in reached)
+                {
+                    var through = Name(method);
+                    var path = paths.TryGetValue(method, out var known) ? known : new Path(null, new[] { through });
+                    if (byMethod.TryGetValue(method, out var found))
+                    {
+                        // Only writes carry a condition: a read under one is still a read of the component.
+                        foreach (var access in found)
+                            yield return (access.ToEdge(Confidence.Inferred, through, system.Id),
+                                access.Relation is Relation.Creates or Relation.Removes ? Guards.And(path.Condition, access.Condition) : null,
+                                path.Entries);
+                    }
+
+                    if (groupsByMethod.TryGetValue(method, out var usedGroups))
+                    {
+                        foreach (var group in usedGroups)
+                            if (matchersByGroup.TryGetValue(group, out var matchers))
+                                foreach (var matcher in matchers)
+                                    yield return (matcher.ToEdge(Confidence.Inferred, through, system.Id), null, path.Entries);
+                    }
+
+                    if (destroysByMethod.TryGetValue(method, out var destroyed))
+                    {
+                        foreach (var destroy in destroyed)
+                        {
+                            if (destroy.Group == null || !groups.TryGetValue(destroy.Group, out var shape))
+                                continue;
+                            foreach (var name in shape.AllOf)
+                            {
+                                var component = context.ComponentByName(name);
+                                if (component == null) continue;
+                                yield return (new GraphEdge
+                                {
+                                    Source = system.Id, Target = component.Id, Relation = Relation.Destroys, Via = "Destroy",
+                                    Confidence = Confidence.Inferred, Through = through, SourceFile = destroy.File, Line = destroy.Line
+                                }, Guards.And(path.Condition, destroy.Condition), path.Entries);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>How a system gets to a method: the conditions on the way (null: none) and its own calls that lead there.</summary>
+        sealed class Path
+        {
+            public SortedSet<string>? Condition;
+            public readonly SortedSet<string> Entries = new SortedSet<string>(StringComparer.Ordinal);
+
+            public Path(IReadOnlyCollection<string>? condition, IEnumerable<string> entries)
+            {
+                Condition = condition == null ? null : new SortedSet<string>(condition, StringComparer.Ordinal);
+                Entries.UnionWith(entries);
+            }
+
+            /// <summary>Another way there: unconditional if either is; true when anything changed.</summary>
+            public bool Join(IReadOnlyCollection<string>? condition, IEnumerable<string> entries)
+            {
+                var changed = false;
+                if (Condition != null)
+                {
+                    if (condition == null)
+                    {
+                        Condition = null;
+                        changed = true;
+                    }
+                    else
+                    {
+                        var before = Condition.Count;
+                        Condition.UnionWith(condition);
+                        changed = Condition.Count != before;
+                    }
+                }
+
+                var count = Entries.Count;
+                Entries.UnionWith(entries);
+                return changed || Entries.Count != count;
             }
         }
 
@@ -356,7 +486,7 @@ namespace Entitas.Graph.Analysis
         /// that entity carries — directly, or once another system adds them to entities like
         /// it (Ready, added to every Event) — destroys every component of that entity.
         /// </summary>
-        static IEnumerable<GraphEdge> InferDestroysFromShapes(
+        static IEnumerable<(GraphEdge Edge, string? Condition)> InferDestroysFromShapes(
             BuildContext context,
             List<Access> accesses,
             List<DestroySite> destroys,
@@ -418,11 +548,11 @@ namespace Entitas.Graph.Analysis
                     {
                         var component = context.ComponentByName(name);
                         if (component == null) continue;
-                        yield return new GraphEdge
+                        yield return (new GraphEdge
                         {
                             Source = destroy.Accessor.Id, Target = component.Id, Relation = Relation.Destroys, Via = "Destroy",
                             Confidence = Confidence.Inferred, Through = through, SourceFile = destroy.File, Line = destroy.Line
-                        };
+                        }, destroy.Condition);
                     }
                 }
             }
@@ -440,7 +570,7 @@ namespace Entitas.Graph.Analysis
         /// marked are not known to be the ones carrying the flag. A component the loop also
         /// removes is not credited, and neither is a pair the shapes already gave.
         /// </summary>
-        static IEnumerable<GraphEdge> InferDestroysFromMarking(
+        static IEnumerable<(GraphEdge Edge, string? Condition)> InferDestroysFromMarking(
             BuildContext context,
             List<Access> accesses,
             List<DestroySite> destroys,
@@ -503,12 +633,12 @@ namespace Entitas.Graph.Analysis
             foreach (var pair in found)
             {
                 var through = pair.Value.Through.Distinct().OrderBy(t => t, StringComparer.Ordinal).ToList();
-                yield return new GraphEdge
+                yield return (new GraphEdge
                 {
                     Source = pair.Key.Source, Target = pair.Key.Target, Relation = Relation.Destroys, Via = "Destroy",
                     Confidence = Confidence.Inferred, SourceFile = pair.Value.Destroy.File, Line = pair.Value.Destroy.Line,
                     Through = through[0] + (through.Count > 1 ? $" (and {through.Count - 1} more)" : string.Empty)
-                };
+                }, pair.Value.Destroy.Condition);
             }
         }
 
@@ -600,6 +730,61 @@ namespace Entitas.Graph.Analysis
     }
 
     // -- model used while building ------------------------------------------------------
+
+    /// <summary>
+    /// Conditions as they travel from sites to edges: null means none (the write happens whenever
+    /// its method runs), otherwise the distinct texts, any of which may be the one that holds.
+    /// </summary>
+    static class Guards
+    {
+        /// <summary>Appended when further conditions enclose the one shown: they all hold together.</summary>
+        public const string More = " && …";
+
+        /// <summary>Edges name this many conditions, then count the rest.</summary>
+        const int Named = 3;
+
+        public static IReadOnlyCollection<string>? One(string? condition) => condition == null ? null : new[] { condition };
+
+        /// <summary>
+        /// <paramref name="inner"/> reached under <paramref name="outer"/>: the outer text stays —
+        /// nearer the system, it is what tells its cases apart — with " &amp;&amp; …" for the inner.
+        /// </summary>
+        public static IReadOnlyCollection<string>? And(IReadOnlyCollection<string>? outer, string? inner) =>
+            outer == null ? One(inner) : inner == null ? outer : outer.Select(t => t.EndsWith(More, StringComparison.Ordinal) ? t : t + More).ToList();
+
+        /// <summary>
+        /// "a or b or c or +2 more", ordinal; "x &amp;&amp; …" goes when "x" is there, since x
+        /// covers it. Null when a condition and its negation are both there — the write is in the
+        /// if and in the else (`if (x) AddX(a); else AddX(b);`), so it happens either way.
+        /// </summary>
+        public static string? Format(IReadOnlyCollection<string> conditions)
+        {
+            if (conditions.Any(t => Negations(t).Any(conditions.Contains)))
+                return null;
+            var texts = conditions
+                .Where(t => !(t.EndsWith(More, StringComparison.Ordinal) && conditions.Contains(t.Substring(0, t.Length - More.Length))))
+                .OrderBy(t => t, StringComparer.Ordinal)
+                .ToList();
+            return string.Join(" or ", texts.Take(Named)) + (texts.Count > Named ? $" or +{texts.Count - Named} more" : string.Empty);
+        }
+
+        /// <summary>
+        /// How TreeWalker writes the negation of a condition it wrote as <paramref name="text"/>:
+        /// `!x`, `!(a &lt; b)`, `a != b` for `a == b`. Only whole conditions: one cut short or
+        /// followed by " &amp;&amp; …" has no exact negation.
+        /// </summary>
+        static IEnumerable<string> Negations(string text)
+        {
+            if (text.EndsWith("…", StringComparison.Ordinal))
+                yield break;
+            yield return "!" + text;
+            yield return $"!({text})";
+            if (text.IndexOf(" == ", StringComparison.Ordinal) is var eq && eq > 0 && text.IndexOf(" == ", eq + 1, StringComparison.Ordinal) < 0 && !text.Contains("&&") && !text.Contains("||"))
+                yield return text.Substring(0, eq) + " != " + text.Substring(eq + 4);
+            if (text.IndexOf(" != ", StringComparison.Ordinal) is var ne && ne > 0 && text.IndexOf(" != ", ne + 1, StringComparison.Ordinal) < 0 && !text.Contains("&&") && !text.Contains("||"))
+                yield return text.Substring(0, ne) + " == " + text.Substring(ne + 4);
+        }
+    }
 
     sealed class ComponentInfo
     {
@@ -716,6 +901,9 @@ namespace Entitas.Graph.Analysis
         public ISymbol? MatcherGroup;
         public string? Clause;
 
+        /// <summary>For writes: the condition it sits under in its method (TreeWalker.ConditionOf), null when none.</summary>
+        public string? Condition;
+
         public GraphEdge ToEdge(string confidence, string? through, string? source = null)
         {
             var component = Component;
@@ -743,12 +931,16 @@ namespace Entitas.Graph.Analysis
         public ISymbol? Group;
         public string File = string.Empty;
         public int Line;
+        public string? Condition;
     }
 
     sealed class CallSite
     {
         public IMethodSymbol Caller = null!;
         public IMethodSymbol Callee = null!;
+
+        /// <summary>The condition the call sits under in the caller, null when none.</summary>
+        public string? Condition;
     }
 
     sealed class RegistrationSite

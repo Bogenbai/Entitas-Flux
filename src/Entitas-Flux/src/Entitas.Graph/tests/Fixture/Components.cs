@@ -46,4 +46,12 @@ namespace Sample
     [Game] public sealed class Unused : IComponent { }            // created, never read
     [Game] public sealed class OrphanRequest : IComponent { }     // a request no system handles
     [Game] public sealed class Inspected : IComponent { }         // state flag set on existing entities, never cleared
+
+    // The shop opening: a factory builds the shopkeeper and announces it; a till is settled into
+    // one of two events, by its sign.
+    [Game] public sealed class Shopkeeper : IComponent { }
+    [Game] public sealed class ShopOpenedEvent : IComponent { public int Value; }
+    [Game] public sealed class Till : IComponent { public int Value; }
+    [Game] public sealed class CoinsSpentEvent : IComponent { public int Value; }
+    [Game] public sealed class CoinsEarnedEvent : IComponent { public int Value; }
 }

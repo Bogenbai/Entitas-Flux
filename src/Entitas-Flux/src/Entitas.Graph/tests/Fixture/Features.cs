@@ -25,6 +25,10 @@ namespace Sample
             Add(systems.Create<UnboxItemsSystem>());
             Add(systems.Create<StoreItemsSystem>());
             Add(systems.Create<AnimateStoringSystem>());
+            Add(systems.Create<OpenShopSystem>());
+            Add(systems.Create<SettleTillSystem>());
+            Add(systems.Create<GreetCustomersSystem>());
+            Add(systems.Create<CountCoinsSystem>());
         }
     }
 

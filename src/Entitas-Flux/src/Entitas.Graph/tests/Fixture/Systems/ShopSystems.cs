@@ -148,4 +148,69 @@ namespace Sample
 
         public void Execute() => Animated += _storing.count;
     }
+
+    /// <summary>Pays the rent into a till, and has a shopkeeper built while there is none.</summary>
+    public sealed class OpenShopSystem : IExecuteSystem
+    {
+        readonly ShopkeeperFactory _factory;
+        readonly IGroup<GameEntity> _keepers;
+
+        public OpenShopSystem(GameContext game, ShopkeeperFactory factory)
+        {
+            _factory = factory;
+            _keepers = game.GetGroup(GameMatcher.Shopkeeper);
+        }
+
+        public void Execute()
+        {
+            CreateEntity.Empty().AddTill(-2);
+            if (_keepers.count == 0)
+                _factory.Create();
+        }
+    }
+
+    /// <summary>Settles every till: one that went negative spent coins, any other earned them.</summary>
+    public sealed class SettleTillSystem : IExecuteSystem
+    {
+        readonly IGroup<GameEntity> _tills;
+
+        public SettleTillSystem(GameContext game) => _tills = game.GetGroup(GameMatcher.Till);
+
+        public void Execute()
+        {
+            foreach (GameEntity till in _tills.GetEntities())
+            {
+                if (till.Till < 0)
+                    CreateEntity.Event().AddCoinsSpentEvent(-till.Till);
+                else
+                    CreateEntity.Event().AddCoinsEarnedEvent(till.Till);
+                till.RemoveTill();
+            }
+        }
+    }
+
+    public sealed class GreetCustomersSystem : IExecuteSystem
+    {
+        readonly IGroup<GameEntity> _opened;
+        public int Greeted;
+
+        public GreetCustomersSystem(GameContext game) => _opened = game.GetGroup(GameMatcher.AllOf(GameMatcher.ShopOpenedEvent, GameMatcher.Ready));
+
+        public void Execute() => Greeted += _opened.count;
+    }
+
+    public sealed class CountCoinsSystem : IExecuteSystem
+    {
+        readonly IGroup<GameEntity> _spent;
+        readonly IGroup<GameEntity> _earned;
+        public int Balance;
+
+        public CountCoinsSystem(GameContext game)
+        {
+            _spent = game.GetGroup(GameMatcher.AllOf(GameMatcher.CoinsSpentEvent, GameMatcher.Ready));
+            _earned = game.GetGroup(GameMatcher.AllOf(GameMatcher.CoinsEarnedEvent, GameMatcher.Ready));
+        }
+
+        public void Execute() => Balance += _earned.count - _spent.count;
+    }
 }

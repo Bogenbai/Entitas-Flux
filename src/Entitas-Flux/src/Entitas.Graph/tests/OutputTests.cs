@@ -53,7 +53,7 @@ namespace Entitas.Graph.Tests
         {
             var output = Queries.SystemsOf("GameplayFeature");
 
-            output.Should().StartWith("GameplayFeature (root) — 20 systems");
+            output.Should().StartWith("GameplayFeature (root) — 24 systems");
             output.Split('\n').Select(l => l.Trim()).Should().ContainInOrder(
                 "1. MarkEventsReadySystem  [Execute]",
                 "2. FurnitureFeature (feature)",
@@ -81,7 +81,7 @@ namespace Entitas.Graph.Tests
 
             output.Should().Contain("registered: LateFeature #1");
             output.Should().Contain("runs under LateFeature at #1 via LateFeature");
-            output.Should().Contain("destroys (4):");
+            output.Should().Contain("destroys (7):");
         }
 
         [Fact]
@@ -103,7 +103,7 @@ namespace Entitas.Graph.Tests
             var tiny = new GraphQueries(FixtureProject.Graph, budget: 10);
 
             tiny.Lifecycle("Destructed").Should().Contain("  steps by root: GameplayFeature").And.Contain("  by feature: ");
-            tiny.SystemsOf("GameplayFeature").Should().Contain("nested features, largest: ShopFeature 9, FurnitureFeature 8, GameCleanupSystems 1");
+            tiny.SystemsOf("GameplayFeature").Should().Contain("nested features, largest: ShopFeature 13, FurnitureFeature 8, GameCleanupSystems 1");
             tiny.Explain("PlaceFurnitureByRequestSystem").Should().Contain("  connections: creates 6, reads 2, registered by 1");
             tiny.Query("furniture").Should().Contain("; subgraph: ").And.Contain("more nodes not shown");
         }
@@ -192,6 +192,34 @@ namespace Entitas.Graph.Tests
             EcsGraph.FromJson(json).ToJson().Should().Be(json);
             json.Should().Contain("\"directed\": true").And.Contain("\"schema_version\": 1");
             json.Should().Contain("\"relation\": \"creates\"").And.Contain("\"source_location\": \"L");
+        }
+
+        [Fact]
+        public void Conditions_and_called_methods_round_trip_and_are_left_out_when_absent()
+        {
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "system:S", Label = "S", Kind = NodeKind.System });
+            graph.Nodes.Add(new GraphNode { Id = "component:X", Label = "X", Kind = NodeKind.Component });
+            graph.Edges.Add(new GraphEdge
+            {
+                Source = "system:S", Target = "component:X", Relation = Relation.Creates, Via = "Add", Confidence = Confidence.Inferred,
+                Through = "Moves.Stop", Called = "Factory.Make; Factory.Remake", Condition = "!(amount < 0) && … or case Kind.X",
+                SourceFile = "Assets/Moves.cs", Line = 4
+            });
+            graph.Edges.Add(new GraphEdge { Source = "system:S", Target = "component:X", Relation = Relation.Reads, Via = "AllOf", SourceFile = "Assets/S.cs", Line = 9 });
+
+            var json = graph.ToJson();
+            var back = EcsGraph.FromJson(json);
+
+            back.ToJson().Should().Be(json);
+            back.Edges[0].Condition.Should().Be("!(amount < 0) && … or case Kind.X");
+            back.Edges[0].Called.Should().Be("Factory.Make; Factory.Remake");
+            json.Should().Contain("\"through\": \"Moves.Stop\",\n      \"called\": \"Factory.Make; Factory.Remake\"");
+            back.Edges[1].Condition.Should().BeNull();
+            json.Split("\"condition\"").Length.Should().Be(2, "an edge with no condition writes no field");
+
+            // The fixture has both, and they survive a round trip byte for byte too.
+            FixtureProject.Graph.ToJson().Should().Contain("\"condition\": \"till.Till < 0\"").And.Contain("\"called\": \"ShopkeeperFactory.Create\"");
         }
 
         [Fact]

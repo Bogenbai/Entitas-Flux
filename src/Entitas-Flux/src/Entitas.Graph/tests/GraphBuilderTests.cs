@@ -149,6 +149,143 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void Writes_carry_the_innermost_condition_they_run_under()
+        {
+            var graph = Snippet(@"
+                public static class Marks
+                {
+                    public static void Mark(GameEntity e) => e.isK = true;
+                }
+
+                public sealed class WriteSystem : IExecuteSystem
+                {
+                    readonly IGroup<GameEntity> _all;
+                    readonly GameEntity _target;
+                    readonly Kind _kind;
+                    readonly int _amount;
+                    readonly bool _ready;
+
+                    public WriteSystem(GameContext game) => _all = game.GetGroup(GameMatcher.A);
+
+                    public void Execute()
+                    {
+                        if (!_ready)
+                            return;
+
+                        foreach (GameEntity e in _all.GetEntities())
+                        {
+                            e.isB = true;
+                            if (e.isC)
+                                continue;
+                            e.isD = true;
+                            if (_amount < 0)
+                                e.isE = true;
+                            else
+                                e.isF = true;
+                            switch (_kind)
+                            {
+                                case Kind.One:
+                                    e.isG = true;
+                                    break;
+                            }
+                            GameEntity same = _amount > 9 ? e.ReplaceA(1) : e;
+                            _target?.RemoveA();
+                            try { } catch (InvalidOperationException) { e.isH = true; }
+                            if (_amount > 100)
+                            {
+                                if (e.isB == false)
+                                    e.isI = true;
+                            }
+                            if (_kind == Kind.Two && _amount < -1000 && _amount != 5)
+                                e.isJ = true;
+                            if (_amount == 7)
+                                Marks.Mark(e);
+                        }
+
+                        if (_amount == 3)
+                            return;
+                        _target.isL = true;
+                    }
+                }
+
+                public sealed class EitherSystem : IExecuteSystem
+                {
+                    readonly IGroup<GameEntity> _all;
+                    readonly bool _flag;
+
+                    public EitherSystem(GameContext game) => _all = game.GetGroup(GameMatcher.A);
+
+                    public void Execute()
+                    {
+                        foreach (GameEntity e in _all.GetEntities())
+                        {
+                            if (_flag)
+                                e.isC = true;
+                            else
+                            {
+                                e.isC = true;
+                                e.isD = true;
+                            }
+                        }
+                    }
+                }");
+
+            string? Condition(string relation, string component, string system = "WriteSystem") =>
+                graph.Edges.Single(e => e.Source.EndsWith(":" + system, StringComparison.Ordinal) && e.Relation == relation && e.Target == "component:" + component).Condition;
+
+            // The guard Execute starts with says when the system runs, not which write happens.
+            Condition(Relation.Creates, "B").Should().BeNull();
+            Condition(Relation.Creates, "D").Should().Be("!e.isC", "a guard before it in its block");
+            Condition(Relation.Creates, "E").Should().Be("_amount < 0 && …", "the innermost, and the guard above it");
+            Condition(Relation.Creates, "F").Should().Be("!(_amount < 0) && …");
+            Condition(Relation.Creates, "G").Should().Be("case Kind.One && …");
+            Condition(Relation.Creates, "A").Should().Be("_amount > 9 && …");
+            Condition(Relation.Removes, "A").Should().Be("_target != null && …");
+            Condition(Relation.Creates, "H").Should().Be("caught InvalidOperationException && …");
+            Condition(Relation.Creates, "I").Should().Be("!e.isB && …", "x == false reads as !x");
+            Condition(Relation.Creates, "J").Should().Be("_kind == Two && _amount < -1000 && _amo… && …", "past 40 characters an enum member loses its type, then the text is cut");
+            Condition(Relation.Creates, "L").Should().Be("_amount != 3", "a guard after a loop tells the writes after it from those before");
+
+            // Made in the if and in the else, it happens either way.
+            Condition(Relation.Creates, "C", "EitherSystem").Should().BeNull();
+            Condition(Relation.Creates, "D", "EitherSystem").Should().Be("!_flag");
+
+            // Through a helper, the call's condition in the system.
+            var mark = graph.Edges.Single(e => e.Target == "component:K" && e.Source.EndsWith("WriteSystem", StringComparison.Ordinal));
+            mark.Confidence.Should().Be(Confidence.Inferred);
+            mark.Condition.Should().Be("_amount == 7 && …");
+            mark.Called.Should().BeNull("the system calls the method the write is in");
+
+            graph.Edges.Where(e => e.Relation is Relation.Reads or Relation.Filters).Should().OnlyContain(e => e.Condition == null, "only writes are conditional");
+        }
+
+        /// <summary>
+        /// A one-file project with components A (data) and B…L (flags), an enum Kind, and
+        /// <paramref name="code"/> — all in the global namespace, which keeps the generated names
+        /// short (isB, not isSB) without any generation option.
+        /// </summary>
+        static EcsGraph Snippet(string code)
+        {
+            var source = @"
+                using System;
+                using Entitas;
+                using Entitas.CodeGeneration.Attributes;
+
+                [assembly: ContextDefinition(""Game"")]
+
+                [Game] public sealed class A : IComponent { public int Value; }
+                " + string.Join("\n", "BCDEFGHIJKL".Select(c => $"[Game] public sealed class {c} : IComponent {{ }}")) + @"
+                public enum Kind { One, Two }
+                " + code;
+            var compilation = CSharpCompilation.Create("Snippet", new[] { CSharpSyntaxTree.ParseText(source, path: "/snippet/Code.cs") },
+                FixtureProject.References(), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            CSharpGeneratorDriver.Create(new EntitasIncrementalGenerator())
+                .RunGeneratorsAndUpdateCompilation(compilation, out var generated, out _);
+            generated.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()).Should().BeEmpty();
+            return Analysis.GraphBuilder.Build(compilation, "/snippet", new Analysis.GraphOptions());
+        }
+
+        [Fact]
         public void File_mode_gives_the_same_graph()
         {
             var inMemory = FixtureProject.Graph;
@@ -158,7 +295,7 @@ namespace Entitas.Graph.Tests
         }
 
         static IEnumerable<string> Signature(EcsGraph graph) =>
-            graph.Edges.Select(e => $"{e.Source} {e.Relation} {e.Target} {e.Via} {e.Confidence} {e.Through} {e.Entity} {e.Order} {e.OnlyWhile}")
+            graph.Edges.Select(e => $"{e.Source} {e.Relation} {e.Target} {e.Via} {e.Confidence} {e.Through} {e.Called} {e.Entity} {e.Order} {e.OnlyWhile} {e.Condition}")
                 .Concat(graph.Nodes.Select(n => $"{n.Id} {n.Kind} {n.Root} {string.Join(",", n.Placements.Select(p => p.Root + p.Order))} {string.Join(",", n.TransientRemovedBy)}"));
     }
 }

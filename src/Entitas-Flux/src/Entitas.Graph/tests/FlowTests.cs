@@ -145,6 +145,90 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void A_write_made_only_under_a_condition_says_which()
+        {
+            var output = Queries.Flow("OpenShopSystem");
+
+            // SettleTillSystem creates one event if the till went negative, the other else: both are
+            // followed, each with its own condition, so a caller can tell which branch is its own.
+            Lines(output).Should().ContainInOrder(
+                "OpenShopSystem  #21 (ShopFeature) [+0]  Systems/ShopSystems.cs:153",
+                "creates Till  [transient]  ShopSystems.cs:166",
+                "read+removed by SettleTillSystem  #22 (ShopFeature)  same frame [+0]  ShopSystems.cs:177",
+                "creates CoinsSpentEvent  [event]  (if till.Till < 0)  ShopSystems.cs:184",
+                "read by CountCoinsSystem  #24 (ShopFeature)  next frame (waits for Ready from MarkEventsReadySystem #1) [+1]  ShopSystems.cs:210",
+                "creates CoinsEarnedEvent  [event]  (if !(till.Till < 0))  ShopSystems.cs:186");
+
+            // Cut to its summary, a branch still says it is conditional.
+            Lines(new GraphQueries(FixtureProject.Graph, budget: 60).Flow("SettleTillSystem")).Should().ContainInOrder(
+                "CoinsSpentEvent (if till.Till < 0) → CountCoinsSystem",
+                "CoinsEarnedEvent (if !(till.Till < 0)) → CountCoinsSystem");
+
+            // The other commands say it on the write's line, briefly.
+            Lines(Queries.Explain("SettleTillSystem")).Should().Contain("CoinsSpentEvent  via Add (if till.Till < 0)  Systems/ShopSystems.cs:184");
+            Lines(Queries.WhoCreates("CoinsEarnedEvent")).Should().Contain("creates via Add (if !(till.Till < 0))  Systems/ShopSystems.cs:186");
+        }
+
+        [Fact]
+        public void What_a_system_writes_by_calling_a_factory_is_one_line_after_its_own_writes()
+        {
+            var output = Queries.Flow("OpenShopSystem");
+            var lines = Lines(output);
+
+            // One line for everything the factory sets, worded so the system is the one that
+            // creates (its line, under it at its own indent), with the call's condition; the event
+            // made through the call is still followed, under that line.
+            lines.Should().ContainInOrder(
+                "creates Till  [transient]  ShopSystems.cs:166",
+                "by calling ShopkeeperFactory.Create: creates 3 (ShopOpenedEvent, Event, Shopkeeper)  (if _keepers.count == 0)  Infrastructure.cs:65",
+                "creates ShopOpenedEvent  [event]  Infrastructure.cs:66",
+                "read by GreetCustomersSystem  #23 (ShopFeature)  next frame (waits for Ready) [+1]  ShopSystems.cs:197");
+            Indent(output, "creates Till").Should().Be(2);
+            Indent(output, "by calling ShopkeeperFactory.Create").Should().Be(2);
+            Indent(output, "creates ShopOpenedEvent").Should().Be(4);
+            lines.Should().NotContain(l => l.StartsWith("creates Shopkeeper", StringComparison.Ordinal), "state set through a call is named on its line only");
+            output.Should().NotContain("via Add*", "the call line says how, once");
+
+            // A call writing one component and handing nothing on stays among the writes not followed.
+            Lines(Queries.Flow("SettleTillSystem")).Should().Contain("also, not followed: creates Event*; removes Till");
+
+            // Whoever reads the graph elsewhere sees the same call, and its condition.
+            Lines(Queries.WhoCreates("ShopOpenedEvent")).Should().Contain("creates via Add (ShopkeeperFactory.Create) (if _keepers.count == 0)  Infrastructure.cs:66");
+        }
+
+        [Fact]
+        public void Through_a_call_an_add_is_named_and_a_change_a_system_sees_is_followed()
+        {
+            // MakerSystem calls Factory.Make, which adds the [Watched] Built (an initial value) and,
+            // through Wear.Off, removes the [Watched] Worn (a change). Both have a reactor after it.
+            var graph = new EcsGraph();
+            graph.Nodes.Add(new GraphNode { Id = "Root", Label = "Root", Kind = NodeKind.Feature, Root = true });
+            var built = Component(graph, "Built", "Watched");
+            var worn = Component(graph, "Worn", "Watched");
+            var maker = System(graph, "MakerSystem", "Root", 1);
+            graph.Edges.Add(new GraphEdge
+            {
+                Source = maker, Target = built, Relation = Relation.Creates, Via = "Add", Confidence = Confidence.Inferred,
+                Through = "Factory.Make", SourceFile = "Factory.cs", Line = 3
+            });
+            graph.Edges.Add(new GraphEdge
+            {
+                Source = maker, Target = worn, Relation = Relation.Removes, Via = "Flag", Confidence = Confidence.Inferred,
+                Through = "Wear.Off", Called = "Factory.Make", SourceFile = "Wear.cs", Line = 7
+            });
+            Edge(graph, System(graph, "OnBuiltSystem", "Root", 2), Relation.Reacts, built);
+            Edge(graph, System(graph, "OnWornSystem", "Root", 3), Relation.Reacts, worn);
+
+            var lines = Lines(new GraphQueries(graph, budget: 0).Flow("MakerSystem"));
+
+            lines.Should().ContainInOrder(
+                "by calling Factory.Make: creates Built; removes Worn  Factory.cs:3",
+                "removes Worn  [Watched → WornChanged]  Wear.cs:7",
+                "reacted to by OnWornSystem  #3  same frame [+0]  Code.cs:4");
+            lines.Should().NotContain(l => l.Contains("OnBuiltSystem"), "an add through a call is the initial value of what the factory builds");
+        }
+
+        [Fact]
         public void The_install_block_names_flow_and_stays_short()
         {
             var block = Setup.InstructionBlock.Build("/repo", "/repo/game", "/repo/game/Assets/Entitas/Entitas/Tools~/entitas-graph.dll", "/repo");

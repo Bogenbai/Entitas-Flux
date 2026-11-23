@@ -119,6 +119,14 @@ namespace Entitas.Graph
         /// <summary>For INFERRED edges: the call or entity shape it was inferred through.</summary>
         public string? Through;
 
+        /// <summary>
+        /// For edges inferred through calls: the methods the system calls in its own code that
+        /// lead to <see cref="Through"/> ("FurnitureFactory.CreateFurniture" for an access in
+        /// MovementExtensions.UnSetupAllMovements, which the factory calls), "; "-separated.
+        /// Absent when that is <see cref="Through"/> itself.
+        /// </summary>
+        public string? Called;
+
         public string? SourceFile;
         public int Line;
         public int Count = 1;
@@ -140,6 +148,15 @@ namespace Entitas.Graph
         /// that component, so it sets the flag once per entity, on purpose.
         /// </summary>
         public string? OnlyWhile;
+
+        /// <summary>
+        /// For creates, removes and destroys made only under a condition: its code, shortened
+        /// ("amount &lt; 0", "!(amount &lt; 0)" for an else, "case Kind.X", " &amp;&amp; …" when
+        /// more conditions enclose it). Absent when any site of the edge is unconditional; the
+        /// distinct conditions of several sites are joined with " or ", the first three named.
+        /// For an edge inferred through a call, the call's condition in the system comes first.
+        /// </summary>
+        public string? Condition;
 
         public string Key => $"{Source}\u0001{Target}\u0001{Relation}\u0001{Via}\u0001{Confidence}\u0001{Through}\u0001{Entity}";
     }
@@ -304,8 +321,10 @@ namespace Entitas.Graph
                     w.WriteString("confidence", e.Confidence);
                     if (e.Context != null) w.WriteString("context", e.Context);
                     if (e.Through != null) w.WriteString("through", e.Through);
+                    if (e.Called != null) w.WriteString("called", e.Called);
                     if (e.Entity != null) w.WriteString("entity", e.Entity);
                     if (e.OnlyWhile != null) w.WriteString("only_while", e.OnlyWhile);
+                    if (e.Condition != null) w.WriteString("condition", e.Condition);
                     if (e.Order > 0) w.WriteNumber("order", e.Order);
                     if (e.Count > 1) w.WriteNumber("count", e.Count);
                     if (e.SourceFile != null) w.WriteString("source_file", e.SourceFile);
@@ -397,8 +416,10 @@ namespace Entitas.Graph
                     Confidence = Str(e, "confidence") ?? Entitas.Graph.Confidence.Extracted,
                     Context = Str(e, "context"),
                     Through = Str(e, "through"),
+                    Called = Str(e, "called"),
                     Entity = Str(e, "entity"),
                     OnlyWhile = Str(e, "only_while"),
+                    Condition = Str(e, "condition"),
                     Order = e.TryGetProperty("order", out var o) ? o.GetInt32() : 0,
                     Count = e.TryGetProperty("count", out var c) ? c.GetInt32() : 1,
                     SourceFile = Str(e, "source_file"),

@@ -156,7 +156,10 @@ namespace Entitas.Graph.Analysis
             }
 
             if (access.Relation == Relation.Creates || access.Relation == Relation.Removes)
+            {
                 TraceEntity(access, entity ?? Receiver(name));
+                access.Condition = ConditionOf(name);
+            }
 
             _result.Accesses.Add(access);
         }
@@ -173,7 +176,7 @@ namespace Entitas.Graph.Analysis
 
         static Access Clone(Access a) => new Access
         {
-            Accessor = a.Accessor, Method = a.Method, Component = a.Component, Context = a.Context, File = a.File, Line = a.Line
+            Accessor = a.Accessor, Method = a.Method, Component = a.Component, Context = a.Context, File = a.File, Line = a.Line, Condition = a.Condition
         };
 
         /// <summary>The call an index constant is passed to, and the entity it is called on (null when unqualified).</summary>
@@ -362,6 +365,297 @@ namespace Entitas.Graph.Analysis
             return true;
         }
 
+        // -- conditions ---------------------------------------------------------------------
+
+        /// <summary>Conditions are cut to this many characters; past it an enum member loses its type first.</summary>
+        const int ConditionLength = 40;
+
+        /// <summary>
+        /// The condition <paramref name="node"/> runs under inside its method, or null when it runs
+        /// whenever the method does: the innermost of an if/else, a switch section or arm, ?:, the
+        /// right side of &amp;&amp;, || or ??, ?., a catch, or a guard — an if before it, in a block
+        /// enclosing it, that returns, continues, breaks or jumps. " &amp;&amp; …" says more
+        /// conditions enclose it; the innermost is the one that tells this write from its
+        /// neighbours (`amount &lt; 0` rather than the loop's `request.hasAmount`).
+        ///
+        /// Not conditions: loops (a write per entity is what a loop is for; RunsForEveryEntity
+        /// covers what that means for removals), lambdas (walked through: a callback runs where it
+        /// is passed, under the conditions there), an if that throws (an assertion: what follows it
+        /// is the normal path), and the guards a method starts with (<see cref="Leading"/>).
+        /// </summary>
+        string? ConditionOf(SyntaxNode node)
+        {
+            using var clauses = Clauses(node).GetEnumerator();
+            if (!clauses.MoveNext())
+                return null;
+            var innermost = clauses.Current;
+            return RenderClause(innermost.Node, innermost.Negate, more: clauses.MoveNext());
+        }
+
+        /// <summary>The clauses <paramref name="node"/> runs under, innermost first, lazily: usually only two are asked for.</summary>
+        static IEnumerable<(SyntaxNode Node, bool Negate)> Clauses(SyntaxNode node)
+        {
+            var child = node;
+            for (var parent = node.Parent; parent != null && !IsBoundary(parent); child = parent, parent = parent.Parent)
+            {
+                switch (parent)
+                {
+                    case IfStatementSyntax ifStatement when child == ifStatement.Statement:
+                        yield return (ifStatement, false);
+                        break;
+                    case IfStatementSyntax ifStatement when child == ifStatement.Else:
+                        yield return (ifStatement, true);
+                        break;
+                    case BlockSyntax block when child is StatementSyntax statement:
+                        foreach (var guard in GuardsBefore(block.Statements, block.Statements.IndexOf(statement), IsBoundary(block.Parent!) ? Leading(block.Statements) : 0))
+                            yield return guard;
+                        break;
+                    case SwitchSectionSyntax section when child is StatementSyntax statement:
+                        foreach (var guard in GuardsBefore(section.Statements, section.Statements.IndexOf(statement), 0))
+                            yield return guard;
+                        yield return (section, false);
+                        break;
+                    case SwitchExpressionArmSyntax arm when child == arm.Expression:
+                        yield return (arm, false);
+                        break;
+                    case ConditionalExpressionSyntax conditional when child == conditional.WhenTrue:
+                        yield return (conditional, false);
+                        break;
+                    case ConditionalExpressionSyntax conditional when child == conditional.WhenFalse:
+                        yield return (conditional, true);
+                        break;
+                    case BinaryExpressionSyntax binary when child == binary.Right && binary.IsKind(SyntaxKind.LogicalAndExpression):
+                        yield return (binary, false);
+                        break;
+                    case BinaryExpressionSyntax binary when child == binary.Right && binary.IsKind(SyntaxKind.LogicalOrExpression):
+                        yield return (binary, true);
+                        break;
+                    case BinaryExpressionSyntax binary when child == binary.Right && binary.IsKind(SyntaxKind.CoalesceExpression):
+                        yield return (binary, false);
+                        break;
+                    case AssignmentExpressionSyntax assignment when child == assignment.Right && assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression):
+                        yield return (assignment, false);
+                        break;
+                    case ConditionalAccessExpressionSyntax access when child == access.WhenNotNull:
+                        yield return (access, false);
+                        break;
+                    case CatchClauseSyntax catchClause when child == catchClause.Block:
+                        yield return (catchClause, false);
+                        break;
+                }
+            }
+        }
+
+        static bool IsBoundary(SyntaxNode node) =>
+            node is MemberDeclarationSyntax or AccessorDeclarationSyntax or LocalFunctionStatementSyntax;
+
+        /// <summary>The guards among the statements before statement <paramref name="index"/>, nearest first, as clauses on what follows them.</summary>
+        static IEnumerable<(SyntaxNode Node, bool Negate)> GuardsBefore(SyntaxList<StatementSyntax> statements, int index, int leading)
+        {
+            for (var i = index - 1; i >= leading; i--)
+                if (Guard(statements[i]) is { } holds)
+                    yield return (statements[i], !holds);
+        }
+
+        /// <summary>
+        /// How many statements a method's body starts with that are guards, declarations or plain
+        /// expressions. `if (!_pathfinding.IsInitialized) return;` at the top of Execute says when
+        /// the system runs at all, not which of its writes happen: every write after it shares it,
+        /// so it would mark each line conditional and tell none apart. A guard after a loop, or
+        /// after an if with a body of its own, does tell the writes before it from those after.
+        /// </summary>
+        static int Leading(SyntaxList<StatementSyntax> statements)
+        {
+            var count = 0;
+            while (count < statements.Count &&
+                   (statements[count] is LocalDeclarationStatementSyntax or ExpressionStatementSyntax || Guard(statements[count]) != null))
+                count++;
+            return count;
+        }
+
+        /// <summary>
+        /// For `if (c) return;` (or continue, break, goto, yield break; alone or last in a block):
+        /// false — what follows runs where c does not hold; for `if (c) {…} else return;`: true.
+        /// Null for any other statement, an if that throws included.
+        /// </summary>
+        static bool? Guard(StatementSyntax statement)
+        {
+            if (statement is not IfStatementSyntax ifStatement)
+                return null;
+            var then = Jumps(ifStatement.Statement);
+            var otherwise = ifStatement.Else != null && Jumps(ifStatement.Else.Statement);
+            return then == otherwise ? null : otherwise;
+
+            static bool Jumps(StatementSyntax s) => s switch
+            {
+                ReturnStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax or GotoStatementSyntax => true,
+                YieldStatementSyntax yield => yield.IsKind(SyntaxKind.YieldBreakStatement),
+                BlockSyntax { Statements.Count: > 0 } b => Jumps(b.Statements[b.Statements.Count - 1]),
+                _ => false
+            };
+        }
+
+        /// <summary>The clause as text — `amount &lt; 0`, `!(amount &lt; 0)` for an else, `case Kind.X` — cut to <see cref="ConditionLength"/>.</summary>
+        string RenderClause(SyntaxNode clause, bool negate, bool more)
+        {
+            var text = Clause(clause, negate, compact: false);
+            if (text.Length > ConditionLength)
+                text = Clause(clause, negate, compact: true);
+            if (text.Length > ConditionLength)
+                text = text.Substring(0, ConditionLength - 1).TrimEnd() + "…";
+            return more ? text + Guards.More : text;
+        }
+
+        string Clause(SyntaxNode clause, bool negate, bool compact)
+        {
+            switch (clause)
+            {
+                case IfStatementSyntax ifStatement:
+                    return Condition(ifStatement.Condition, negate, compact);
+                case ConditionalExpressionSyntax conditional:
+                    return Condition(conditional.Condition, negate, compact);
+                case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression):
+                    return Text(binary.Left, compact) + " == null";
+                case BinaryExpressionSyntax binary:
+                    return Condition(binary.Left, negate, compact);
+                case AssignmentExpressionSyntax assignment:
+                    return Text(assignment.Left, compact) + " == null";
+                case ConditionalAccessExpressionSyntax access:
+                    return Text(access.Expression, compact) + " != null";
+                case CatchClauseSyntax catchClause:
+                    return catchClause.Declaration == null ? "caught an exception" : "caught " + Text(catchClause.Declaration.Type, compact);
+                case SwitchSectionSyntax section:
+                    return section.Labels.Any(l => l is DefaultSwitchLabelSyntax)
+                        ? "default"
+                        : "case " + string.Join(" or ", section.Labels.Select(l => l switch
+                        {
+                            CaseSwitchLabelSyntax value => Text(value.Value, compact),
+                            CasePatternSwitchLabelSyntax pattern => Text(pattern.Pattern, compact) +
+                                                                     (pattern.WhenClause == null ? string.Empty : " when " + Text(pattern.WhenClause.Condition, compact)),
+                            _ => Text(l, compact)
+                        }));
+                case SwitchExpressionArmSyntax arm:
+                    return arm.Pattern is DiscardPatternSyntax && arm.WhenClause == null
+                        ? "default"
+                        : "case " + Text(arm.Pattern, compact) + (arm.WhenClause == null ? string.Empty : " when " + Text(arm.WhenClause.Condition, compact));
+                default:
+                    return Text(clause, compact);
+            }
+        }
+
+        /// <summary>
+        /// A condition, negated where the write runs when it does not hold. `x == false` and `!x`
+        /// are the negation of x; a negated `==` becomes `!=` and back; a negated `is not P`
+        /// becomes `is P`; a name or a call gets a plain `!`; anything else `!(…)`.
+        /// </summary>
+        string Condition(ExpressionSyntax condition, bool negate, bool compact)
+        {
+            var expression = Unparenthesized(condition);
+            while (true)
+            {
+                if (expression is PrefixUnaryExpressionSyntax not && not.IsKind(SyntaxKind.LogicalNotExpression))
+                {
+                    expression = Unparenthesized(not.Operand);
+                    negate = !negate;
+                }
+                else if (expression is BinaryExpressionSyntax comparison &&
+                         (comparison.IsKind(SyntaxKind.EqualsExpression) || comparison.IsKind(SyntaxKind.NotEqualsExpression)) &&
+                         Unparenthesized(comparison.Right) is LiteralExpressionSyntax literal &&
+                         (literal.IsKind(SyntaxKind.TrueLiteralExpression) || literal.IsKind(SyntaxKind.FalseLiteralExpression)))
+                {
+                    // x == true is x; x == false and x != true are !x.
+                    if (comparison.IsKind(SyntaxKind.EqualsExpression) != literal.IsKind(SyntaxKind.TrueLiteralExpression))
+                        negate = !negate;
+                    expression = Unparenthesized(comparison.Left);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (!negate)
+                return Text(expression, compact);
+
+            return expression switch
+            {
+                BinaryExpressionSyntax b when b.IsKind(SyntaxKind.EqualsExpression) => $"{Text(b.Left, compact)} != {Text(b.Right, compact)}",
+                BinaryExpressionSyntax b when b.IsKind(SyntaxKind.NotEqualsExpression) => $"{Text(b.Left, compact)} == {Text(b.Right, compact)}",
+                IsPatternExpressionSyntax { Pattern: UnaryPatternSyntax inner } pattern when inner.IsKind(SyntaxKind.NotPattern) =>
+                    $"{Text(pattern.Expression, compact)} is {Text(inner.Pattern, compact)}",
+                IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax or ElementAccessExpressionSyntax => "!" + Text(expression, compact),
+                _ => $"!({Text(expression, compact)})"
+            };
+        }
+
+        static ExpressionSyntax Unparenthesized(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+                expression = parenthesized.Expression;
+            return expression;
+        }
+
+        /// <summary>
+        /// The code as written, on one line, with `x == false` as `!x` and `x == true` as `x`
+        /// wherever they sit (`order.isProcessed &amp;&amp; !order.isPaid`). Compact: enum members
+        /// without their type too (`currencyTypeId == Coins` for `currencyTypeId ==
+        /// CurrencyTypeId.Coins`) — asked for only when the whole does not fit, because where there
+        /// is room the type says more.
+        /// </summary>
+        string Text(SyntaxNode node, bool compact)
+        {
+            var replacements = new List<(Microsoft.CodeAnalysis.Text.TextSpan Span, string Text)>();
+            foreach (var comparison in node.DescendantNodesAndSelf().OfType<BinaryExpressionSyntax>())
+            {
+                if (!comparison.IsKind(SyntaxKind.EqualsExpression) && !comparison.IsKind(SyntaxKind.NotEqualsExpression) ||
+                    Unparenthesized(comparison.Right) is not LiteralExpressionSyntax literal ||
+                    !literal.IsKind(SyntaxKind.TrueLiteralExpression) && !literal.IsKind(SyntaxKind.FalseLiteralExpression))
+                    continue;
+                var operand = Unparenthesized(comparison.Left);
+                var holds = comparison.IsKind(SyntaxKind.EqualsExpression) == literal.IsKind(SyntaxKind.TrueLiteralExpression);
+                replacements.Add((comparison.Span,
+                    holds ? operand.ToString()
+                    : operand is IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax or ElementAccessExpressionSyntax ? "!" + operand
+                    : $"!({operand})"));
+            }
+
+            if (compact)
+            {
+                foreach (var member in node.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>())
+                    if (_model.GetSymbolInfo(member).Symbol is IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum } &&
+                        _model.GetSymbolInfo(member.Expression).Symbol is ITypeSymbol)
+                        replacements.Add((member.Span, member.Name.Identifier.ValueText));
+            }
+
+            // Outermost first wins where two overlap; then applied from the end, so the spans before stay valid.
+            var applied = new List<(Microsoft.CodeAnalysis.Text.TextSpan Span, string Text)>();
+            foreach (var replacement in replacements.OrderByDescending(r => r.Span.Length))
+                if (!applied.Any(a => a.Span.OverlapsWith(replacement.Span)))
+                    applied.Add(replacement);
+            var text = node.ToString();
+            foreach (var (span, value) in applied.OrderByDescending(a => a.Span.Start))
+                text = text.Substring(0, span.Start - node.SpanStart) + value + text.Substring(span.End - node.SpanStart);
+
+            // A condition spread over lines reads as one.
+            var line = new System.Text.StringBuilder(text.Length);
+            var space = false;
+            foreach (var c in text)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    space = line.Length > 0;
+                    continue;
+                }
+                if (space)
+                    line.Append(' ');
+                space = false;
+                line.Append(c);
+            }
+            return line.ToString();
+        }
+
+        // -- keys --------------------------------------------------------------------------------
+
         static string SiteKey(Access access, SyntaxNode node) => $"{access.File}:{node.SpanStart}";
 
         string LoopKey(ForEachStatementSyntax forEach) => $"{_file}:{forEach.SpanStart}";
@@ -546,7 +840,8 @@ namespace Entitas.Graph.Analysis
                     Accessor = accessor,
                     Method = EnclosingMethod(invocation),
                     File = _file,
-                    Line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1
+                    Line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
+                    Condition = ConditionOf(invocation)
                 };
                 if (invocation.Expression is MemberAccessExpressionSyntax target)
                 {
@@ -589,7 +884,7 @@ namespace Entitas.Graph.Analysis
 
             var caller = EnclosingMethod(invocation);
             if (caller != null)
-                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee });
+                _result.Calls.Add(new CallSite { Caller = caller, Callee = callee, Condition = ConditionOf(invocation) });
         }
 
         /// <summary>Add(systems.Create&lt;T&gt;()), Add(new T(...)), or anything statically typed as a system.</summary>

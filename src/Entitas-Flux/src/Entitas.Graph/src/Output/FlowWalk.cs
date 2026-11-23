@@ -33,7 +33,9 @@ namespace Entitas.Graph.Output
     /// reads it does so whenever it runs, not because of this write, and following it reaches
     /// half the project in two steps (Placed has 44 readers on a 2000-file project). Such writes
     /// are listed, not followed; so are writes of hubs (Event, Id) and anything a generated system
-    /// does. Every node is expanded once, at the fewest hops (breadth-first), and referenced after.
+    /// does. What a system writes only through a method it calls is one line per call (<see
+    /// cref="Calls"/>). Every node is expanded once, at the fewest hops (breadth-first), and
+    /// referenced after. A write made under a condition carries it (<see cref="ConditionOf"/>).
     ///
     /// Frames come from placements alone. Under one root feature the execute systems run in their
     /// order and the cleanup systems after all of them; a system running after the producer sees
@@ -211,8 +213,16 @@ namespace Entitas.Graph.Output
         void Expand(FlowStep step)
         {
             DeepestHop = Math.Max(DeepestHop, step.Hop);
-            foreach (var (component, kind, edges, relations) in Writes(step.Node))
+            var called = new List<(GraphNode Component, HandOff Kind, IReadOnlyList<GraphEdge> Edges, IReadOnlyList<string> Relations)>();
+            foreach (var write in Writes(step.Node))
             {
+                var (component, kind, edges, relations) = write;
+                if (edges.All(e => e.Confidence == Confidence.Inferred))
+                {
+                    called.Add(write);
+                    continue;
+                }
+
                 if (kind == HandOff.None)
                 {
                     var unreached = component.Attributes.Contains("Watched") ? Reactors(component, relations).Skipped : 0;
@@ -220,26 +230,134 @@ namespace Entitas.Graph.Output
                     continue;
                 }
 
-                var link = new FlowLink(component, kind, edges, relations);
-                step.HandOffs.Add(link);
-                if (!_expandedComponents.Add(component.Id))
-                    continue;
+                Follow(step, new FlowLink(component, kind, edges, relations), step.HandOffs);
+            }
 
-                link.Expanded = true;
-                HandOffs++;
-                var (takers, skipped) = Takers(component, kind, relations, step.Node);
-                link.Skipped = skipped;
-                if (step.Hop >= Depth)
+            Calls(step, called);
+        }
+
+        void Follow(FlowStep step, FlowLink link, List<FlowLink> into, List<FlowTaker>? known = null, int skipped = 0)
+        {
+            into.Add(link);
+            if (!_expandedComponents.Add(link.Component.Id))
+                return;
+
+            link.Expanded = true;
+            HandOffs++;
+            var takers = known;
+            if (takers == null)
+                (takers, skipped) = Takers(link.Component, link.Kind, link.Relations, step.Node);
+            link.Skipped = skipped;
+            if (step.Hop >= Depth)
+            {
+                link.Beyond = takers.Count;
+                if (takers.Count > 0)
+                    BeyondDepth++;
+                link.Ends.AddRange(Ends(link, step.Node, takers));
+                return;
+            }
+
+            Take(link, new[] { step.Node }, step.Hop + 1, step.Since, takers);
+        }
+
+        /// <summary>
+        /// What the system writes only through methods it calls — a factory building an entity, a
+        /// helper changing one — goes on one line per call, after the system's own writes. A
+        /// factory sets dozens of components, and each spelled out as a hand-off of its own took
+        /// half of a flow on a 2000-file project, among the system's own events, where an assistant
+        /// read the factory as the creator of the event above them. Methods writing a component in
+        /// common share the line (TaskProgressRequests.Request and RequestSale both create the
+        /// request), so no component is on two lines with half its conditions on each.
+        ///
+        /// Requests and events written that way are still followed, under the call's line: they
+        /// are messages, sent on purpose. A [Watched] or transient component is followed only
+        /// when the call changes it — a replace, a removal, a flag; an AddX there is the initial
+        /// value of what a factory builds (MaxCapacity, Scale on new furniture) — and some system
+        /// is known to see the change (a frame, not "never" or "unknown"): factories also set up
+        /// flags whose reactors never see them, the generated cleanup clearing the marker first.
+        /// A helper changing a live entity is followed (UsablesExtensions.UnOccupy, the role a
+        /// hired cat gets from CatFactory.ConvertToWorker). Everything else is named on the line.
+        /// A call that writes one component and hands nothing on is no line of its own: the write
+        /// joins those not followed, marked inferred (`Event*` from CreateEntity.Event).
+        /// </summary>
+        void Calls(FlowStep step, List<(GraphNode Component, HandOff Kind, IReadOnlyList<GraphEdge> Edges, IReadOnlyList<string> Relations)> writes)
+        {
+            var leader = new Dictionary<string, string>(StringComparer.Ordinal);
+            string Find(string method)
+            {
+                while (leader.TryGetValue(method, out var up) && up != method)
+                    method = up;
+                return method;
+            }
+
+            foreach (var write in writes)
+            {
+                var methods = write.Edges.SelectMany(CalledMethods).Distinct(StringComparer.Ordinal).ToList();
+                foreach (var method in methods)
+                    if (!leader.ContainsKey(method))
+                        leader[method] = method;
+                foreach (var method in methods.Skip(1))
                 {
-                    link.Beyond = takers.Count;
-                    if (takers.Count > 0)
-                        BeyondDepth++;
-                    link.Ends.AddRange(Ends(link, step.Node, takers));
-                    continue;
+                    // The smaller name leads, so the groups do not depend on the order writes come in.
+                    var (a, b) = (Find(methods[0]), Find(method));
+                    if (a != b)
+                        leader[string.CompareOrdinal(a, b) < 0 ? b : a] = string.CompareOrdinal(a, b) < 0 ? a : b;
+                }
+            }
+
+            foreach (var group in writes.GroupBy(w => Find(CalledMethods(w.Edges[0])[0])).OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                var call = new FlowCall(group.SelectMany(w => w.Edges).SelectMany(CalledMethods).Distinct(StringComparer.Ordinal)
+                    .OrderBy(m => m, StringComparer.Ordinal).ToList());
+                foreach (var (component, kind, edges, relations) in group)
+                {
+                    call.Writes.Add(new FlowWrite(component, edges, IsHub(component),
+                        kind == HandOff.None && component.Attributes.Contains("Watched") ? Reactors(component, relations).Skipped : 0));
+                    if (kind == HandOff.None)
+                        continue;
+
+                    var link = new FlowLink(component, kind, edges, relations);
+                    if ((kind & (HandOff.Request | HandOff.Event)) != 0)
+                    {
+                        Follow(step, link, call.HandOffs);
+                        continue;
+                    }
+
+                    if (_expandedComponents.Contains(component.Id) || edges.All(e => e.Via is "Add" or "AddComponent"))
+                        continue;
+                    var (takers, skipped) = Takers(component, kind, relations, step.Node);
+                    if (takers.Any(t => Frame(new[] { step.Node }, t, link, Root) is { Frames: not null, Never: false }))
+                        Follow(step, link, call.HandOffs, takers, skipped);
                 }
 
-                Take(link, new[] { step.Node }, step.Hop + 1, step.Since, takers);
+                if (call.Writes.Count > 1 || call.HandOffs.Count > 0)
+                    step.Calls.Add(call);
+                else
+                    step.NotFollowed.AddRange(call.Writes);
             }
+        }
+
+        /// <summary>The methods the system called in its own code that led to this edge: `called`, or the method `through` names.</summary>
+        internal static IReadOnlyList<string> CalledMethods(GraphEdge edge) =>
+            edge.Called != null ? edge.Called.Split(new[] { "; " }, StringSplitOptions.None) : new[] { edge.Through ?? "?" };
+
+        /// <summary>
+        /// The condition a set of writes happens under, for one line — the same rule as for the
+        /// sites of one edge: none when any of them is unconditional, or when one is made in an
+        /// if and another in its else (an AddX and a ReplaceX are two edges); otherwise their
+        /// conditions, three named. Null when there is none.
+        /// </summary>
+        internal static string? ConditionOf(IEnumerable<GraphEdge> edges)
+        {
+            var conditions = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var edge in edges)
+            {
+                if (edge.Condition == null)
+                    return null;
+                conditions.Add(edge.Condition);
+            }
+
+            return conditions.Count == 0 ? null : Analysis.Guards.Format(conditions);
         }
 
         void Take(FlowLink link, IReadOnlyList<GraphNode> producers, int hop, int? since, List<FlowTaker> takers)
@@ -674,22 +792,33 @@ namespace Entitas.Graph.Output
 
             foreach (var step in steps)
             {
-                foreach (var link in step.HandOffs)
+                foreach (var link in step.AllHandOffs)
                     SortTakers(link);
-                step.HandOffs.Sort((a, b) =>
+                step.HandOffs.Sort(CompareHandOffs);
+                foreach (var call in step.Calls)
+                    call.HandOffs.Sort(CompareHandOffs);
+
+                // Calls that lead on first, then by name.
+                step.Calls.Sort((a, b) =>
                 {
-                    var c = (a.Expanded ? 0 : 1).CompareTo(b.Expanded ? 0 : 1);
+                    var c = (a.HandOffs.Any(h => h.LeadsOn) ? 0 : 1).CompareTo(b.HandOffs.Any(h => h.LeadsOn) ? 0 : 1);
                     if (c != 0) return c;
-                    c = (a.Inferred ? 1 : 0).CompareTo(b.Inferred ? 1 : 0);
-                    if (c != 0) return c;
-                    c = (a.LeadsOn ? 0 : 1).CompareTo(b.LeadsOn ? 0 : 1);
-                    if (c != 0) return c;
-                    c = KindRank(a.Kind).CompareTo(KindRank(b.Kind));
-                    if (c != 0) return c;
-                    c = a.Writes[0].Line.CompareTo(b.Writes[0].Line);
-                    return c != 0 ? c : string.CompareOrdinal(a.Component.Label, b.Component.Label);
+                    c = (a.HandOffs.Count > 0 ? 0 : 1).CompareTo(b.HandOffs.Count > 0 ? 0 : 1);
+                    return c != 0 ? c : string.CompareOrdinal(a.Method, b.Method);
                 });
             }
+        }
+
+        static int CompareHandOffs(FlowLink a, FlowLink b)
+        {
+            var c = (a.Expanded ? 0 : 1).CompareTo(b.Expanded ? 0 : 1);
+            if (c != 0) return c;
+            c = (a.LeadsOn ? 0 : 1).CompareTo(b.LeadsOn ? 0 : 1);
+            if (c != 0) return c;
+            c = KindRank(a.Kind).CompareTo(KindRank(b.Kind));
+            if (c != 0) return c;
+            c = a.Writes[0].Line.CompareTo(b.Writes[0].Line);
+            return c != 0 ? c : string.CompareOrdinal(a.Component.Label, b.Component.Label);
         }
 
         static void Collect(FlowStep step, List<FlowStep> steps)
@@ -697,7 +826,7 @@ namespace Entitas.Graph.Output
             if (!step.Expanded)
                 return;
             steps.Add(step);
-            foreach (var link in step.HandOffs)
+            foreach (var link in step.AllHandOffs)
             foreach (var take in link.Takers)
                 Collect(take.Step, steps);
         }
@@ -713,7 +842,7 @@ namespace Entitas.Graph.Output
 
             FlowTime When(FlowTake t) => (Root == null ? null : Slot(t.Step.Node, Root)) ?? new FlowTime(0, int.MaxValue, int.MaxValue);
 
-            static int Rank(FlowTake t) => t.Frame.Never ? 3 : !t.Step.Expanded ? 1 : t.Step.HandOffs.Count > 0 ? 0 : 2;
+            static int Rank(FlowTake t) => t.Frame.Never ? 3 : !t.Step.Expanded ? 1 : t.Step.HandsOn ? 0 : 2;
         });
     }
 
@@ -736,11 +865,41 @@ namespace Entitas.Graph.Output
         /// <summary>What it writes that is state or a hub: listed, not followed.</summary>
         public readonly List<FlowWrite> NotFollowed = new List<FlowWrite>();
 
+        /// <summary>What it writes only through methods it calls, one entry per method.</summary>
+        public readonly List<FlowCall> Calls = new List<FlowCall>();
+
         public FlowStep(GraphNode node, int hop)
         {
             Node = node;
             Hop = hop;
         }
+
+        /// <summary>Its hand-offs: its own, then those through the methods it calls.</summary>
+        public IEnumerable<FlowLink> AllHandOffs => HandOffs.Concat(Calls.SelectMany(c => c.HandOffs));
+
+        /// <summary>It hands something on, in its own code or through a call.</summary>
+        public bool HandsOn => HandOffs.Count > 0 || Calls.Any(c => c.HandOffs.Count > 0);
+    }
+
+    /// <summary>
+    /// A method a system calls in its own code (a factory, a helper), and what the system writes
+    /// through it: every component on one line, the requests and events among them followed.
+    /// </summary>
+    internal sealed class FlowCall
+    {
+        /// <summary>"FurnitureFactory.CreateFurniture"; several when they write a component in common.</summary>
+        public readonly IReadOnlyList<string> Methods;
+
+        public readonly List<FlowWrite> Writes = new List<FlowWrite>();
+
+        /// <summary>The writes through it that are followed.</summary>
+        public readonly List<FlowLink> HandOffs = new List<FlowLink>();
+
+        public FlowCall(IReadOnlyList<string> methods) => Methods = methods;
+
+        public string Method => string.Join(", ", Methods);
+
+        public IEnumerable<GraphEdge> Edges => Writes.SelectMany(w => w.Edges);
     }
 
     /// <summary>A component a step hands off, and the systems taking it from there.</summary>
@@ -763,9 +922,6 @@ namespace Entitas.Graph.Output
         /// <summary>Systems reacting to the marker that this kind of change does not reach (<see cref="FlowWalk"/>'s Reactors).</summary>
         public int Skipped;
 
-        /// <summary>Written only through code the system calls (a factory, a helper).</summary>
-        public bool Inferred => Writes.Count > 0 && Writes.All(e => e.Confidence == Confidence.Inferred);
-
         public readonly List<FlowTake> Takers = new List<FlowTake>();
         public readonly List<FlowEnd> Ends = new List<FlowEnd>();
 
@@ -778,7 +934,7 @@ namespace Entitas.Graph.Output
         }
 
         /// <summary>Some taker hands something on in turn.</summary>
-        public bool LeadsOn => Takers.Any(t => t.Step.Expanded && t.Step.HandOffs.Count > 0);
+        public bool LeadsOn => Takers.Any(t => t.Step.Expanded && t.Step.HandsOn);
     }
 
     /// <summary>One taker of a hand-off, and when it sees it.</summary>

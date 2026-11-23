@@ -55,4 +55,16 @@ namespace Sample
 
         public int Count() => _furniture.count;
     }
+
+    /// <summary>A factory that announces what it built: the event is its caller's, made through the call.</summary>
+    public sealed class ShopkeeperFactory
+    {
+        public GameEntity Create()
+        {
+            GameEntity keeper = CreateEntity.Empty();
+            keeper.isShopkeeper = true;
+            CreateEntity.Event().AddShopOpenedEvent(1);
+            return keeper;
+        }
+    }
 }
