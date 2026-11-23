@@ -37,9 +37,9 @@ namespace Entitas.Unity.Editor.Generation
         const string MenuGenerate = "Tools/Entitas/Generate";
         const string MenuAutomatic = "Tools/Entitas/Generate Automatically";
         const string MenuCheck = "Tools/Entitas/Check Generated Files";
-        const string AutomaticPreference = "Entitas.Generation.Automatic";
 
         static readonly ConcurrentQueue<Action> MainThread = new ConcurrentQueue<Action>();
+        static readonly GenerationSettings Settings = new GenerationSettings(new EditorUserSettingsStore());
         static readonly GenerationScheduler Scheduler = new GenerationScheduler();
         static GenerationState? _state;
         static DateTime _lastCompilationStartedUtc = DateTime.MinValue;
@@ -74,6 +74,12 @@ namespace Entitas.Unity.Editor.Generation
                 if (change == PlayModeStateChange.ExitingEditMode)
                     ResetScheduler();
             };
+
+            // The checkmark is native menu state: it outlives a domain reload, and the validate
+            // function only runs when the menu is drawn, so anything reading it in between got
+            // the last drawn value (unchecked in a fresh editor). Set it from the setting now
+            // (menus are not built yet while InitializeOnLoad runs, hence the delay).
+            EditorApplication.delayCall += SyncAutomaticMenu;
         }
 
         static string StatePath => Path.Combine(EntitasTools.ScratchDirectory, "state.json");
@@ -100,11 +106,32 @@ namespace Entitas.Unity.Editor.Generation
             }
         }
 
-        /// <summary>Whether components changing regenerates by itself. On by default.</summary>
+        /// <summary>
+        /// Whether components changing regenerates by itself. On by default. Kept per project
+        /// and per user, in UserSettings/EditorUserSettings.asset — not in EditorPrefs, which
+        /// every project on the machine shares (see <see cref="GenerationSettings"/>).
+        /// </summary>
         public static bool Automatic
         {
-            get => EditorPrefs.GetBool(AutomaticPreference, true);
-            set => EditorPrefs.SetBool(AutomaticPreference, value);
+            get => Settings.Automatic;
+            set
+            {
+                Settings.Automatic = value;
+                SyncAutomaticMenu();
+            }
+        }
+
+        static void SyncAutomaticMenu() => Menu.SetChecked(MenuAutomatic, Automatic);
+
+        sealed class EditorUserSettingsStore : IProjectSettingsStore
+        {
+            public string? Get(string key)
+            {
+                var value = EditorUserSettings.GetConfigValue(key);
+                return string.IsNullOrEmpty(value) ? null : value;
+            }
+
+            public void Set(string key, string value) => EditorUserSettings.SetConfigValue(key, value);
         }
 
         // -- menu ---------------------------------------------------------------------
@@ -141,7 +168,7 @@ namespace Entitas.Unity.Editor.Generation
         [MenuItem(MenuAutomatic, true)]
         static bool ToggleAutomaticValidate()
         {
-            Menu.SetChecked(MenuAutomatic, Automatic);
+            SyncAutomaticMenu();
             return true;
         }
 

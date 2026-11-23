@@ -254,7 +254,7 @@ The generated code is then ordinary `.cs` files in your project, and the source 
 | Menu | What it does |
 | --- | --- |
 | *Tools → Entitas → Generate* | Brings the files up to date now. |
-| *Tools → Entitas → Generate Automatically* | On by default: regenerates by itself when a file declaring components (or the config) changes. |
+| *Tools → Entitas → Generate Automatically* | On by default: regenerates by itself when a file declaring components (or the config) changes. Remembered per project and per user (`UserSettings/`). |
 | *Tools → Entitas → Check Generated Files* | Reports what is out of date without writing. |
 
 Automatic generation finishes **before** Unity compiles the change, so a save costs one compilation that already has the new API: add a component and use it in the same save, delete one, change a field — one compile, no errors. It works like this: Unity notices the save within milliseconds and holds its asset database while `entitas-gen` runs (a refresh asked for meanwhile — Rider asks ~500 ms after a save, focusing Unity does too — simply waits), then releases it, and that refresh imports the component and its generated files together. On a ~2000-file project a run takes about 0.7 s; files that declare no component never trigger one, and a run that changes nothing costs no compile.
