@@ -117,7 +117,7 @@
     // A halo in the background colour keeps a label readable where it touches a neighbour's.
     nodes: { font: { size: 13, color: getComputedStyle(document.body).color, strokeWidth: 4, strokeColor: getComputedStyle(document.body).backgroundColor }, borderWidth: 1 },
     edges: { arrows: { to: { enabled: true, scaleFactor: 0.5 } }, smooth: false, width: 1.2 },
-    physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -60, springLength: 110, avoidOverlap: 1 }, stabilization: { iterations: 200 } },
+    physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -60, springLength: 110, avoidOverlap: 1 }, stabilization: { iterations: 200, fit: false } },  // frame() places the view, not vis-network
     interaction: { hover: true, tooltipDelay: 150 },
     layout: { improvedLayout: false }
   });
@@ -134,7 +134,13 @@
   // everything shown, it centres on the node.
   function frame(id) {
     if (document.getElementById('scope').value === 'all') network.focus(id, { scale: 1.1, animation: { duration: 400 } });
-    else network.fit({ nodes: nodes.getIds(), animation: { duration: 400 } });
+    else {
+      network.fit({ nodes: nodes.getIds() });
+      // A margin: fit() counts a node but not all of a long label under it, and the legend
+      // sits over the bottom-left corner of the view. Labels grow with the zoom, so a node with
+      // few neighbours must not be zoomed in past where its labels still fit.
+      network.moveTo({ scale: Math.min(network.getScale() * 0.78, 0.85), animation: { duration: 300 } });
+    }
   }
 
   function visibleIds() {
@@ -164,10 +170,35 @@
     const ids = visibleIds();
     nodes.clear(); edges.clear();
     const degree = id => (out.get(id) || []).length + (inc.get(id) || []).length;
+    // A scoped view (one or two steps, at most 80 nodes) has room to spread its labels.
+    const spread = ids.size <= 80;
+
+    // Seed a scoped view as rings around the selected node, so physics only has to relax it and
+    // every search lays out alike. From scratch positions a second search in the same page
+    // sometimes settled lopsided: the neighbours fanned out to one side, labels on each other.
+    const seeded = new Map();
+    if (spread && selected && ids.has(selected)) {
+      const near = new Set();
+      (out.get(selected) || []).concat(inc.get(selected) || []).forEach(e => {
+        const other = e.from === selected ? e.to : e.from;
+        if (other !== selected && ids.has(other)) near.add(other);
+      });
+      const far = [...ids].filter(id => id !== selected && !near.has(id)).sort();
+      const ring = (list, radius) => list.forEach((id, i) => {
+        const angle = 2 * Math.PI * i / list.length;
+        seeded.set(id, { x: Math.round(Math.cos(angle) * radius), y: Math.round(Math.sin(angle) * radius) });
+      });
+      const inner = Math.max(220, near.size * 28);
+      seeded.set(selected, { x: 0, y: 0 });
+      ring([...near].sort(), inner);
+      ring(far, inner + 220);
+    }
+
     nodes.add([...ids].map(id => {
       const n = byId.get(id), k = KIND[n.kind];
       const color = n.kind === 'component' && n.role ? ROLE[n.role] : k.color;
       return {
+        ...(seeded.get(id) || {}),
         id, label: n.label, shape: k.shape, size: 8 + Math.min(18, Math.sqrt(degree(id)) * 2),
         color: { background: color, border: id === selected ? '#111' : color },
         borderWidth: id === selected ? 3 : 1,
@@ -190,7 +221,6 @@
     }));
     // Around a busy node (a system touching twenty components) the default springs pack the
     // neighbours' labels on top of each other; a scoped view has few nodes, so give them room.
-    const spread = ids.size <= 80;
     network.setOptions({ physics: { enabled: true, forceAtlas2Based: {
       gravitationalConstant: spread ? -140 : -60, springLength: spread ? 190 : 110, avoidOverlap: 1 } } });
     network.stabilize(spread ? 300 : 150);
