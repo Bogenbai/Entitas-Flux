@@ -120,7 +120,21 @@
     interaction: { hover: true, tooltipDelay: 150 },
     layout: { improvedLayout: false }
   });
-  network.on('stabilizationIterationsDone', () => network.setOptions({ physics: false }));
+  // Frame the selected node once the layout has settled. render() restarts the physics, which
+  // moves every node after focus() had aimed at the old position: a found node used to end up
+  // at the edge, half off-screen, until Fit.
+  let pendingFrame = null;
+  network.on('stabilizationIterationsDone', () => {
+    network.setOptions({ physics: false });
+    if (pendingFrame) { const id = pendingFrame; pendingFrame = null; frame(id); }
+  });
+
+  // With a scope of one or two steps the view holds the node and its neighbours; with
+  // everything shown, it centres on the node.
+  function frame(id) {
+    if (document.getElementById('scope').value === 'all') network.focus(id, { scale: 1.1, animation: { duration: 400 } });
+    else network.fit({ nodes: nodes.getIds(), animation: { duration: 400 } });
+  }
 
   function visibleIds() {
     const scope = document.getElementById('scope').value;
@@ -180,9 +194,10 @@
   function select(id) {
     if (!byId.has(id)) return;
     selected = id;
+    pendingFrame = id;
     render();
     network.selectNodes([id]);
-    network.focus(id, { scale: 1.1, animation: { duration: 400 } });
+    frame(id);
     showPanel(byId.get(id));
   }
 

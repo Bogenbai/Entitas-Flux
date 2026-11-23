@@ -568,7 +568,7 @@ An edge is its source, target and relation. A moved line, a read moved into a he
   - `Destroy()` calls the tool could not trace to a group.
 
   These are leads, not errors. A component read but never created may be added from data, from a prefab's component list for example, which the tool cannot see.
-- **`graph.html`**: the graph in a browser, offline. Search a node, see its neighbours one or two steps out, filter by kind and relation; the side panel lists who creates, reads and destroys it. Arrows follow the data: from a system to what it creates, removes or destroys, from a component into the systems that read, filter on or react to it, from a feature to the systems it runs. A legend gives each relation's colour and direction; dashed edges are inferred. It inlines [vis-network](https://visjs.github.io/vis-network/) 9.1.9 (Apache-2.0 or MIT; its licence ships next to the tool).
+- **`graph.html`**: the graph in a browser, offline. Search a node and the view frames it with its neighbours one or two steps out, filter by kind and relation; the side panel lists who creates, reads and destroys it. Arrows follow the data: from a system to what it creates, removes or destroys, from a component into the systems that read, filter on or react to it, from a feature to the systems it runs. A legend gives each relation's colour and direction; dashed edges are inferred. It inlines [vis-network](https://visjs.github.io/vis-network/) 9.1.9 (Apache-2.0 or MIT; its licence ships next to the tool).
 
 Out of scope: dependency injection, scenes, prefabs and other assets. The graph covers code in the assembly that declares the contexts.
 

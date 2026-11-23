@@ -185,6 +185,19 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void Graph_html_frames_a_found_node_after_the_layout_settles()
+        {
+            var html = GraphHtml.Build(FixtureProject.Graph);
+
+            // render() restarts the physics, so framing only right after it aimed at where the
+            // node was before the layout moved it; it must happen again once the layout is done.
+            var settled = html.IndexOf("network.on('stabilizationIterationsDone'", StringComparison.Ordinal);
+            settled.Should().BeGreaterThan(0);
+            html.IndexOf("frame(id)", settled, StringComparison.Ordinal).Should().BeGreaterThan(settled);
+            html.Should().Contain("network.fit({ nodes: nodes.getIds()", "a scope of one or two steps frames the node with its neighbours");
+        }
+
+        [Fact]
         public void Graph_html_draws_reads_from_the_component_into_the_system()
         {
             var html = GraphHtml.Build(FixtureProject.Graph);
