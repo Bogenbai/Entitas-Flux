@@ -185,7 +185,7 @@
         color: { color, highlight: color, hover: color, opacity: e.confidence === 'INFERRED' ? 0.55 : 0.9 },
         dashes: e.confidence === 'INFERRED',
         // The tooltip names who does what, so the sentence reads the same whichever way the arrow points.
-        title: label(e.from) + ' ' + e.relation + ' ' + label(e.to) + ' via ' + e.via + (e.through ? ' (' + e.through + ')' : '') + (e.file ? '\n' + e.file + ':' + e.line : '')
+        title: label(e.from) + ' ' + e.relation + ' ' + label(e.to) + ' via ' + e.via + (e.through ? ' (' + e.through + ')' : '') + (e.condition ? ' if ' + e.condition : '') + (e.file ? '\n' + e.file + ':' + e.line : '')
       };
     }));
     // Around a busy node (a system touching twenty components) the default springs pack the
@@ -225,7 +225,10 @@
         const vias = [...new Set(edgesOfNode.map(e => e.via))].join(', ');
         const through = [...new Set(edgesOfNode.map(e => e.through).filter(Boolean))].join('; ');
         const inferred = edgesOfNode.every(e => e.confidence === 'INFERRED');
-        return '<li>' + link(id) + ' <span class="via">' + vias + (through ? ' — ' + escapeHtml(through) : '') + (inferred ? ' · inferred' : '') + '</span></li>';
+        // Only when every way it happens is conditional: one unconditional site makes it unconditional.
+        const conditions = edgesOfNode.every(e => e.condition) ? [...new Set(edgesOfNode.map(e => e.condition))].join('; ') : '';
+        return '<li>' + link(id) + ' <span class="via">' + vias + (through ? ' — ' + escapeHtml(through) : '') +
+          (conditions ? ' · if ' + escapeHtml(conditions) : '') + (inferred ? ' · inferred' : '') + '</span></li>';
       }).join('') + '</ul>';
     };
     const group = (list, key) => list.reduce((m, e) => (m[e[key]] = m[e[key]] || []).push(e) && m, {});

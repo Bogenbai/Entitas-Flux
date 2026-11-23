@@ -65,6 +65,15 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   branches (request → handler → event → statistics) that assistants following events one hop
   at a time had missed.
 
+  A write that happens only under a condition says so — `creates CoinsSpentEvent [event]
+  (if currencyTypeId == Coins && amount < 0)`, `!(…)` for an else, `case X` for a switch — in
+  `flow`, `explain`, `who-creates` and `graph.html`, and `graph.json` links carry it as an
+  optional `condition`. What a system writes through a factory or helper is one `by calling
+  Factory.Method:` line after its own writes, with that call's requests and events followed
+  beneath it: `flow PlaceFurnitureRequest` dropped from ~2 250 to ~1 400 tokens, and an
+  assistant no longer reads the factory as the creator of the system's events. In
+  `graph.html` a busy node's neighbours get room for their labels.
+
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
   what one commit changed (its first parent against it; a merge says so), `diff --ref A

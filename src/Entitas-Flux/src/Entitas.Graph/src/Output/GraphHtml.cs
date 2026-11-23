@@ -61,6 +61,7 @@ namespace Entitas.Graph.Output
                     w.WriteString("via", e.Via);
                     w.WriteString("confidence", e.Confidence);
                     if (e.Through != null) w.WriteString("through", e.Through);
+                    if (e.Condition != null) w.WriteString("condition", e.Condition);
                     if (e.SourceFile != null) w.WriteString("file", e.SourceFile);
                     if (e.Line > 0) w.WriteNumber("line", e.Line);
                     w.WriteEndObject();

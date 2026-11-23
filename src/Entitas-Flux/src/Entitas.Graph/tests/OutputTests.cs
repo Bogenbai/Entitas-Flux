@@ -249,6 +249,21 @@ namespace Entitas.Graph.Tests
         }
 
         [Fact]
+        public void Graph_html_carries_the_condition_of_a_conditional_write()
+        {
+            var html = GraphHtml.Build(FixtureProject.Graph);
+            var start = html.IndexOf("const GRAPH = ", StringComparison.Ordinal) + "const GRAPH = ".Length;
+            var end = html.IndexOf(";</script>", start, StringComparison.Ordinal);
+            using var data = System.Text.Json.JsonDocument.Parse(html.Substring(start, end - start));
+
+            var conditional = FixtureProject.Graph.Edges.Where(e => e.Condition != null).ToList();
+            conditional.Should().NotBeEmpty("the fixture has writes under an if");
+            data.RootElement.GetProperty("edges").EnumerateArray()
+                .Count(e => e.TryGetProperty("condition", out _)).Should().Be(conditional.Count);
+            html.Should().Contain("' · if ' + escapeHtml(conditions)", "the side panel shows it");
+        }
+
+        [Fact]
         public void Graph_html_draws_reads_from_the_component_into_the_system()
         {
             var html = GraphHtml.Build(FixtureProject.Graph);
