@@ -31,6 +31,8 @@ namespace Entitas.Graph.Output
             {
                 w.WriteStartObject();
                 w.WriteString("project", graph.Metadata.Project);
+                if (graph.Metadata.BuiltAtCommit != null) w.WriteString("commit", graph.Metadata.BuiltAtCommit);
+                if (!string.IsNullOrEmpty(graph.Metadata.ToolVersion)) w.WriteString("tool_version", graph.Metadata.ToolVersion);
                 w.WriteStartArray("reversed");
                 foreach (var relation in DrawnComponentToSystem)
                     w.WriteStringValue(relation);

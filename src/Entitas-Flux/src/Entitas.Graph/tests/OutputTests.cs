@@ -274,7 +274,8 @@ namespace Entitas.Graph.Tests
             var settled = html.IndexOf("network.on('stabilizationIterationsDone'", StringComparison.Ordinal);
             settled.Should().BeGreaterThan(0);
             html.IndexOf("frame(id)", settled, StringComparison.Ordinal).Should().BeGreaterThan(settled);
-            html.Should().Contain("network.fit({ nodes: nodes.getIds()", "a scope of one or two steps frames the node with its neighbours");
+            html.Should().Contain("network.getBoundingBox(n)", "a scope of one or two steps frames the node with its neighbours, labels included");
+            html.Should().Contain("network.once('afterDrawing', () => frame(id))", "a label's size is known only once it has been drawn");
         }
 
         [Fact]
@@ -289,7 +290,7 @@ namespace Entitas.Graph.Tests
             conditional.Should().NotBeEmpty("the fixture has writes under an if");
             data.RootElement.GetProperty("edges").EnumerateArray()
                 .Count(e => e.TryGetProperty("condition", out _)).Should().Be(conditional.Count);
-            html.Should().Contain("' · if ' + escapeHtml(conditions)", "the side panel shows it");
+            html.Should().Contain("'<span class=\"cond\">if <code>' + escapeHtml(conditions)", "the side panel shows it");
         }
 
         [Fact]
@@ -313,7 +314,7 @@ namespace Entitas.Graph.Tests
             html.Should().Contain("const back = REVERSED.has(e.relation)")
                 .And.Contain("from: back ? e.to : e.from, to: back ? e.from : e.to", "a reversed relation is drawn component → system");
 
-            html.Should().Contain("<div id=\"legend\"></div>").And.Contain("Arrows follow the data")
+            html.Should().Contain("id=\"legend\"").And.Contain("Arrows follow the data")
                 .And.Contain("REVERSED.has(r) ? 'component → system' : 'system → component'", "the legend gives each relation's direction");
         }
     }

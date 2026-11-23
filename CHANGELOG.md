@@ -76,8 +76,14 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
   private method called only under a condition passes it to its writes (`PayForCart()` under
   `if (itemCount > 0)` → `if (CanAfford())`); a lambda passed with a `when:`-style bool runs
   under it; an `if`/`else` pair cancels out. `explain` of a system names who else reads the
-  requests it handles. In `graph.html` every search lays out alike — the neighbours in rings
-  around the node, framed with room for their labels.
+  requests it handles.
+
+  `graph.html` is redesigned in GitHub's colours, light and dark: a command-palette search
+  (`/`, every word must match), filters that double as the legend, back/forward and
+  `#node=…` links, hover to fade what a node is not connected to (from the canvas or the side
+  panel), a side panel with conditions, placements and CLI commands to copy, a project
+  overview (`O`) and keyboard shortcuts (`?`). Every search lays out alike — neighbours in
+  rings around the node — and is framed by measuring the nodes with their labels.
 
   `diff` shows what changed in the data flow: the edges each component gained and lost,
   systems added, removed or moved, findings that appeared or went away. `diff --commit X` is
