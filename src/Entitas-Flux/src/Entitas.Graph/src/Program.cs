@@ -148,7 +148,7 @@ namespace Entitas.Graph
             Console.Error.WriteLine("                              Once: old, against the working tree. Twice: old, then new.");
             Console.Error.WriteLine("      --commit <commit>       For diff: the commit's first parent against the commit.");
             Console.Error.WriteLine("      --target <file>         Instruction file for install/uninstall instead of the default (repeatable).");
-            Console.Error.WriteLine("      --no-gitignore          install: leave .gitignore alone.");
+            Console.Error.WriteLine("      --no-gitignore          install: leave .gitignore and .gitattributes alone.");
             Console.Error.WriteLine("      --no-claude-hook        install: leave .claude/settings.json alone (no hook keeping Claude out of graph.json).");
             Console.Error.WriteLine("      --no-mcp                install: leave .mcp.json alone (no MCP server for agents without a shell).");
             Console.Error.WriteLine();
@@ -217,7 +217,12 @@ namespace Entitas.Graph
                 return Program.Diff(request);
             }
 
-            new McpServer(Current, Diff, options.Budget, Version()).Run(Console.In, Console.Out);
+            // The raw streams, UTF-8 both ways: Console.In and Console.Out go through the console's
+            // code page on Windows, which is no part of the protocol.
+            var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            using var input = new StreamReader(Console.OpenStandardInput(), utf8, detectEncodingFromByteOrderMarks: false);
+            using var output = new StreamWriter(Console.OpenStandardOutput(), utf8) { NewLine = "\n" };
+            new McpServer(Current, Diff, options.Budget, Version()).Run(input, output, Console.Error);
         }
 
         // -- building -----------------------------------------------------------------------

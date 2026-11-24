@@ -11,6 +11,28 @@ a minor bump may carry behaviour changes, and each one says so under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+- **The MCP server did not start on Windows.** `.mcp.json` ran `sh`, and Git for Windows
+  does not put `sh` on PATH, so Claude Code got `CONNECTION_CLOSED`. The entry now runs `git`,
+  which every Claude Code machine has, with a `!` alias: git runs it in its own sh (on Windows
+  the one Git for Windows ships) from the top of the repository, so it also works when Claude
+  Code is started in a subfolder. One entry serves macOS, Linux and Windows. `install`
+  replaces the 0.6.2 entry; run it once, and `build` says so until then.
+- **Replies are plain ASCII over UTF-8 streams.** Started through `cmd /c entitas-graph.cmd
+  mcp` on Windows, the server answered `initialize` but its tool list never arrived. That
+  list is the first reply with non-ASCII text in it (a dash, an arrow), and the only one over
+  4 KB. The server now escapes every non-ASCII character, and reads and writes the raw
+  standard streams as UTF-8 instead of going through the console's code page. Each request
+  is noted on stderr with its time, which Claude Code keeps in its MCP log. Not yet
+  confirmed on Windows.
+
+### Changed
+- **`install` pins the wrappers' line endings** in the git root's `.gitattributes`: LF for
+  `entitas-graph`, CRLF for `entitas-graph.cmd`. On Windows the MCP server and the Claude
+  Code hook both go through the sh wrapper, and sh stops at the carriage return Git for
+  Windows puts into text files it checks out. Lines already there are kept;
+  `--no-gitignore` leaves both git files alone.
+
 ## [0.6.2] - 2026-11-24
 
 ### Added

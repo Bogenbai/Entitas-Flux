@@ -214,8 +214,8 @@ namespace Entitas.Graph.Tests
             var text = File.ReadAllText(Servers);
             text.Should().Contain("\"UnityMCP\"").And.Contain("mcp-for-unity", "the project's own servers stay");
             var server = System.Text.Json.JsonDocument.Parse(text).RootElement.GetProperty("mcpServers").GetProperty("entitas-graph");
-            server.GetProperty("command").GetString().Should().Be("sh");
-            server.GetProperty("args")[1].GetString().Should().Be(McpConfig.Script);
+            server.GetProperty("command").GetString().Should().Be("git", "git is the one command a Claude Code machine has on every OS");
+            server.GetProperty("args").EnumerateArray().Select(a => a.GetString()).Should().Equal("-c", "alias.entitas-graph=!sh ./entitas-graph mcp", "entitas-graph");
             result.Notes.Should().Contain(n => n.Contains("mcp__entitas-graph__*"), "the agents that need it have to list it");
 
             Install().Files.Should().Contain(f => f.Path == Servers && f.Outcome == FileOutcome.Unchanged);
@@ -251,14 +251,44 @@ namespace Entitas.Graph.Tests
 
             Install();
             AssistantSetup.OutdatedBlocks(_unity, _tool).Should().BeEmpty();
-            File.WriteAllText(Servers, File.ReadAllText(Servers).Replace("git rev-parse --show-toplevel", "pwd"));
+            File.WriteAllText(Servers, File.ReadAllText(Servers).Replace("\"command\": \"git\"", "\"command\": \"/usr/bin/git\""));
             AssistantSetup.OutdatedBlocks(_unity, _tool).Should().Contain(Servers, "build tells the user to run install again");
+        }
+
+        [Fact]
+        public void The_sh_entry_0_6_2_wrote_is_recognised_and_replaced()
+        {
+            File.WriteAllText(Servers, "{\n  \"mcpServers\": {\n    \"entitas-graph\": {\n      \"type\": \"stdio\",\n      \"command\": \"sh\",\n      \"args\": [\n        \"-c\",\n" +
+                                       "        \"root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.; exec \\\"$root/entitas-graph\\\" mcp\"\n      ]\n    }\n  }\n}\n");
+            AssistantSetup.OutdatedBlocks(_unity, _tool).Should().Contain(Servers, "it does not start on Windows");
+
+            Install().Files.Should().Contain(f => f.Path == Servers && f.Outcome == FileOutcome.Updated);
+            System.Text.Json.JsonDocument.Parse(File.ReadAllText(Servers)).RootElement.GetProperty("mcpServers").GetProperty("entitas-graph")
+                .GetProperty("command").GetString().Should().Be("git");
+        }
+
+        [Fact]
+        public void Install_pins_the_wrappers_line_endings_and_keeps_what_gitattributes_had()
+        {
+            var attributes = RepoFile(".gitattributes");
+            File.WriteAllText(attributes, "*.png binary\r\n/entitas-graph.cmd   text  eol=crlf\r\n");
+
+            var change = Install().Files.Single(f => f.Path == attributes);
+
+            change.Outcome.Should().Be(FileOutcome.Updated);
+            File.ReadAllText(attributes).Should().Be("*.png binary\r\n/entitas-graph.cmd   text  eol=crlf\r\n/entitas-graph text eol=lf\r\n",
+                "sh stops at a carriage return, which Git for Windows checks out by default; the cmd line was there already");
+            Install().Files.Single(f => f.Path == attributes).Outcome.Should().Be(FileOutcome.Unchanged);
+
+            File.Delete(attributes);
+            AssistantSetup.Install(_unity, None, gitignore: false, _tool);
+            File.Exists(attributes).Should().BeFalse("--no-gitignore leaves both git files alone");
         }
 
         [Fact]
         public void The_registered_command_reaches_the_server_from_any_folder_of_the_repository()
         {
-            if (OperatingSystem.IsWindows()) return; // sh and git as Claude Code on macOS and Linux run them
+            if (OperatingSystem.IsWindows()) return; // runs the sh wrapper; the same git alias is what Windows gets
 
             // Claude Code finds .mcp.json from any folder below it but starts the server where it
             // was started itself: a real repository, and a start two folders down.
@@ -268,9 +298,10 @@ namespace Entitas.Graph.Tests
             Run("git", "init", "-q", repo);
             AssistantSetup.Install(unity, None, gitignore: false, Path.Combine(AppContext.BaseDirectory, "entitas-graph.dll"));
 
-            var start = new System.Diagnostics.ProcessStartInfo("sh") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = Path.Combine(unity, "Assets", "Code") };
-            start.ArgumentList.Add("-c");
-            start.ArgumentList.Add(McpConfig.Script);
+            // Exactly what the file says to run, as Claude Code runs it: no shell around it.
+            var server = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(repo, ".mcp.json"))).RootElement.GetProperty("mcpServers").GetProperty("entitas-graph");
+            var start = new System.Diagnostics.ProcessStartInfo(server.GetProperty("command").GetString()!) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = Path.Combine(unity, "Assets", "Code") };
+            foreach (var argument in server.GetProperty("args").EnumerateArray()) start.ArgumentList.Add(argument.GetString()!);
             using var process = System.Diagnostics.Process.Start(start)!;
             process.StandardInput.Write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
             process.StandardInput.Close();
@@ -281,6 +312,7 @@ namespace Entitas.Graph.Tests
             lines.Should().HaveCount(2, process.StandardError.ReadToEnd());
             lines[0].Should().Contain("\"serverInfo\":{\"name\":\"entitas-graph\"");
             lines[1].Should().Contain("\"name\":\"who_reads\"");
+            output.Should().Match(o => o.All(c => c < 128), "every reply is ASCII, whatever code page sits between the tool and the client");
         }
 
         [Fact]

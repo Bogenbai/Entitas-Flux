@@ -24,7 +24,12 @@ namespace Entitas.Graph.Mcp
         /// <summary>Protocol versions this server speaks: it uses tools only, which none of them changed.</summary>
         static readonly string[] Versions = { "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05" };
 
-        static readonly JsonSerializerOptions Json = new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        /// <summary>
+        /// Every reply is plain ASCII: anything else is escaped (\u2192), so no code page between
+        /// the tool and the client can change a byte of it. On Windows the replies whose text has
+        /// a dash or an arrow in it — the tool list — were the ones that never arrived.
+        /// </summary>
+        static readonly JsonSerializerOptions Json = new JsonSerializerOptions { Encoder = JavaScriptEncoder.Default };
 
         readonly Func<EcsGraph> _graph;
         readonly Func<string?, string?, string?, string>? _diff;
@@ -41,16 +46,33 @@ namespace Entitas.Graph.Mcp
             _version = version;
         }
 
-        public void Run(TextReader input, TextWriter output)
+        /// <param name="log">Where each request is noted with its time (stderr, which the client keeps in its log); null for none.</param>
+        public void Run(TextReader input, TextWriter output, TextWriter? log = null)
         {
             string? line;
             while ((line = input.ReadLine()) != null)
             {
                 if (line.Trim().Length == 0) continue;
+                var started = System.Diagnostics.Stopwatch.StartNew();
                 var response = Handle(line);
                 if (response == null) continue;
                 output.Write(response + "\n");
                 output.Flush();
+                log?.WriteLine($"{Name}: {Method(line)} answered in {started.ElapsedMilliseconds} ms ({response.Length} bytes)");
+                log?.Flush();
+            }
+        }
+
+        static string Method(string line)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                return document.RootElement.TryGetProperty("method", out var method) ? method.ToString() : "?";
+            }
+            catch (JsonException)
+            {
+                return "?";
             }
         }
 

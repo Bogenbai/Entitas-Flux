@@ -123,7 +123,11 @@ namespace Entitas.Graph.Setup
 
             if (gitignore)
             {
-                if (gitRoot != null) result.Files.Add(Ignore(gitRoot, unity));
+                if (gitRoot != null)
+                {
+                    result.Files.Add(Ignore(gitRoot, unity));
+                    result.Files.Add(Attributes(gitRoot));
+                }
                 else result.Notes.Add($"no git repository above {unity} — .gitignore left alone.");
             }
 
@@ -343,6 +347,18 @@ namespace Entitas.Graph.Setup
 
             var change = Write(path, existing, GitIgnore.Append(existing?.Text, GitIgnore.OutputLine));
             return new FileChange(change.Path, change.Outcome, $"+ {GitIgnore.OutputLine}");
+        }
+
+        /// <summary>The wrappers' line endings in the git root's .gitattributes (see <see cref="GitAttributes"/>).</summary>
+        static FileChange Attributes(string gitRoot)
+        {
+            var path = Path.Combine(gitRoot, ".gitattributes");
+            var existing = TextFile.Read(path);
+            var updated = GitAttributes.Add(existing?.Text);
+            if (updated == null) return new FileChange(path, FileOutcome.Unchanged, "already pins the wrappers' line endings");
+
+            var change = Write(path, existing, updated);
+            return new FileChange(change.Path, change.Outcome, "+ the wrappers' line endings (LF for sh, CRLF for cmd)");
         }
 
         static T Apply<T>(string file, Func<T> update)
