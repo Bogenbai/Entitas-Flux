@@ -90,6 +90,13 @@ EntitasDebugHooks.OnReplace = (entity, index, value) =>
 In ECS, systems never call each other. One adds a request, another picks it up and fires an event, a third reacts, and to a call graph or a text search they are unrelated classes. `entitas-graph` reads your project the way the compiler does. It tells you who creates, reads, filters, removes and destroys each component, which feature runs each system and in what order, and what happens after a request, frame by frame.
 
 <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wiki/Bogenbai/Entitas-Flux/images/entitas-graph-whole-dark.png">
+  <img src="https://raw.githubusercontent.com/wiki/Bogenbai/Entitas-Flux/images/entitas-graph-whole-light.png" alt="graph.html showing everything: the whole data flow of a production game, 1614 nodes and 8175 links" width="900">
+</picture>
+
+<sub>The whole data flow of a ~2000-file production game: 776 components, 749 systems and 89 features. Zoom in, and every node is a system or a component with its links:</sub>
+
+<picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wiki/Bogenbai/Entitas-Flux/images/entitas-graph-dark.png">
   <img src="https://raw.githubusercontent.com/wiki/Bogenbai/Entitas-Flux/images/entitas-graph-light.png" alt="graph.html: a system's neighbours, with the conditions of its writes in the side panel" width="900">
 </picture>
